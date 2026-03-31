@@ -238,7 +238,7 @@ def draw_face_guide(frame, face_boxes_full: list, liveness_map: dict,
         lv = liveness_map[oval_name]
         person = (persons or {}).get(oval_name)
 
-        if (person and person.checked_in) or lv.confirmed:
+        if lv.confirmed:
             oval_color, main_text = C.CHECKED_IN, "Verified!"
         elif lv.failed:
             oval_color = C.LIVENESS_FAIL
@@ -426,10 +426,43 @@ def draw_screen_debug(frame, dbg: dict):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.40, col, 1, cv2.LINE_AA)
 
 
-def draw_hud(frame, fps, test_mode, checkout_done, remaining_sec=0):
+def draw_idle_screen(frame, now, next_dt):
+    """วาดหน้า Idle — แสดงเมื่อระบบอยู่นอกช่วง Active Window
+    - หรี่ภาพ 70%
+    - แสดงเวลาปัจจุบัน + เวลาเปิดช่วงถัดไป
+    """
+    # หรี่ภาพ
+    frame[:] = (frame.astype(np.float32) * 0.30).astype(frame.dtype)
+
+    h, w = frame.shape[:2]
+    cx   = w // 2
+
+    # กล่องพื้นหลัง
+    bw, bh = 420, 120
+    bx, by = cx - bw // 2, h // 2 - bh // 2
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (bx, by), (bx + bw, by + bh), (28, 28, 28), -1)
+    cv2.addWeighted(overlay, 0.80, frame, 0.20, 0, frame)
+    cv2.rectangle(frame, (bx, by), (bx + bw, by + bh), (70, 70, 70), 1)
+
+    # เวลาปัจจุบัน
+    time_str = now.strftime("%H:%M:%S")
+    (tw, _), _ = cv2.getTextSize(time_str, cv2.FONT_HERSHEY_SIMPLEX, 1.2, 2)
+    cv2.putText(frame, time_str, (cx - tw // 2, by + 46),
+                cv2.FONT_HERSHEY_SIMPLEX, 1.2, (220, 220, 220), 2, cv2.LINE_AA)
+
+    # เวลาเปิดช่วงถัดไป
+    next_str = f"Next session: {next_dt.strftime('%H:%M')}"
+    (tw2, _), _ = cv2.getTextSize(next_str, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
+    cv2.putText(frame, next_str, (cx - tw2 // 2, by + 88),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (100, 200, 100), 1, cv2.LINE_AA)
+
+
+def draw_hud(frame, fps, test_mode, checkout_done, remaining_sec=0, show_fps=True):
     h = frame.shape[0]
-    cv2.putText(frame, f"FPS:{fps:.0f}", (10, h-12),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.45, C.TEXT_DIM, 1)
+    if show_fps:
+        cv2.putText(frame, f"FPS:{fps:.0f}", (10, h-12),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, C.TEXT_DIM, 1)
     if test_mode and not checkout_done:
         cv2.putText(frame, f"[TEST] OUT in {remaining_sec}s", (10, 28),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.62, C.HUD_TEST, 2)

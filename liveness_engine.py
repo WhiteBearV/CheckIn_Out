@@ -13,11 +13,14 @@ import math
 import random
 import threading
 import queue as _queue
+import itertools
 import cv2
 import numpy as np
 import mediapipe as mp
 from collections import deque
 from dataclasses import dataclass, field
+
+_fas_uid_counter = itertools.count(1)   # unique ID สำหรับแต่ละ LivenessState (ป้องกัน id() reuse)
 
 import config as cfg
 
@@ -70,6 +73,9 @@ class LivenessState:
     fas_score: float = -1.0            # score ล่าสุด (-1 = ยังไม่ตรวจ)
     fas_real_count: int = 0            # จำนวนครั้งที่ผ่าน
     fas_check_count: int = 0           # จำนวนครั้งที่ตรวจ
+    fas_real_start_ts: float = 0.0     # timestamp ที่ real_count เริ่มนับ (ใช้ตรวจเวลาต่อเนื่อง)
+    fas_spoof_start_ts: float = 0.0   # timestamp ที่ spoof เริ่มตรวจเจอ (ต้องครบ FAS_SPOOF_CONFIRM_SEC ก่อน fail)
+    fas_uid: int = field(default_factory=lambda: next(_fas_uid_counter))  # unique ID ป้องกัน id() reuse
 
     def is_confirmed(self) -> bool:
         return self.confirmed
@@ -585,6 +591,28 @@ class FASDetector:
         self._loaded = True
 
         try:
+            # ซ่อน GPU จาก tensorflow ก่อน import เพื่อป้องกัน CUDA conflict กับ onnxruntime-gpu
+            # (onnxruntime initialize GPU ไปก่อนแล้ว ไม่ได้รับผล) — แก้ segfault ตอน shutdown
+            import os
+            os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+
+            # albumentations import torch ก่อนที่ CUDA_VISIBLE_DEVICES จะถูก set
+            # ทำให้ torch.cuda.is_available() ยังคืน True แม้ device_count=0
+            # Fasnet.__init__ จะเลือก device="cuda:0" แล้วโหลด model ล้มเหลว
+            # Fix: patch is_available + load ให้ force CPU ก่อน deepface init
+            try:
+                import torch as _torch
+                _orig_is_available = _torch.cuda.is_available
+                _orig_torch_load = _torch.load
+                _torch.cuda.is_available = lambda: False
+                def _cpu_torch_load(*args, **kwargs):
+                    kwargs.setdefault('map_location', 'cpu')
+                    return _orig_torch_load(*args, **kwargs)
+                _torch.load = _cpu_torch_load
+                _patched_torch = True
+            except ImportError:
+                _patched_torch = False
+
             from deepface import DeepFace
             self._deepface = DeepFace
 
@@ -597,6 +625,12 @@ class FASDetector:
                 detector_backend="skip",
             )
             print("[FAS] MiniFASNet โหลดสำเร็จ")
+
+            # Restore torch functions หลัง Fasnet init เสร็จ
+            if _patched_torch:
+                _torch.cuda.is_available = _orig_is_available
+                _torch.load = _orig_torch_load
+
             return True
 
         except ImportError:
@@ -764,14 +798,14 @@ class LivenessEngine:
     def _fas_submit(self, s: "LivenessState", crop: np.ndarray):
         """ส่ง face crop ไปให้ background thread — ถ้า queue เต็มให้ข้าม"""
         try:
-            self._fas_task_q.put_nowait((id(s), crop))
+            self._fas_task_q.put_nowait((s.fas_uid, crop))
         except _queue.Full:
             pass
 
     def _fas_get(self, s: "LivenessState") -> dict:
         """ดึงผลลัพธ์ที่ background thread คำนวณเสร็จแล้ว (หรือ None)"""
         with self._fas_lock:
-            return self._fas_result.pop(id(s), None)
+            return self._fas_result.pop(s.fas_uid, None)
 
     def create_state(self, now_ts: float) -> LivenessState:
         return LivenessState(start_ts=now_ts)
@@ -893,15 +927,33 @@ class LivenessEngine:
                 if result:
                     s.fas_score = result["score"]
                     if result["is_real"]:
+                        # real → reset spoof timer, นับ real
+                        s.fas_spoof_start_ts = 0.0
+                        if s.fas_real_count == 0:
+                            s.fas_real_start_ts = now_ts
                         s.fas_real_count += 1
-                        if s.fas_real_count >= cfg.FAS_REQUIRED_REAL:
+                        fas_dur = now_ts - s.fas_real_start_ts
+                        if (s.fas_real_count >= cfg.FAS_REQUIRED_REAL
+                                and fas_dur >= cfg.FAS_CONFIRM_SEC):
                             s.fas_ok = True
-                            print(f"[FAS OK] score={result['score']:.3f} ({s.fas_real_count} real)")
+                            print(f"[FAS OK] score={result['score']:.3f} "
+                                  f"({s.fas_real_count} real, {fas_dur:.1f}s)")
+                        else:
+                            print(f"[FAS] real {s.fas_real_count}/{cfg.FAS_REQUIRED_REAL} "
+                                  f"dur={fas_dur:.1f}/{cfg.FAS_CONFIRM_SEC}s")
                     else:
-                        s.failed = True
-                        s.fail_reason = f"FAS:Spoof({result['score']:.2f})"
-                        print(f"[FAS SPOOF] score={result['score']:.3f}")
-                        return
+                        # spoof → reset real counter, เริ่ม/ต่อ spoof timer
+                        s.fas_real_count    = 0
+                        s.fas_real_start_ts = 0.0
+                        if s.fas_spoof_start_ts == 0.0:
+                            s.fas_spoof_start_ts = now_ts
+                        spoof_dur = now_ts - s.fas_spoof_start_ts
+                        print(f"[FAS SPOOF] score={result['score']:.3f} "
+                              f"dur={spoof_dur:.1f}/{cfg.FAS_SPOOF_CONFIRM_SEC}s")
+                        if spoof_dur >= cfg.FAS_SPOOF_CONFIRM_SEC:
+                            s.failed      = True
+                            s.fail_reason = f"FAS:Spoof({result['score']:.2f})"
+                            return
 
         # ─── ด่าน 5: Finger Challenge ───
         if cfg.CHALLENGE_ENABLED and not s.challenge_ok and s.all_passive_passed() and not s.failed:

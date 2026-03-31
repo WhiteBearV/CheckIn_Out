@@ -42,13 +42,54 @@ import cv2
 import pickle
 import numpy as np
 import mediapipe as mp
-from datetime import datetime
+from datetime import datetime, timedelta
 from numpy.linalg import norm
 
 import config as cfg
 from camera import ThreadedCamera
 from session_manager import SessionManager
 import ui_renderer as ui
+
+# ─── ดึงความละเอียดหน้าจอจริงจาก xrandr ───
+import subprocess as _sp, re as _re
+
+def _get_screen_size() -> tuple[int, int]:
+    try:
+        out = _sp.check_output(["xrandr", "--current"], text=True)
+        m = _re.search(r"(\d+)x(\d+)\+0\+0", out)   # primary display อยู่ที่ +0+0
+        if m:
+            return int(m.group(1)), int(m.group(2))
+    except Exception:
+        pass
+    return 1920, 1080   # fallback
+
+SCREEN_W, SCREEN_H = _get_screen_size()
+del _sp, _re
+
+
+# ─── Active Window Helpers ───────────────────
+def _in_active_window(t, windows) -> bool:
+    """ตรวจว่าเวลา t อยู่ในช่วง Active Window ใดช่วงหนึ่งหรือเปล่า
+    รองรับช่วงที่ข้ามเที่ยงคืน เช่น (23:00, 01:00)"""
+    for start, end in windows:
+        if start <= end:                     # ช่วงปกติ ไม่ข้ามเที่ยงคืน
+            if start <= t < end:
+                return True
+        else:                                # ข้ามเที่ยงคืน
+            if t >= start or t < end:
+                return True
+    return False
+
+
+def _next_window_start(now_dt: datetime, windows) -> datetime:
+    """คืน datetime ของจุดเริ่มต้น window ถัดไปจาก now_dt"""
+    candidates = []
+    for win_start, _ in windows:
+        candidate = datetime.combine(now_dt.date(), win_start)
+        if candidate <= now_dt:
+            candidate += timedelta(days=1)
+        candidates.append(candidate)
+    return min(candidates)
 
 
 # ─── InsightFace landmark → dict (สำหรับ DepthAnalyzer) ──────
@@ -167,15 +208,46 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
 
     # ─── หน้าต่าง ───
     win_name = "Face Attendance System"
-    if cfg.FULLSCREEN:
-        cv2.namedWindow(win_name, cv2.WINDOW_NORMAL)
+    cv2.namedWindow(win_name, cv2.WINDOW_NORMAL)   # NORMAL เสมอ เพื่อให้ toggle ได้
+    is_fullscreen  = cfg.FULLSCREEN
+    _window_ready  = False   # True หลัง imshow ครั้งแรก
+
+    def _apply_fullscreen():
         cv2.setWindowProperty(win_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+        cv2.moveWindow(win_name, 0, 0)
+        cv2.resizeWindow(win_name, SCREEN_W, SCREEN_H)
+
+    def _apply_windowed():
+        cv2.setWindowProperty(win_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(win_name, 1280, 720)
+        cv2.moveWindow(win_name, 100, 100)
+
+    def _toggle_fullscreen():
+        nonlocal is_fullscreen
+        is_fullscreen = not is_fullscreen
+        if is_fullscreen:
+            _apply_fullscreen()
+        else:
+            _apply_windowed()
+
+    def _imshow(display):
+        """imshow + apply fullscreen หลัง frame แรก (Linux ต้อง map window ก่อน)"""
+        nonlocal _window_ready
+        if is_fullscreen and (display.shape[1] != SCREEN_W or display.shape[0] != SCREEN_H):
+            display = cv2.resize(display, (SCREEN_W, SCREEN_H), interpolation=cv2.INTER_LINEAR)
+        cv2.imshow(win_name, display)
+        if not _window_ready:
+            _window_ready = True
+            cv2.waitKey(1)   # ให้ window manager map หน้าต่างก่อน
+            if is_fullscreen:
+                _apply_fullscreen()
 
     # ─── ตัวแปร loop ───
-    start_ts     = datetime.now().timestamp()
+    start_ts      = datetime.now().timestamp()
     checkout_done = False
-    frame_count  = 0
-    last_faces   = []     # cache ผลลัพธ์ insightface
+    frame_count   = 0
+    _was_active: bool | None = None   # None = iteration แรก (ยังไม่รู้ว่า active หรือเปล่า)
+    last_faces    = []     # cache ผลลัพธ์ insightface
     fps_counter  = 0
     fps_timer    = start_ts
     display_fps  = 0.0
@@ -215,7 +287,7 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
             display_fps = fps_counter / (now_ts - fps_timer)
             fps_counter, fps_timer = 0, now_ts
 
-        # ─── Checkout ───
+        # ─── Checkout (TEST_MODE / CHECKOUT_TIME) ───
         should_checkout = (
             (now_ts - start_ts >= cfg.TEST_DURATION_SECONDS) if cfg.TEST_MODE
             else (now.time() >= cfg.CHECKOUT_TIME)
@@ -225,6 +297,40 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
             session.do_checkout(camera_name, now)
         if cfg.TEST_MODE and checkout_done:
             break
+
+        # ─── Active Window Check ───
+        _active = _in_active_window(now.time(), cfg.ACTIVE_WINDOWS)
+
+        if _active and _was_active is False:
+            # idle → active: เริ่มช่วงใหม่ — reset session และ checkout flag
+            session       = SessionManager()
+            last_faces    = []
+            last_face_ts  = now_ts
+            checkout_done = False
+            print(f"[SCHEDULER] Active window เริ่ม {now.strftime('%H:%M:%S')}")
+
+        if not _active and _was_active is True:
+            # active → idle: checkout คนที่ยังไม่ได้ออก แล้วพัก
+            if not checkout_done:
+                checkout_done = True
+                session.do_checkout(camera_name, now)
+            print(f"[SCHEDULER] Idle mode เริ่ม {now.strftime('%H:%M:%S')}")
+
+        _was_active = _active
+
+        if not _active:
+            # ── Idle mode: แสดงหน้าจอรอ ลด CPU/GPU ──
+            next_dt = _next_window_start(now, cfg.ACTIVE_WINDOWS)
+            ui.draw_idle_screen(frame, now, next_dt)
+            # hstack panel ดำให้ขนาด window เท่ากับตอน active (กันหน้าต่างหด)
+            idle_panel = np.zeros((frame.shape[0], cfg.PANEL_WIDTH, 3), dtype=np.uint8)
+            _imshow(np.hstack([frame, idle_panel]))
+            key = cv2.waitKey(500) & 0xFF   # ตรวจ key ทุก 500ms แทน 1ms → ลด CPU
+            if key == ord("q") or key == 27:
+                break
+            elif key == ord("f"):
+                _toggle_fullscreen()
+            continue                         # ข้ามการประมวลผลใบหน้าทั้งหมด
 
         # ─── Face detection (InsightFace) ───
         do_detect = (frame_count % cfg.DETECT_EVERY_N_FRAMES == 0)
@@ -330,6 +436,9 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
 
             if liveness.confirmed and not person.checked_in:
                 person.snapshot = orig_frame.copy()
+            elif liveness.confirmed and person.checked_in and not person.checked_out:
+                # ผ่าน liveness ซ้ำหลัง absence → อัปเดต last_seen (ไม่สร้าง record ใหม่)
+                session.confirm_presence(name, now)
 
             session.try_checkin(name, camera_name)
 
@@ -386,15 +495,17 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
         ui.draw_hands(frame, hand_results)
 
         remaining = max(0, cfg.TEST_DURATION_SECONDS - int(now_ts - start_ts)) if cfg.TEST_MODE else 0
-        ui.draw_hud(frame, display_fps, cfg.TEST_MODE, checkout_done, remaining)
+        ui.draw_hud(frame, display_fps, cfg.TEST_MODE, checkout_done, remaining, cfg.SHOW_FPS)
 
         panel = ui.build_panel(session.persons, session.liveness, frame.shape[0],
                                screen_debug=_screen_debug_display if cfg.TEST_MODE else None)
-        cv2.imshow(win_name, np.hstack([frame, panel]))
+        _imshow(np.hstack([frame, panel]))
 
         key = cv2.waitKey(1) & 0xFF
         if key == ord("q") or key == 27:
             break
+        elif key == ord("f"):
+            _toggle_fullscreen()
 
     hands.close()
     cam.release()

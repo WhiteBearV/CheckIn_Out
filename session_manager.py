@@ -21,14 +21,22 @@ class PersonInfo:
         self.first_name    = ""
         self.last_name     = ""
         self.department    = ""             # แผนก (ถ้ามีในDB)
-        self.first_seen    = now
-        self.last_seen     = now
-        self.snapshot      = snapshot.copy() if snapshot is not None and snapshot.size > 0 else None
-        self.checked_in    = False
-        self.checked_out   = False
+        self.first_seen       = now
+        self.last_seen        = now
+        self.last_detected_ts = now.timestamp()   # อัปเดตทุก detection (ใช้ตรวจ absence)
+        self.snapshot         = snapshot.copy() if snapshot is not None and snapshot.size > 0 else None
+        self.checked_in      = False
+        self.checked_out     = False
+        self.absence_reset   = False   # True เมื่อ absence reset → print log ครั้งเดียวตอน re-verify
+
+    def update_last_detected(self, now_ts: float):
+        """อัปเดตทุก detection — ใช้ตรวจ absence เท่านั้น"""
+        self.last_detected_ts = now_ts
 
     def update_last_seen(self, now: datetime):
-        self.last_seen = now
+        """อัปเดตเฉพาะตอนผ่าน liveness — ใช้เป็นเวลา checkout"""
+        self.last_seen        = now
+        self.last_detected_ts = now.timestamp()
 
     def load_from_db(self, emp_row):
         """โหลดจาก DB row: (employee_code, title, first_name, last_name, face_label)"""
@@ -56,7 +64,12 @@ class SessionManager:
                 person.load_from_db(emp)
             self.persons[name] = person
         else:
-            self.persons[name].update_last_seen(now)
+            person = self.persons[name]
+            person.update_last_detected(now.timestamp())   # ทุก detection
+            # last_seen อัปเดตเฉพาะตอน confirmed → ป้องกัน proxy update ก่อนผ่าน liveness
+            lv = self.liveness.get(name)
+            if lv and lv.confirmed:
+                person.last_seen = now
 
         if name in self.liveness:
             lv = self.liveness[name]
@@ -75,11 +88,22 @@ class SessionManager:
         for name in list(self.liveness.keys()):
             lv     = self.liveness[name]
             person = self.persons.get(name)
+
+            # ── reset liveness ที่ failed ──
+            # รองรับทั้งคนที่ยังไม่ได้ check-in และคนที่ checked-in แล้วแต่ fail หลัง absence reset
             if (lv.failed
-                    and (person is None or not person.checked_in)
                     and now_ts - lv.start_ts > cfg.LIVENESS_TIMEOUT + cfg.LIVENESS_RETRY_AFTER):
-                print(f"[RETRY] {name} — reset liveness")
+                tag = "RETRY" if not person or not person.checked_in else "RE-VERIFY RETRY"
+                print(f"[{tag}] {name} — reset liveness")
                 self.liveness[name] = self.engine.create_state(now_ts)
+
+            # ── absence reset: checked-in แต่ไม่เจอใบหน้านานเกิน ABSENCE_TIMEOUT_SEC ──
+            elif (person and person.checked_in and not person.checked_out
+                  and lv.confirmed
+                  and now_ts - person.last_detected_ts > cfg.ABSENCE_TIMEOUT_SEC):
+                print(f"[ABSENCE] {person.display_name} — ไม่พบใบหน้า {cfg.ABSENCE_TIMEOUT_SEC}s → ต้องสแกนใหม่")
+                self.liveness[name]  = self.engine.create_state(now_ts)
+                person.absence_reset = True
 
     def try_checkin(self, name: str, camera_name: str) -> bool:
         person = self.persons.get(name)
@@ -108,6 +132,16 @@ class SessionManager:
             print(f"[IN ERROR] {name}: {e}")
             person.checked_in = True
             return False
+
+    def confirm_presence(self, name: str, now: datetime):
+        """เรียกเมื่อผ่าน liveness ซ้ำ (checked_in แล้ว) — อัปเดต last_seen เท่านั้น ไม่สร้าง record ใหม่"""
+        if name not in self.persons:
+            return
+        p = self.persons[name]
+        p.update_last_seen(now)
+        if p.absence_reset:   # print เฉพาะครั้งแรกหลัง absence reset (ไม่สแปม)
+            p.absence_reset = False
+            print(f"[RE-VERIFY] {p.display_name} — ยืนยันตัวตนซ้ำ {now.strftime('%H:%M:%S')}")
 
     def do_checkout(self, camera_name: str, now: datetime) -> int:
         print(f"\n{'='*50}")

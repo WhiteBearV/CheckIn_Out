@@ -17,14 +17,27 @@ PANEL_WIDTH           = 250
 # ╔═══════════════════════════════════════════╗
 # ║  โหมดทดสอบ                                 ║
 # ╚═══════════════════════════════════════════╝
-TEST_MODE             = True
+TEST_MODE             = False
 TEST_DURATION_SECONDS = 360
 CHECKOUT_TIME         = dtime(22, 0)
+
+# ╔═══════════════════════════════════════════╗
+# ║  ตารางเวลา (Active Windows)               ║
+# ╚═══════════════════════════════════════════╝
+# ระบบรัน 24/7 แต่จะตรวจใบหน้าเฉพาะในช่วงที่กำหนด
+# นอกช่วง → Idle mode: หยุดประมวลผล ประหยัด CPU/GPU
+# รูปแบบ: (เวลาเริ่ม, เวลาสิ้นสุด)  — รองรับช่วงข้ามเที่ยงคืน
+ACTIVE_WINDOWS = [
+    (dtime(5, 00), dtime(22, 00)),   # ตี 4:00 → 4 ทุ่ม: ช่วงทำงานปกติ (เผื่อเวลาระบบ)
+]
 
 # ╔═══════════════════════════════════════════╗
 # ║  กล้อง (IP Camera / USB)                  ║
 # ╚═══════════════════════════════════════════╝
 # ตั้งค่า CAMERA_URL เพื่อใช้ IP camera (ถ้า None จะใช้ camera_index ใน main.py)
+# USB Camera resolution — ตั้ง None เพื่อใช้ค่า default ของกล้อง
+USB_CAM_WIDTH         = 1280       # เช่น 640, 1280, 1920  (None = ไม่บังคับ)
+USB_CAM_HEIGHT        = 720        # เช่น 480, 720, 1080   (None = ไม่บังคับ)
 # รูปแบบ RTSP ที่พบบ่อย — ลองทีละอัน:
 #   CAMERA_URL = "rtsp://192.168.1.13/stream"
 #   CAMERA_URL = "rtsp://192.168.1.13:554/stream"
@@ -38,8 +51,9 @@ CAMERA_URL            = "rtsp://admin:@dmin123456@192.168.1.13:554/unicast/c1/s0
 # ╔═══════════════════════════════════════════╗
 # ║  Performance                              ║
 # ╚═══════════════════════════════════════════╝
-DETECT_EVERY_N_FRAMES = 1 #MAX Skip frames between detections
+DETECT_EVERY_N_FRAMES = 2 #MAX Skip frames between detections
 FULLSCREEN            = True
+ABSENCE_TIMEOUT_SEC   = 15     # วินาที — ไม่เจอใบหน้านานกว่านี้ → reset liveness ต้องสแกนใหม่ (production ใช้ 1800)
 # IP camera ส่งภาพตรง (ไม่กลับซ้าย-ขวา) → ตั้ง False ถ้าใช้ CAMERA_URL
 CAMERA_FLIP           = False
 
@@ -112,15 +126,18 @@ CHALLENGE_PROXIMITY   = 1.5
 # ║  Anti-Spoofing: ด่าน 6 — MiniFASNet       ║
 # ╚═══════════════════════════════════════════╝
 FAS_ENABLED           = True
-FAS_THRESHOLD         = 0.55     # เพิ่มจาก 0.5 → 0.55 (ต้องผ่าน AI confidence สูงขึ้น)
+FAS_THRESHOLD         = 0.90     # เพิ่มจาก 0.5 → 0.55 (ต้องผ่าน AI confidence สูงขึ้น)
 FAS_CHECK_EVERY       = 5        # ลดจาก 10 → 5 ตรวจบ่อยขึ้น (ชดเชย Screen ที่ปิดไป)
-FAS_REQUIRED_REAL     = 3        # เพิ่มจาก 2 → 3 ครั้งที่ต้องผ่าน AI
+FAS_REQUIRED_REAL     = 3        # จำนวนครั้ง real ที่ต้องผ่าน AI
+FAS_CONFIRM_SEC       = 2.0      # วินาทีที่ต้องผ่านต่อเนื่อง (เหมือน SCREEN_CONFIRM_SEC)
+FAS_SPOOF_CONFIRM_SEC = 4.0      # ต้องตรวจ spoof ต่อเนื่องครบ X วิ ก่อน fail จริง (รองรับ false positive จากมุมหน้า)
 FAS_DETECTOR_BACKEND  = "skip"
 
 # ╔═══════════════════════════════════════════╗
 # ║  UI: General                              ║
 # ╚═══════════════════════════════════════════╝
 SHOW_LANDMARKS        = False
+SHOW_FPS              = False       # แสดง FPS มุมล่างซ้าย (False = ซ่อน)
 NO_FACE_RESET_SEC     = 5
 
 # ╔═══════════════════════════════════════════╗

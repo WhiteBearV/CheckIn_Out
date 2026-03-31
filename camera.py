@@ -6,6 +6,7 @@ import os
 import time
 import cv2
 from threading import Thread, Lock
+import config as cfg
 
 
 class ThreadedCamera:
@@ -51,6 +52,15 @@ class ThreadedCamera:
 
         if not cap.isOpened():
             raise RuntimeError(f"เปิดกล้องไม่ได้: src={self._src}")
+
+        # ตั้ง resolution สำหรับกล้อง USB (IP camera ใช้ resolution ของตัวเอง)
+        if not self._is_url:
+            w = getattr(cfg, "USB_CAM_WIDTH", None)
+            h = getattr(cfg, "USB_CAM_HEIGHT", None)
+            if w:
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
+            if h:
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
 
         # buffer=1 → ลด latency (ไม่สะสมเฟรมเก่า)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
