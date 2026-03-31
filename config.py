@@ -46,7 +46,7 @@ CAMERA_FLIP           = False
 # ╔═══════════════════════════════════════════╗
 # ║  Anti-Spoofing: ด่าน 1 — Landmark Depth   ║
 # ╚═══════════════════════════════════════════╝
-LIVENESS_TIMEOUT      = 20
+LIVENESS_TIMEOUT      = 10
 LIVENESS_RETRY_AFTER  = 4
 DEPTH_FRAMES_REQUIRED = 5
 DEPTH_FRAMES_WINDOW   = 8
@@ -90,7 +90,7 @@ SCREEN_EDGE_MAX       = 0.40   # border ratio (เส้นขอบ margin zone
 SCREEN_INNER_MAX      = 0.0110   # inner density — ปรับตามผลทดสอบ
                                 # หน้าจริง ~0.02-0.06 | รูป/จอ ~0.10-0.30+
 # Time-based confirmation — ลด false positive
-SCREEN_CONFIRM_SEC    = 5.0    # ตรวจเจอ screen ต่อเนื่องครบ N วิ → fail
+SCREEN_CONFIRM_SEC    = 3.0    # ตรวจเจอ screen ต่อเนื่องครบ N วิ → fail
 SCREEN_RESET_SEC      = 1.5    # ตรวจเจอหน้าจริงต่อเนื่องครบ N วิ → reset counter
 
 # FFT (analyze_fft จาก FFT.py) — ใช้คู่กับ Canny
