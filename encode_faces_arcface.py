@@ -17,6 +17,8 @@ encode_faces_arcface.py — สร้าง encodings.pkl ด้วย ArcFace (
 """
 
 import os
+import sys
+import glob
 import cv2
 import json
 import pickle
@@ -26,13 +28,31 @@ import urllib.request
 from insightface.app import FaceAnalysis
 
 
+def _ensure_nvidia_libs():
+    if os.environ.get("_NVIDIA_LIBS_SET"):
+        return
+    venv_prefix = os.path.dirname(os.path.dirname(sys.executable))
+    nvidia_paths = sorted(glob.glob(
+        f"{venv_prefix}/lib/python*/site-packages/nvidia/*/lib"
+    ))
+    if not nvidia_paths:
+        return
+    existing = os.environ.get("LD_LIBRARY_PATH", "")
+    new_path = ":".join(nvidia_paths) + (":" + existing if existing else "")
+    os.environ["LD_LIBRARY_PATH"] = new_path
+    os.environ["_NVIDIA_LIBS_SET"] = "1"
+    os.environ["PYTHONUNBUFFERED"] = "1"
+    os.execv(sys.executable, [sys.executable, "-u"] + sys.argv)
+
+_ensure_nvidia_libs()
+
+
 def _load_insightface():
     print("กำลังโหลด InsightFace (ArcFace)...")
     import onnxruntime as ort
-    app = FaceAnalysis(
-        name="buffalo_l",
-        providers=ort.get_available_providers(),
-    )
+    available = ort.get_available_providers()
+    providers = [p for p in available if p != "TensorrtExecutionProvider"]
+    app = FaceAnalysis(name="buffalo_l", providers=providers)
     app.prepare(ctx_id=0, det_size=(640, 640))
     print("โหลดสำเร็จ!\n")
     return app

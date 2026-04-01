@@ -1,11 +1,11 @@
 import psycopg
 
 DB_CONFIG = {
-    "host": "localhost",
-    "port": 5432,
-    "dbname": "face_attendance",
-    "user": "face_user",
-    "password": "1234"
+    "host": "0.tcp.ap.ngrok.io",
+    "port": 19965,
+    "dbname": "face_db",
+    "user": "beam",
+    "password": "123"
 }
 
 def get_connection():
@@ -16,3 +16,6 @@ def get_connection():
         user=DB_CONFIG["user"],
         password=DB_CONFIG["password"]
     ) 
+
+# port": must be updated every day to enter the database through ngrok
+# please check the port number in the terminal after running ngrok
