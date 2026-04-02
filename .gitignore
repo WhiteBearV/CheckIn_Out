@@ -56,6 +56,17 @@ htmlcov/
 # Local config
 config.local.py
 
+# DB config (มี credentials — ห้าม commit)
+db_config.json
+
+# Node.js
+node_modules/
+npm-debug.log*
+
+# Database dump
+*.dump
+*.sql.bak
+
 # Other
 .claude/
 known_faces/
