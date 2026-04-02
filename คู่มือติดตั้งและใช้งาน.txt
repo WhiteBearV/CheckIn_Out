@@ -1,0 +1,486 @@
+================================================================================
+                  คู่มือติดตั้งและใช้งาน — Face Attendance System
+================================================================================
+
+สารบัญ
+-------
+  1.  ความต้องการของระบบ
+  2.  ติดตั้ง Dependencies
+  3.  โครงสร้างโปรเจค
+  4.  ตั้งค่า Secrets (.env)
+  5.  ตั้งค่าฐานข้อมูล
+  6.  เพิ่มบุคคลเข้าระบบ
+  7.  สร้าง Face Encodings
+  8.  ตั้งค่ากล้อง
+  9.  ตั้งค่า API
+  10. รันระบบ
+  11. Profiles (สลับโหมดเร็ว)
+  12. Keyboard Shortcuts
+  13. Anti-Spoofing Pipeline
+  14. แก้ปัญหาเบื้องต้น
+
+================================================================================
+1. ความต้องการของระบบ
+================================================================================
+
+  รายการ        ขั้นต่ำ                  แนะนำ
+  ----------    ---------------------    -------------------------
+  OS            Ubuntu 20.04             Ubuntu 22.04 / 24.04
+  Python        3.10                     3.10 - 3.11
+  GPU           (ไม่จำเป็น)              NVIDIA GPU พร้อม CUDA 12+
+  RAM           8 GB                     16 GB
+  กล้อง         USB Webcam               IP Camera (RTSP)
+
+หมายเหตุ GPU:
+  - ถ้ามี NVIDIA GPU ต้องติดตั้ง NVIDIA Driver + CUDA 12.x ก่อนเสมอ
+  - ถ้าไม่มี GPU สามารถใช้ CPU ได้ แต่ประมวลผลช้ากว่ามาก
+    (ดูวิธีปรับในหัวข้อ 2)
+
+================================================================================
+2. ติดตั้ง Dependencies
+================================================================================
+
+ขั้นตอนที่ 1 — Clone โปรเจคและเข้าโฟลเดอร์
+
+    git clone <repo-url>
+    cd FaceReg
+
+ขั้นตอนที่ 2 — สร้าง Virtual Environment
+
+    python3.10 -m venv venv
+
+    เปิดใช้งาน (Linux/Mac):
+        source venv/bin/activate
+
+    เปิดใช้งาน (Windows):
+        venv\Scripts\activate
+
+ขั้นตอนที่ 3 — ติดตั้ง Packages
+
+    pip install -r requirements.txt
+
+  [ถ้าใช้ CPU เท่านั้น — ไม่มี GPU]
+  ก่อน pip install ให้แก้ requirements.txt
+  เปลี่ยนบรรทัด "onnxruntime-gpu" เป็น "onnxruntime" แล้วค่อย install
+
+ขั้นตอนที่ 4 — ติดตั้งฟอนต์ภาษาไทย (จำเป็น)
+
+    sudo apt install fonts-tlwg-garuda
+
+  หากไม่ติดตั้ง ข้อความภาษาไทยใน UI จะแสดงเป็น ?????
+
+ขั้นตอนที่ 5 — ตรวจสอบว่าติดตั้งครบ
+
+    python -c "import insightface, cv2, mediapipe, fastapi; print('OK')"
+
+  ถ้าขึ้น OK แสดงว่าพร้อมใช้งาน
+
+================================================================================
+3. โครงสร้างโปรเจค
+================================================================================
+
+  FaceReg/
+  |
+  |-- main.py                   จุดเริ่มต้นหลัก รันไฟล์นี้เพื่อเปิดระบบ
+  |-- config.py                 ตั้งค่าทุกอย่างในที่เดียว (UI, anti-spoof, กล้อง)
+  |-- api.py                    FastAPI server รับ-ส่งข้อมูลการลงเวลา IN/OUT
+  |-- api_client.py             HTTP client เชื่อม external API + mock สำหรับทดสอบ
+  |-- camera.py                 จัดการการเชื่อมต่อกล้อง (USB และ IP Camera)
+  |-- encode_faces_arcface.py   สร้างไฟล์ encodings.pkl จากรูปในโฟลเดอร์
+  |-- liveness_engine.py        ระบบตรวจจับการปลอมแปลง (Anti-Spoofing)
+  |-- session_manager.py        จัดการ session การเข้า-ออก
+  |-- ui_renderer.py            วาด UI ทั้งหมด (กรอบหน้า, panel, HUD)
+  |-- db.py                     การเชื่อมต่อ PostgreSQL
+  |
+  |-- .env                      [สำคัญ] secrets ทั้งหมด — ห้าม commit
+  |-- .env.example              template .env สำหรับ clone ใหม่
+  |-- db_config.json            [สำคัญ] ตั้งค่าการเชื่อมต่อฐานข้อมูล — ห้าม commit
+  |
+  |-- known_faces/              [สำคัญ] ใส่รูปภาพบุคคลที่นี่
+  |   |-- 6666666666666/        ชื่อโฟลเดอร์ = per_id (เลข 13 หลัก)
+  |   |   |-- photo1.jpg
+  |   |   `-- photo2.jpg
+  |   `-- 7777777777777/
+  |       `-- photo.jpg
+  |
+  |-- profiles/                 โหมดสลับการตั้งค่าเร็ว
+  |   |-- cam_main.py           IP Camera หลัก
+  |   |-- cam_usb.py            USB / Webcam
+  |   `-- test.py               โหมดทดสอบ
+  |
+  |-- encodings.pkl             สร้างอัตโนมัติ — Face embeddings ทุกคน
+  `-- requirements.txt          รายการ packages ที่ต้องติดตั้ง
+
+================================================================================
+4. ตั้งค่า Secrets (.env)
+================================================================================
+
+ไฟล์ .env เก็บข้อมูลที่ละเอียดอ่อนทั้งหมด — ห้าม commit ขึ้น git เด็ดขาด
+
+ขั้นตอนที่ 1 — คัดลอก template
+
+    cp .env.example .env
+
+ขั้นตอนที่ 2 — แก้ไขค่าจริงใน .env
+
+    EXTERNAL_API_URL=https://your-api-url.example.com   ← URL ของ external API
+    EXTERNAL_API_KEY=YOUR_API_KEY_HERE                  ← API Key ที่ได้รับมา
+    CAMERA_URL=rtsp://admin:password@192.168.x.x:554/path   ← RTSP URL กล้อง
+    ADMIN_API_KEY=YOUR_RANDOM_ADMIN_SECRET              ← key สำหรับ PUT/DELETE endpoint
+
+สร้าง ADMIN_API_KEY แบบสุ่ม:
+
+    python -c "import secrets; print(secrets.token_hex(32))"
+
+หมายเหตุ: ไม่ต้องแก้ค่า URL หรือ key ใน config.py หรือ api_client.py โดยตรงอีกต่อไป
+          แก้ที่ .env ไฟล์เดียวพอ
+
+================================================================================
+5. ตั้งค่าฐานข้อมูล
+================================================================================
+
+ขั้นตอนที่ 1 — สร้างไฟล์ db_config.json (ในโฟลเดอร์โปรเจค — ห้าม commit)
+
+    {
+      "mode": "production",
+      "production": {
+        "host": "localhost",
+        "port": 5432,
+        "database": "faceattendance",
+        "user": "postgres",
+        "password": "รหัสผ่านของคุณ"
+      }
+    }
+
+ขั้นตอนที่ 2 — สร้างฐานข้อมูล PostgreSQL
+
+    เข้า psql ด้วย:
+        sudo -u postgres psql
+
+    แล้วพิมพ์คำสั่ง SQL ดังนี้:
+        CREATE DATABASE faceattendance;
+        CREATE USER facereg WITH PASSWORD 'รหัสผ่าน';
+        GRANT ALL PRIVILEGES ON DATABASE faceattendance TO facereg;
+        \q
+
+================================================================================
+6. เพิ่มบุคคลเข้าระบบ
+================================================================================
+
+โครงสร้างโฟลเดอร์ known_faces/
+
+  - แต่ละโฟลเดอร์ = 1 คน
+  - ชื่อโฟลเดอร์ต้องเป็น per_id (เลข 13 หลัก) เท่านั้น
+  - แนะนำใส่รูป 3-5 รูปต่อคน ถ่ายหลายมุมและหลายสภาพแสง
+
+  ตัวอย่าง:
+      known_faces/
+      |-- 6666666666666/
+      |   |-- front.jpg
+      |   |-- left.jpg
+      |   `-- right.jpg
+      `-- 7777777777777/
+          `-- photo.jpg
+
+เพิ่มข้อมูลบุคคลใน api_client.py (เฉพาะ MOCK_MODE เท่านั้น)
+
+  ถ้าใช้ MOCK_MODE = True เปิดไฟล์ api_client.py และเพิ่ม entry ใน _MOCK_PERSONS:
+
+      "1234567890123": {
+          "per_id":         "1234567890123",
+          "name":           "นาย สมชาย ใจดี",
+          "prename_th":     "นาย",
+          "per_name":       "สมชาย",
+          "per_surname":    "ใจดี",
+          "posname_th":     "เจ้าหน้าที่",
+          "prenameth_abbr": "นาย",
+          "organize_th":    "ฝ่ายวิจัย",
+          "organize_id":    "0000001",
+          "org_path_name":  "/หน่วยงาน/",
+          "birthDate":      "1990-01-01",
+          "per_picpath":    "",
+      },
+
+  *** key ของ dict (เลข 13 หลัก) ต้องตรงกับชื่อโฟลเดอร์ใน known_faces/ ***
+
+  ถ้าใช้ MOCK_MODE = False (Production) ไม่ต้องแก้ไฟล์นี้ — ระบบดึงข้อมูลจาก
+  external API โดยอัตโนมัติตาม per_id ที่จำแนกได้จากกล้อง
+
+สำคัญ: ทุกครั้งที่เพิ่มคนใหม่ต้องสร้าง encodings.pkl ใหม่เสมอ (ดูหัวข้อ 7)
+
+================================================================================
+7. สร้าง Face Encodings
+================================================================================
+
+รันคำสั่งนี้เพื่อสร้างไฟล์ encodings.pkl
+
+    source venv/bin/activate
+
+    วิธีปกติ (อ่านรูปจาก known_faces/):
+        python encode_faces_arcface.py
+
+    ถ้าโฟลเดอร์รูปชื่ออื่น:
+        python encode_faces_arcface.py --dir ชื่อโฟลเดอร์
+
+    โหลดรูปจาก URL (ระบุในไฟล์ JSON):
+        python encode_faces_arcface.py --urls urls.json
+
+รูปแบบไฟล์ urls.json
+
+    [
+      {
+        "face_label": "6666666666666",
+        "urls": [
+          "https://example.com/person1_a.jpg",
+          "https://example.com/person1_b.jpg"
+        ]
+      }
+    ]
+
+หมายเหตุ:
+  - ครั้งแรกที่รันจะดาวน์โหลดโมเดล buffalo_l (~300 MB) โดยอัตโนมัติ
+  - ผลลัพธ์คือไฟล์ encodings.pkl ในโฟลเดอร์โปรเจค
+  - ถ้าตรวจไม่พบใบหน้าในรูป จะแจ้งเตือนและข้ามรูปนั้น
+
+================================================================================
+8. ตั้งค่ากล้อง
+================================================================================
+
+CAMERA_URL ตั้งค่าในไฟล์ .env เท่านั้น — ไม่ต้องแก้ config.py โดยตรง
+
+---- IP Camera (RTSP) ----
+
+  แก้ใน .env:
+    CAMERA_URL=rtsp://username:password@IP:port/stream_path
+
+  ส่วน CAMERA_FLIP ยังแก้ใน config.py หรือ profiles/ ได้ตามปกติ:
+    CAMERA_FLIP = False
+
+  รูปแบบ URL ตามยี่ห้อกล้อง:
+
+    Hikvision:
+        rtsp://admin:pass@192.168.1.13:554/Streaming/Channels/101
+
+    Dahua:
+        rtsp://admin:pass@192.168.1.13:554/cam/realmonitor?channel=1&subtype=0
+
+    UNV / Generic:
+        rtsp://admin:pass@192.168.1.13:554/unicast/c1/s0/live
+
+  ทดสอบ URL ด้วย VLC:
+    เปิด VLC → Media → Open Network Stream → วาง RTSP URL
+
+---- USB Camera / Webcam ----
+
+  แก้ใน .env:
+    CAMERA_URL=        (เว้นว่างไว้ หรือลบบรรทัดนี้ออก — ระบบจะใช้ camera_index แทน)
+
+  แก้ใน config.py:
+    CAMERA_FLIP = True    (Webcam ส่วนใหญ่ภาพกลับซ้าย-ขวา)
+
+  แก้ใน main.py:
+    run_camera(camera_index=0)    0 = กล้อง built-in
+    run_camera(camera_index=1)    1, 2, ... = USB ต่อเพิ่ม
+
+  ทดสอบว่ากล้องใช้ได้:
+    python -c "import cv2; cap=cv2.VideoCapture(0); print('OK' if cap.isOpened() else 'FAIL')"
+
+================================================================================
+9. ตั้งค่า API
+================================================================================
+
+---- โหมด Mock (ใช้ทดสอบโดยไม่ต้อง external API) ----
+
+  แก้ใน api_client.py บรรทัดแรก:
+    MOCK_MODE = True
+
+  ระบบจะดึงข้อมูลจาก _MOCK_PERSONS dict ในไฟล์เดียวกัน
+  เหมาะสำหรับการพัฒนาและทดสอบ
+
+---- โหมด Real API (Production) ----
+
+  1. แก้ใน api_client.py:
+       MOCK_MODE = False
+
+  2. ตั้งค่า URL และ Key ใน .env:
+       EXTERNAL_API_URL=https://service-ps.example.com
+       EXTERNAL_API_KEY=YOUR_API_KEY_HERE
+
+  ระบบจะเรียก (Swagger API):
+    POST {EXTERNAL_API_URL}/api/check-emp
+    Header: x-api-key: {EXTERNAL_API_KEY}
+    Body:   { "per_cardno": "<per_id>" }
+
+  Response ที่ได้ต้องมี field: per_name, per_surname, prenameth_abbr,
+  prename_th, posname_th, organize_th, organize_id
+
+---- Admin Key (PUT/DELETE endpoint) ----
+
+  endpoint แก้ไขและลบ attendance record ต้องการ header พิเศษ:
+    X-Admin-Key: <ค่าจาก ADMIN_API_KEY ใน .env>
+
+  ตัวอย่าง:
+    curl -X DELETE http://localhost:8000/attendance/5 \
+         -H "X-Admin-Key: YOUR_ADMIN_KEY"
+
+================================================================================
+10. รันระบบ
+================================================================================
+
+ต้องเปิด 2 terminal พร้อมกัน
+
+Terminal ที่ 1 — Local API Server (เปิดทิ้งไว้ตลอด):
+
+    source venv/bin/activate
+    uvicorn api:app --host 0.0.0.0 --port 8000
+
+    ตรวจสอบว่า API ทำงานได้:
+        http://localhost:8000/docs
+
+Terminal ที่ 2 — ระบบหลัก:
+
+    source venv/bin/activate
+
+    python main.py              รันด้วย default config
+    python main.py cam_main     รันด้วย IP Camera profile
+    python main.py cam_usb      รันด้วย USB Camera profile
+    python main.py test         โหมดทดสอบ (หยุดเองอัตโนมัติ, ไม่ fullscreen)
+
+สิ่งที่ต้องมีก่อนรัน:
+  - ไฟล์ .env ตั้งค่าครบ (ดูหัวข้อ 4)
+  - ไฟล์ db_config.json ตั้งค่าครบ (ดูหัวข้อ 5)
+  - ไฟล์ encodings.pkl มีอยู่ (ดูหัวข้อ 7)
+
+================================================================================
+11. Profiles (สลับโหมดเร็ว)
+================================================================================
+
+Profile คือไฟล์ Python ในโฟลเดอร์ profiles/ ที่ override ค่าจาก config.py
+ใช้สลับการตั้งค่าได้โดยไม่ต้องแก้ config.py โดยตรง
+
+ตัวอย่างเนื้อหาในไฟล์ profiles/cam_usb.py:
+
+    CAMERA_URL   = None
+    CAMERA_FLIP  = True
+    FULLSCREEN   = True
+    TEST_MODE    = False
+
+วิธีใช้:
+    python main.py cam_usb                      ระบุชื่อ profile เป็น argument
+    FACE_PROFILE=cam_usb python main.py         ระบุผ่าน environment variable
+
+สร้าง profile ใหม่:
+    สร้างไฟล์ profiles/ชื่อprofile.py แล้วใส่เฉพาะค่าที่ต้องการ override
+
+================================================================================
+12. Keyboard Shortcuts (ขณะโปรแกรมทำงาน)
+================================================================================
+
+  ปุ่ม    ฟังก์ชัน
+  ------  ---------------------
+  q       ออกจากโปรแกรม
+  f       Toggle fullscreen / windowed
+  d       Toggle debug mode (แสดงค่า anti-spoofing)
+
+================================================================================
+13. Anti-Spoofing Pipeline
+================================================================================
+
+ระบบตรวจจับการปลอมแปลง 7 ด่านตามลำดับ
+ตั้งค่าเปิด/ปิดแต่ละด่านได้ใน config.py
+
+  ด่านที่  ชื่อด่าน          ตัวแปรปิด/เปิด         คำอธิบาย
+  ------  ----------------   --------------------   ------------------------------------
+  1       Landmark Depth     (เปิดตลอด)             ตรวจความลึก 3D จาก 68-point landmark
+  2       Micro-Motion       (เปิดตลอด)             ต้องมีการขยับเล็กน้อย
+  3       Blink Detection    BLINK_ENABLED           ต้องกะพริบตาอย่างน้อย 2 ครั้ง
+  4       Texture Analysis   TEXTURE_ENABLED         ตรวจ LBP + Laplacian + สี
+  5       Screen Border      SCREEN_DETECT_ENABLED   ตรวจขอบหน้าจอ/รูปถ่าย
+  6       Finger Challenge   CHALLENGE_ENABLED       ชูนิ้วตามที่ระบบสั่ง 2 ชุด
+  7       MiniFASNet (AI)    FAS_ENABLED             AI ตรวจ spoof โดยตรง
+
+ปิดด่านที่ false positive บ่อย:
+  แก้ใน config.py:
+    SCREEN_DETECT_ENABLED = False    ถ้าใช้กล้อง wide-angle / fisheye
+    BLINK_ENABLED         = False    ถ้าสภาพแสงในห้องมืดหรือไม่สม่ำเสมอ
+
+================================================================================
+14. แก้ปัญหาเบื้องต้น
+================================================================================
+
+ปัญหา: ภาษาไทยในหน้าจอแสดงเป็น ?????
+วิธีแก้:
+    sudo apt install fonts-tlwg-garuda
+    รีสตาร์ทโปรแกรม
+
+----
+
+ปัญหา: กล้อง IP เชื่อมต่อไม่ได้
+วิธีแก้:
+    1. ตรวจสอบ IP, username, password ใน RTSP URL
+    2. ทดสอบด้วย VLC: Media > Open Network Stream > วาง URL
+    3. ตรวจสอบว่ากล้องและเครื่องอยู่ใน Network เดียวกัน
+    4. ตรวจสอบ Firewall ว่าไม่ได้บล็อก port 554
+
+----
+
+ปัญหา: ไม่พบไฟล์ encodings.pkl
+วิธีแก้:
+    python encode_faces_arcface.py
+
+----
+
+ปัญหา: ขึ้น "ไม่พบ per_id=... ใน mock database"
+วิธีแก้:
+    1. เปิด api_client.py
+    2. เพิ่ม entry ใน _MOCK_PERSONS dict
+    3. ตรวจสอบว่าชื่อโฟลเดอร์ใน known_faces/ ตรงกับ key ใน dict
+
+----
+
+ปัญหา: KeyError: 'EXTERNAL_API_URL' หรือ 'EXTERNAL_API_KEY' หรือ 'CAMERA_URL'
+วิธีแก้:
+    ยังไม่ได้สร้างไฟล์ .env หรือใส่ค่าไม่ครบ
+    1. ตรวจสอบว่ามีไฟล์ .env ในโฟลเดอร์โปรเจค
+    2. เปรียบเทียบกับ .env.example ว่าครบทุก key หรือยัง
+
+----
+
+ปัญหา: PUT/DELETE ขึ้น 403 Forbidden
+วิธีแก้:
+    ต้องส่ง header X-Admin-Key ให้ตรงกับค่า ADMIN_API_KEY ใน .env
+    curl -X DELETE http://localhost:8000/attendance/5 \
+         -H "X-Admin-Key: YOUR_ADMIN_KEY"
+
+----
+
+ปัญหา: API Server ไม่ตอบสนอง
+วิธีแก้:
+    ตรวจว่า port 8000 ถูกใช้อยู่หรือเปล่า:
+        ss -tlnp | grep 8000
+
+    ถ้าถูกใช้อยู่ เปลี่ยน port:
+        uvicorn api:app --port 8001
+    แล้วแก้ LOCAL_API_URL ใน api_client.py ให้ตรงกัน
+
+----
+
+ปัญหา: โมเดล InsightFace ดาวน์โหลดช้า หรือล้มเหลว
+วิธีแก้:
+    ดาวน์โหลดโมเดลด้วยตนเองโดยรัน:
+        python -c "import insightface; insightface.app.FaceAnalysis(name='buffalo_l').prepare(ctx_id=0)"
+
+    หรือดาวน์โหลดไฟล์โมเดลจากภายนอกแล้ววางที่:
+        ~/.insightface/models/buffalo_l/
+
+----
+
+ปัญหา: GPU ไม่ถูกใช้งาน (ช้าผิดปกติ)
+วิธีแก้:
+    ตรวจสอบด้วย:
+        python -c "import onnxruntime as ort; print(ort.get_available_providers())"
+
+    ควรเห็น CUDAExecutionProvider ในรายการ
+    ถ้าไม่เห็น ตรวจสอบการติดตั้ง CUDA และ onnxruntime-gpu อีกครั้ง
+
+================================================================================
