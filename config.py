@@ -3,7 +3,11 @@ config.py — ตั้งค่าทั้งหมดของระบบ
 =============================================
 แก้ค่าในไฟล์นี้ไฟล์เดียว ไม่ต้องแก้ไฟล์อื่น
 """
+import os
+from dotenv import load_dotenv
 from datetime import time as dtime
+
+load_dotenv()
 
 
 # ╔═══════════════════════════════════════════╗
@@ -45,8 +49,7 @@ USB_CAM_HEIGHT        = 720        # เช่น 480, 720, 1080   (None = ไ�
 #   CAMERA_URL = "rtsp://admin:admin@192.168.1.13:554/Streaming/Channels/101"   # Hikvision
 #   CAMERA_URL = "rtsp://admin:admin@192.168.1.13:554/cam/realmonitor?channel=1&subtype=0"  # Dahua
 #   CAMERA_URL = "http://192.168.1.13:8080/?action=stream"  # MJPEG (IP Webcam app)
-CAMERA_URL            = "rtsp://admin:@dmin123456@192.168.1.13:554/unicast/c1/s0/live"
-
+CAMERA_URL            = os.environ.get("CAMERA_URL", "")   # ตั้งค่าใน .env
 
 # ╔═══════════════════════════════════════════╗
 # ║  Performance                              ║

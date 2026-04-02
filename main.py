@@ -314,6 +314,7 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
             if not checkout_done:
                 checkout_done = True
                 session.do_checkout(camera_name, now)
+            session.save_snapshots()
             print(f"[SCHEDULER] Idle mode เริ่ม {now.strftime('%H:%M:%S')}")
 
         _was_active = _active
@@ -438,7 +439,10 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
                 person.snapshot = orig_frame.copy()
             elif liveness.confirmed and person.checked_in and not person.checked_out:
                 # ผ่าน liveness ซ้ำหลัง absence → อัปเดต last_seen (ไม่สร้าง record ใหม่)
+                is_reverify = person.absence_reset  # True เฉพาะ frame แรกที่ผ่านหลัง absence
                 session.confirm_presence(name, now)
+                if is_reverify:
+                    person.snapshot_out = orig_frame.copy()
 
             session.try_checkin(name, camera_name)
 
@@ -507,6 +511,7 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
         elif key == ord("f"):
             _toggle_fullscreen()
 
+    session.save_snapshots()
     hands.close()
     cam.release()
     cv2.destroyAllWindows()

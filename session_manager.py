@@ -5,6 +5,8 @@ face_label = per_id (เลข 13 หลัก = ชื่อโฟลเดอ�
 ข้อมูลพนักงาน (ชื่อ/หน่วยงาน) ดึงจาก external API ผ่าน api_client
 """
 
+import os
+import cv2
 from datetime import datetime
 from api_client import fetch_person_by_pid, get_display_name, mark_attendance
 from liveness_engine import LivenessEngine, LivenessState
@@ -29,6 +31,7 @@ class PersonInfo:
         self.last_seen        = now
         self.last_detected_ts = now.timestamp()
         self.snapshot         = snapshot.copy() if snapshot is not None and snapshot.size > 0 else None
+        self.snapshot_out     = None  # อัปเดตทุกครั้งที่เจอหลัง check-in → รูปล่าสุด
         self.checked_in      = False
         self.checked_out     = False
         self.absence_reset   = False   # True เมื่อ absence reset → print log ครั้งเดียวตอน re-verify
@@ -177,3 +180,42 @@ class SessionManager:
                 print(f"  [{name}] ERROR: {e}")
         print(f"[CHECKOUT] สำเร็จ {count} คน\n{'='*50}\n")
         return count
+
+    def save_snapshots(self, save_root: str = "PicSAVE") -> int:
+        """
+        บันทึก snapshot ของทุกคนลง PicSAVE/YYYY/MM/DD/
+          - HH-MM-SS_{per_id}_IN.jpg   รูปตอน check-in
+          - HH-MM-SS_{per_id}_OUT.jpg  รูปล่าสุดที่เจอ (มีเฉพาะถ้าเจอหลัง check-in)
+        ใช้วันที่ check-in (first_seen) เป็นชื่อโฟลเดอร์เสมอ
+        """
+        saved = 0
+        for person in self.persons.values():
+            if not person.checked_in:
+                continue
+            in_dt  = person.first_seen or datetime.now()
+            out_dt = person.last_seen  or in_dt
+
+            folder = os.path.join(
+                save_root,
+                in_dt.strftime("%Y"),
+                in_dt.strftime("%m"),
+                in_dt.strftime("%d"),
+            )
+            os.makedirs(folder, exist_ok=True)
+
+            # รูป IN
+            if person.snapshot is not None and person.snapshot.size > 0:
+                path = os.path.join(folder, f"{in_dt.strftime('%H-%M-%S')}_{person.per_id}_IN.jpg")
+                cv2.imwrite(path, person.snapshot)
+                print(f"[SAVE] {path}")
+                saved += 1
+
+            # รูป OUT (มีเฉพาะถ้าเจอใบหน้าหลัง check-in อย่างน้อยครั้งหนึ่ง)
+            if person.snapshot_out is not None and person.snapshot_out.size > 0:
+                path = os.path.join(folder, f"{out_dt.strftime('%H-%M-%S')}_{person.per_id}_OUT.jpg")
+                cv2.imwrite(path, person.snapshot_out)
+                print(f"[SAVE] {path}")
+                saved += 1
+
+        print(f"[SAVE] บันทึกรูปทั้งหมด {saved} รูป → {save_root}/")
+        return saved

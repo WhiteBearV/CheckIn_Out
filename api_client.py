@@ -10,17 +10,21 @@ api_client.py — HTTP client + mock สำหรับ Face Attendance
   MOCK_MODE = False  → เรียก external API จริง (กำหนด EXTERNAL_API_URL + EXTERNAL_API_KEY)
 """
 
+import os
 import requests
 from datetime import datetime
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # ── Local API (api.py) ──────────────────────────────────────────────────────
 LOCAL_API_URL = "http://localhost:8000"
 TIMEOUT       = 5  # วินาที
 
-# ── External API ────────────────────────────────────────────────────────────
-MOCK_MODE        = True                      # ← False เมื่อมี API จริง
-EXTERNAL_API_URL = "https://api.example.com" # ← TODO: ใส่ URL จริง
-EXTERNAL_API_KEY = "YOUR_API_KEY_HERE"       # ← TODO: ใส่ API Key จริง
+# ── External API (อ่านจาก .env — ห้ามใส่ key ตรงนี้) ───────────────────────
+MOCK_MODE        = False
+EXTERNAL_API_URL = os.environ["EXTERNAL_API_URL"]
+EXTERNAL_API_KEY = os.environ["EXTERNAL_API_KEY"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -98,11 +102,14 @@ def _mock_fetch(per_id: str) -> dict | None:
 
 
 def _real_fetch(per_id: str) -> dict | None:
-    """TODO: ปรับ URL, header, และ field ตาม external API จริงเมื่อได้ข้อมูล"""
     try:
-        resp = requests.get(
-            f"{EXTERNAL_API_URL}/person/{per_id}",
-            headers={"Authorization": f"Bearer {EXTERNAL_API_KEY}"},
+        resp = requests.post(
+            f"{EXTERNAL_API_URL}/api/check-emp",
+            headers={
+                "x-api-key": EXTERNAL_API_KEY,
+                "Content-Type": "application/json",
+            },
+            json={"per_cardno": per_id},
             timeout=TIMEOUT,
         )
         if resp.status_code == 404:

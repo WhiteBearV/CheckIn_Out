@@ -16,13 +16,23 @@ Endpoints:
           ตาราง employees ถูกลบออกแล้ว — ดู migrate_v9.sql
 """
 
-from fastapi import FastAPI, HTTPException, Query
+import os
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Query, Depends, Header
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, date
 from db import get_connection
 
+load_dotenv()
+
 app = FastAPI(title="Face Attendance API", version="2.0.0")
+
+_ADMIN_KEY = os.environ.get("ADMIN_API_KEY", "")
+
+def _require_admin(x_admin_key: str = Header(...)):
+    if not _ADMIN_KEY or x_admin_key != _ADMIN_KEY:
+        raise HTTPException(status_code=403, detail="Forbidden")
 
 
 # ─── Schemas ────────────────────────────────────────────────────────────────
@@ -213,8 +223,7 @@ def attendance_by_person(
     ]
 
 
-# TODO [AUTH]: PUT/DELETE ควรจำกัดเฉพาะ Admin/HR เท่านั้น
-@app.put("/attendance/{log_id}")
+@app.put("/attendance/{log_id}", dependencies=[Depends(_require_admin)])
 def update_attendance(log_id: int, req: AttendanceUpdateRequest):
     """แก้ไข record ลงเวลา — ส่งเฉพาะ field ที่ต้องการเปลี่ยน"""
     if req.status and req.status not in ("IN", "OUT"):
@@ -240,7 +249,7 @@ def update_attendance(log_id: int, req: AttendanceUpdateRequest):
     return {"success": True, "id": log_id, "updated": fields}
 
 
-@app.delete("/attendance/{log_id}")
+@app.delete("/attendance/{log_id}", dependencies=[Depends(_require_admin)])
 def delete_attendance(log_id: int):
     """ลบ record ลงเวลา (ลบถาวร)"""
     with get_connection() as conn:
