@@ -598,7 +598,15 @@ def build_panel(persons: dict, liveness_map: dict, frame_height: int,
         snap = person.snapshot
         if snap is not None and snap.size > 0:
             try:
-                panel[y:y+FS, xf:xf+FS] = cv2.resize(snap, (FS, FS))
+                sh, sw = snap.shape[:2]
+                scale  = min(FS / sw, FS / sh)
+                nw, nh = int(sw * scale), int(sh * scale)
+                resized = cv2.resize(snap, (nw, nh))
+                thumb   = np.full((FS, FS, 3), C.PANEL_BG, dtype=np.uint8)
+                ox = (FS - nw) // 2
+                oy = (FS - nh) // 2
+                thumb[oy:oy+nh, ox:ox+nw] = resized
+                panel[y:y+FS, xf:xf+FS] = thumb
             except Exception:
                 cv2.rectangle(panel, (xf, y), (xf+FS, y+FS), C.FACE_PH, cv2.FILLED)
         else:
@@ -624,8 +632,10 @@ def build_panel(persons: dict, liveness_map: dict, frame_height: int,
         cv2.putText(panel, f"PID: {pid[:15]}", (tx, row),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.32, (180, 180, 180), 1)
         row += GAP
-        cv2.putText(panel, f"Dept:{dept[:13]}", (tx, row),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.32, (180, 180, 180), 1)
+        dept_roi = panel[row-12:row+4, tx:tx+140]
+        if dept_roi.size > 0:
+            draw_text(dept_roi, f"Dept:{dept[:18]}", (0, 0), scale=0.30, color=(180, 180, 180))
+            panel[row-12:row+4, tx:tx+140] = dept_roi
         row += GAP
         cv2.putText(panel, f"IN:  {in_str}", (tx, row),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.32, C.CHECKED_IN, 1)
