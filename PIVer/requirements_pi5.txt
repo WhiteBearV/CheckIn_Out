@@ -1,0 +1,36 @@
+# requirements_pi5.txt — สำหรับ Raspberry Pi 5 (ARM64/aarch64)
+# ติดตั้ง: pip install -r requirements_pi5.txt
+#
+# หมายเหตุ:
+#   - ไม่มี CUDA/GPU packages (Pi5 ไม่มี NVIDIA GPU)
+#   - onnxruntime เป็น CPU เท่านั้น
+#   - torch เป็น CPU build (ใช้โดย deepface/MiniFASNet)
+
+# ─── Core ──────────────────────────────────
+numpy==1.26.4
+Pillow
+python-dotenv
+requests
+
+# ─── OpenCV ────────────────────────────────
+opencv-python
+
+# ─── InsightFace + ONNX (CPU) ──────────────
+insightface==0.7.3
+onnxruntime                  # CPU build — ไม่ใช่ onnxruntime-gpu
+
+# ─── MediaPipe (Finger Challenge) ──────────
+mediapipe
+
+# ─── DeepFace + MiniFASNet ─────────────────
+deepface
+tf-keras
+# torch CPU — ถ้า pip ดาวน์โหลด CUDA version ให้ใช้คำสั่งด้านล่างแทน
+# pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+torch
+torchvision
+
+# ─── API / Session ─────────────────────────
+# (ต้องการถ้าใช้ session_manager จาก parent)
+# fastapi
+# uvicorn

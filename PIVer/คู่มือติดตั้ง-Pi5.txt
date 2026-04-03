@@ -1,0 +1,474 @@
+================================================================================
+             คู่มือติดตั้งและใช้งาน — Face Attendance Pi5 Edition
+                          (Snapshot Mode / ARM64)
+================================================================================
+
+สารบัญ
+-------
+  1.  ความต้องการของระบบ
+  2.  เตรียม Raspberry Pi 5
+  3.  Clone โปรเจคและสร้าง Virtual Environment
+  4.  ติดตั้ง Dependencies
+  5.  ตั้งค่า Secrets (.env)
+  6.  เพิ่มบุคคลเข้าระบบ / ย้าย encodings.pkl
+  7.  ตั้งค่ากล้อง
+  8.  ตั้งค่า API (Mock / Real)
+  9.  รันระบบ
+  10. Keyboard Shortcuts
+  11. Anti-Spoofing Pipeline (Pi5 Lite)
+  12. แก้ปัญหาเบื้องต้น
+
+================================================================================
+1. ความต้องการของระบบ
+================================================================================
+
+  รายการ         ขั้นต่ำ                    แนะนำ
+  -----------    -----------------------    ----------------------------
+  บอร์ด          Raspberry Pi 5 (4GB)       Raspberry Pi 5 (8GB)
+  OS             Raspberry Pi OS Bookworm   Ubuntu 24.04 LTS (ARM64)
+                 (64-bit) / Debian 12
+  Python         3.11                       3.11
+  RAM            4 GB                       8 GB
+  Storage        16 GB microSD              32 GB microSD (Class 10+)
+  กล้อง          USB Webcam                 IP Camera RTSP / Pi Camera
+  อินเทอร์เน็ต   ต้องการ (ดาวน์โหลด model)  —
+
+หมายเหตุ:
+  - Pi5 ไม่มี NVIDIA GPU → ใช้ CPU inference เท่านั้น
+  - ใช้ buffalo_sc (MobileNet ~80MB) แทน buffalo_l (ResNet50 ~300MB)
+  - ประมวลผลต่อคน ~550ms — เพียงพอสำหรับระบบลงเวลา
+  - ต้องใช้ Pi OS 64-bit เท่านั้น (32-bit ไม่รองรับ mediapipe / onnxruntime)
+
+================================================================================
+2. เตรียม Raspberry Pi 5
+================================================================================
+
+ขั้นตอนที่ 1 — Flash OS (ถ้ายังไม่ได้ทำ)
+
+    ดาวน์โหลด Raspberry Pi Imager จาก raspberrypi.com/software
+    เลือก: Raspberry Pi OS (64-bit) Bookworm
+    Flash ลง microSD แล้วใส่ Pi
+
+ขั้นตอนที่ 2 — อัปเดต OS
+
+    sudo apt update && sudo apt upgrade -y
+
+ขั้นตอนที่ 3 — ติดตั้ง System Libraries ที่จำเป็น
+
+    sudo apt install -y \
+        python3-pip \
+        python3-venv \
+        python3-dev \
+        build-essential \
+        cmake \
+        libgl1 \
+        libglib2.0-0 \
+        libsm6 \
+        libxext6 \
+        libxrender-dev \
+        libgomp1 \
+        fonts-tlwg-garuda \
+        git \
+        ffmpeg
+
+    คำอธิบาย:
+      libgl1, libglib2.0-0    → ต้องการสำหรับ OpenCV
+      libgomp1                → ต้องการสำหรับ ONNX Runtime (OpenMP)
+      fonts-tlwg-garuda       → ฟอนต์ภาษาไทยใน UI
+      ffmpeg                  → ต้องการสำหรับ IP Camera (RTSP)
+
+ขั้นตอนที่ 4 — ตรวจสอบ Python version
+
+    python3 --version    ← ต้องได้ 3.11.x
+
+================================================================================
+3. Clone โปรเจคและสร้าง Virtual Environment
+================================================================================
+
+ขั้นตอนที่ 1 — Clone repo
+
+    git clone <repo-url>
+    cd FaceReg
+
+ขั้นตอนที่ 2 — สร้าง Virtual Environment
+
+    python3 -m venv venv
+
+ขั้นตอนที่ 3 — เปิดใช้งาน venv
+
+    source venv/bin/activate
+
+    (จะเห็น (venv) นำหน้า prompt — ต้องทำทุกครั้งที่เปิด terminal ใหม่)
+
+================================================================================
+4. ติดตั้ง Dependencies
+================================================================================
+
+  สำคัญ: ต้องทำตามลำดับ ห้ามข้ามขั้นตอน
+
+ขั้นตอนที่ 1 — อัปเกรด pip
+
+    pip install --upgrade pip setuptools wheel
+
+ขั้นตอนที่ 2 — ติดตั้ง PyTorch CPU Build (ต้องทำก่อน deepface เสมอ)
+
+    pip install torch torchvision \
+        --index-url https://download.pytorch.org/whl/cpu
+
+    หมายเหตุ: ห้ามใช้ pip install torch ตรงๆ โดยไม่ระบุ index-url
+              เพราะ pip จะพยายามดาวน์โหลด CUDA version (~2GB) ซึ่งใช้ไม่ได้บน Pi
+
+ขั้นตอนที่ 3 — ติดตั้ง packages ที่เหลือ
+
+    pip install -r PIVer/requirements_pi5.txt
+
+ขั้นตอนที่ 4 — ตรวจสอบว่าติดตั้งครบ
+
+    python -c "import insightface, cv2, mediapipe, deepface; print('OK')"
+
+    ถ้าขึ้น OK แสดงว่าพร้อมใช้งาน
+
+ขั้นตอนที่ 5 — Warm-up โมเดล (ครั้งแรกเท่านั้น / ต้องมีอินเทอร์เน็ต)
+
+    python -c "
+    from insightface.app import FaceAnalysis
+    app = FaceAnalysis(name='buffalo_sc', providers=['CPUExecutionProvider'])
+    app.prepare(ctx_id=-1, det_size=(160,160))
+    print('[InsightFace] buffalo_sc โหลดสำเร็จ')
+    "
+
+    จะดาวน์โหลด buffalo_sc (~80MB) อัตโนมัติ
+    หลังจากนั้นจะ cache ไว้ที่ ~/.insightface/models/buffalo_sc/
+
+    ดาวน์โหลด MiniFASNet (DeepFace) ครั้งแรก:
+
+    python -c "
+    import numpy as np, cv2
+    from deepface import DeepFace
+    dummy = np.zeros((80,80,3), dtype='uint8')
+    dummy[20:60,20:60] = 128
+    DeepFace.extract_faces(dummy, anti_spoofing=True,
+                           enforce_detection=False, detector_backend='skip')
+    print('[DeepFace] MiniFASNet โหลดสำเร็จ')
+    "
+
+    จะดาวน์โหลด MiniFASNet (~1.5MB)
+
+ขั้นตอนที่ 6 — ทดสอบกล้อง
+
+    python -c "
+    import cv2
+    cap = cv2.VideoCapture(0)
+    print('OK' if cap.isOpened() else 'FAIL')
+    cap.release()
+    "
+
+================================================================================
+5. ตั้งค่า Secrets (.env)
+================================================================================
+
+ไฟล์ .env เก็บข้อมูลสำคัญ — ไม่ถูก commit ขึ้น git (อยู่ใน .gitignore)
+ต้องสร้างเองทุกครั้งที่ clone ใหม่
+
+ขั้นตอนที่ 1 — สร้างไฟล์ .env ในโฟลเดอร์ FaceReg/
+
+    nano .env
+
+ขั้นตอนที่ 2 — ใส่ค่าต่อไปนี้
+
+    EXTERNAL_API_URL=https://service-ps.trd-dtc.one
+    EXTERNAL_API_KEY=<รับ key จากผู้ดูแลระบบ>
+    CAMERA_URL=rtsp://admin:@dmin123456@192.168.1.13:554/unicast/c1/s0/live
+    ADMIN_API_KEY=<สร้างเองด้วยคำสั่งด้านล่าง>
+
+สร้าง ADMIN_API_KEY แบบสุ่ม:
+
+    python -c "import secrets; print(secrets.token_hex(32))"
+
+หมายเหตุ:
+  - ถ้าใช้ USB Camera ให้เว้น CAMERA_URL ว่างไว้: CAMERA_URL=
+  - ถ้าใช้ MOCK_MODE ไม่จำเป็นต้องมี EXTERNAL_API_URL / EXTERNAL_API_KEY จริง
+
+================================================================================
+6. เพิ่มบุคคลเข้าระบบ / ย้าย encodings.pkl
+================================================================================
+
+---- วิธีที่ 1 (แนะนำ): Copy encodings.pkl จากเครื่องหลัก ----
+
+    encodings.pkl ที่สร้างบน PC/Server ใช้กับ Pi ได้โดยตรง ไม่ต้อง encode ใหม่
+    (ArcFace embeddings เป็น format เดียวกัน ไม่ขึ้นกับ hardware)
+
+    จากเครื่องหลัก:
+        scp encodings.pkl pi@<PI_IP_ADDRESS>:~/FaceReg/
+
+    หรือใช้ USB drive:
+        คัดลอก encodings.pkl ไปใส่ USB → เสียบ Pi → copy เข้าโฟลเดอร์
+
+---- วิธีที่ 2: Encode ใหม่บน Pi โดยตรง ----
+
+    (ใช้เวลานานกว่าบน PC เพราะไม่มี GPU แต่ทำได้)
+
+    ใส่รูปในโฟลเดอร์ known_faces/ ตามรูปแบบ:
+
+        known_faces/
+        |-- 1234567890123/       ← ชื่อโฟลเดอร์ = per_id (เลข 13 หลัก)
+        |   |-- photo1.jpg
+        |   `-- photo2.jpg
+        `-- 9876543210987/
+            `-- photo.jpg
+
+    แล้วรัน:
+
+        python encode_faces_arcface.py
+
+    หมายเหตุ: รูปขั้นต่ำ 1 รูป/คน แนะนำ 3-5 รูปหลายมุม
+
+================================================================================
+7. ตั้งค่ากล้อง
+================================================================================
+
+---- IP Camera (RTSP) ----
+
+    แก้ใน .env:
+        CAMERA_URL=rtsp://username:password@IP:port/path
+
+    ทดสอบ RTSP URL ด้วย:
+        ffplay rtsp://admin:password@192.168.1.13:554/unicast/c1/s0/live
+
+    ถ้าภาพมาได้ → URL ถูกต้อง
+
+---- USB Camera / Pi Camera ----
+
+    แก้ใน .env:
+        CAMERA_URL=       (เว้นว่าง → ระบบใช้ camera_index)
+
+    แก้ index ใน PIVer/main_pi5.py บรรทัดสุดท้าย:
+        run(camera_index=0)    ← 0 = กล้อง built-in / Pi Camera
+        run(camera_index=1)    ← 1, 2 = USB ต่อเพิ่ม
+
+    ตรวจดูว่ากล้องถูกจำลองที่ index ใด:
+        ls /dev/video*
+
+    หรือทดสอบ:
+        python -c "
+        import cv2
+        for i in range(3):
+            cap = cv2.VideoCapture(i)
+            print(f'index {i}:', 'OK' if cap.isOpened() else 'FAIL')
+            cap.release()
+        "
+
+---- Pi Camera Module ----
+
+    Pi Camera ต้องเปิดใช้งานก่อน:
+        sudo raspi-config → Interface Options → Camera → Enable
+
+    จะปรากฏเป็น /dev/video0
+
+================================================================================
+8. ตั้งค่า API (Mock / Real)
+================================================================================
+
+---- โหมด Mock (ทดสอบโดยไม่ต้อง external API) ----
+
+    เปิดไฟล์ FaceReg/api_client.py แล้วแก้บรรทัดแรก:
+        MOCK_MODE = True
+
+    เพิ่มข้อมูลบุคคลใน _MOCK_PERSONS dict:
+
+        "1234567890123": {
+            "per_id":         "1234567890123",
+            "name":           "นาย สมชาย ใจดี",
+            "prename_th":     "นาย",
+            "per_name":       "สมชาย",
+            "per_surname":    "ใจดี",
+            "posname_th":     "เจ้าหน้าที่",
+            "prenameth_abbr": "นาย",
+            "organize_th":    "ฝ่ายวิจัย",
+            "organize_id":    "0000001",
+            "org_path_name":  "/หน่วยงาน/",
+            "birthDate":      "1990-01-01",
+            "per_picpath":    "",
+        },
+
+    *** key ต้องตรงกับชื่อโฟลเดอร์ใน known_faces/ ***
+
+---- โหมด Real API (Production) ----
+
+    แก้ใน api_client.py:
+        MOCK_MODE = False
+
+    ตั้ง URL และ Key ใน .env ให้ครบ (ดูหัวข้อ 5)
+
+================================================================================
+9. รันระบบ
+================================================================================
+
+    สิ่งที่ต้องมีก่อนรัน:
+      ✓ ไฟล์ .env ตั้งค่าครบ
+      ✓ ไฟล์ encodings.pkl อยู่ที่ FaceReg/
+      ✓ venv เปิดอยู่ (source venv/bin/activate)
+
+ต้องเปิด 2 terminal พร้อมกัน
+
+Terminal ที่ 1 — Local API Server (เปิดทิ้งไว้ตลอด):
+
+    cd FaceReg
+    source venv/bin/activate
+    uvicorn api:app --host 0.0.0.0 --port 8000
+
+    ตรวจสอบจากเครื่องอื่นในเน็ตเดียวกัน:
+        http://<PI_IP>:8000/docs
+
+Terminal ที่ 2 — ระบบจดจำใบหน้า:
+
+    cd FaceReg/PIVer
+    source ../venv/bin/activate
+
+    python main_pi5.py          ← USB/Pi Camera index 0
+    python main_pi5.py 1        ← USB Camera index 1
+    CAMERA_URL=rtsp://... python main_pi5.py    ← IP Camera
+
+เมื่อระบบเริ่มทำงาน:
+  - รอบแรก: โหลดโมเดลใช้เวลา ~10-30 วินาที (ขึ้นอยู่กับ microSD)
+  - หน้าจอแสดงวงรีนำทาง → ยืนอยู่ตรงหน้ากล้องในวงรี
+  - ระบบจะ snapshot ทุก 1.5 วินาที และตรวจสอบอัตโนมัติ
+
+================================================================================
+10. Keyboard Shortcuts (ขณะโปรแกรมทำงาน)
+================================================================================
+
+  ปุ่ม    ฟังก์ชัน
+  ------  ----------------------------------------
+  q       ออกจากโปรแกรม (บันทึก snapshot ก่อน)
+  ESC     ออกจากโปรแกรม (บันทึก snapshot ก่อน)
+  f       Toggle fullscreen / windowed
+
+================================================================================
+11. Anti-Spoofing Pipeline (Pi5 Lite — 3 ด่าน)
+================================================================================
+
+Pi5 ใช้เฉพาะด่านที่ทำงานบน single frame ได้
+(ด่านที่ต้องการ video stream ถูกปิดเพื่อประหยัด CPU)
+
+  ด่านที่  ชื่อด่าน          สถานะ    คำอธิบาย
+  ------  ----------------   -------  ------------------------------------------
+  1       Texture Analysis   เปิด     LBP + Laplacian + Chroma บน face crop
+  2       MiniFASNet (AI)    เปิด     AI ตรวจ spoof จาก single frame
+  3       Finger Challenge   เปิด     ชูนิ้วตามที่ระบบสั่ง (snapshot-based)
+  —       Landmark Depth     ปิด      ต้องการ 3D temporal หลาย frame
+  —       Micro-Motion       ปิด      ต้องการ video stream
+  —       Blink Detection    ปิด      ต้องการ video stream
+  —       Screen Border      ปิด      ต้องการ video stream
+
+ปรับค่า threshold ใน PIVer/config_pi5.py:
+
+    TEXTURE_LBP_MIN   = 3.5     ← ลดถ้า Texture fail บ่อย (สภาพแสงมืด)
+    TEXTURE_LAP_MIN   = 15.0    ← ลดถ้า Texture fail บ่อย (กล้องความละเอียดต่ำ)
+    FAS_THRESHOLD     = 0.50    ← เพิ่มถ้าต้องการความเข้มงวดมากขึ้น
+    SNAPSHOT_INTERVAL_SEC = 1.5 ← เพิ่มถ้า Pi เริ่มร้อน / ลด CPU load
+    CHALLENGE_WAIT_SEC = 3.0    ← เพิ่มถ้า user ต้องการเวลาจัดนิ้วมากขึ้น
+
+================================================================================
+12. แก้ปัญหาเบื้องต้น
+================================================================================
+
+ปัญหา: ภาษาไทยแสดงเป็น ?????
+วิธีแก้:
+    sudo apt install fonts-tlwg-garuda
+    รีสตาร์ทโปรแกรม
+
+----
+
+ปัญหา: error "No module named 'cv2'"
+วิธีแก้:
+    pip install opencv-python
+    ถ้ายังไม่ได้: sudo apt install python3-opencv
+
+----
+
+ปัญหา: error "libGL.so.1: cannot open shared object"
+วิธีแก้:
+    sudo apt install libgl1
+
+----
+
+ปัญหา: torch ดาวน์โหลด CUDA version (ไฟล์ใหญ่ ~2GB)
+วิธีแก้:
+    pip uninstall torch torchvision -y
+    pip install torch torchvision \
+        --index-url https://download.pytorch.org/whl/cpu
+
+----
+
+ปัญหา: InsightFace ดาวน์โหลด buffalo_l แทน buffalo_sc (ไฟล์ใหญ่เกิน)
+วิธีแก้:
+    ตรวจสอบว่า config_pi5.py มีบรรทัด:
+        INSIGHTFACE_MODEL = "buffalo_sc"
+    และ main_pi5.py import config_pi5 ไม่ใช่ config
+
+----
+
+ปัญหา: กล้อง IP เชื่อมต่อไม่ได้
+วิธีแก้:
+    1. ทดสอบ URL ด้วย: ffplay <RTSP_URL>
+    2. ตรวจสอบว่า Pi และกล้องอยู่ใน Network เดียวกัน
+    3. ตรวจสอบ username:password ใน URL
+
+----
+
+ปัญหา: Finger Challenge ตรวจจับนิ้วไม่ได้ (passed=False ตลอด)
+วิธีแก้:
+    1. ตรวจสอบแสงสว่าง — มือต้องอยู่ในพื้นที่สว่าง
+    2. เพิ่มเวลารอ: แก้ CHALLENGE_WAIT_SEC = 4.0 ใน config_pi5.py
+    3. ให้มือยกสูงกว่าใบหน้า และห่างกล้องพอสมควร
+
+----
+
+ปัญหา: Texture fail ตลอด (สภาพแสงน้อย)
+วิธีแก้:
+    ลด threshold ใน config_pi5.py:
+        TEXTURE_LBP_MIN   = 2.5
+        TEXTURE_LAP_MIN   = 10.0
+        TEXTURE_CHROMA_MIN = 4.0
+
+----
+
+ปัญหา: Pi ร้อนเกินไป (thermal throttle)
+วิธีแก้:
+    1. ติดตั้ง heatsink + พัดลม (แนะนำสำหรับ production)
+    2. เพิ่ม SNAPSHOT_INTERVAL_SEC = 2.5 ใน config_pi5.py
+       → ลดความถี่ inference ลงอีก
+
+----
+
+ปัญหา: ไม่พบ encodings.pkl
+วิธีแก้:
+    Copy จากเครื่องหลัก:
+        scp user@<PC_IP>:~/FaceReg/encodings.pkl ~/FaceReg/
+    หรือ encode ใหม่บน Pi:
+        cd FaceReg && python encode_faces_arcface.py
+
+----
+
+ปัญหา: RAM เต็ม (Pi 4GB)
+วิธีแก้:
+    เพิ่ม swap:
+        sudo dphys-swapfile swapoff
+        sudo nano /etc/dphys-swapfile  ← แก้ CONF_SWAPSIZE=1024
+        sudo dphys-swapfile setup
+        sudo dphys-swapfile swapon
+
+----
+
+ปัญหา: imshow ไม่แสดงหน้าต่าง (Pi ต่อ monitor ผ่าน HDMI)
+วิธีแก้:
+    ตรวจสอบ DISPLAY environment variable:
+        echo $DISPLAY    ← ควรได้ :0
+    ถ้าว่าง:
+        export DISPLAY=:0
+        python PIVer/main_pi5.py
+
+================================================================================
+                              จบคู่มือ Pi5 Edition
+================================================================================
