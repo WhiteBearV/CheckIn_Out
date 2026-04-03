@@ -1,0 +1,199 @@
+## รายงานประจำสัปดาห์ — 30 มีนาคม 2026 ถึง 3 เมษายน 2026
+
+================================================================================
+### วันจันทร์ที่ 30 มีนาคม — วิเคราะห์ประสิทธิภาพ FPS / ปรับสูตร FFT / แก้ไขการทำงานของ GPU
+================================================================================
+
+ในวันดังกล่าวได้ดำเนินการวิเคราะห์และแก้ไขปัญหาหลัก 3 ประเด็นที่เชื่อมโยงกัน
+
+ประเด็นที่ 1 — ประสิทธิภาพ FPS ต่ำผิดปกติขณะตรวจพบใบหน้า
+พบว่าอัตราการแสดงผล (FPS) ในสภาวะปกติอยู่ที่ 20–24 เฟรมต่อวินาที แต่ลดลงเหลือ
+เพียง 3–6 เฟรมต่อวินาทีเมื่อระบบตรวจพบใบหน้า จากการวิเคราะห์พบต้นเหตุ 2 จุด
+ได้แก่ ฟังก์ชัน ScreenDetector.detect() และ detect_debug() ประมวลผล pipeline
+ชุดเดิมซ้ำกันโดยไม่จำเป็น และ panel cache ถูกปิดการทำงานใน TEST_MODE ทำให้
+ต้อง render ส่วนแสดงผลใหม่ทุกเฟรม
+
+ได้ดำเนินการรวมฟังก์ชัน detect() ทั้งสองเข้าด้วยกันเพื่อลดการประมวลผลซ้ำซ้อน
+อย่างไรก็ตาม ผลที่เกิดขึ้นคือค่า FFT score แสดงผลเป็น 0.000 ตลอดเวลา เนื่องจาก
+การรวมฟังก์ชันดังกล่าวทำให้ early return ที่ป้องกันไม่ให้ FFT ประมวลผลบนเฟรมที่
+ไม่มี edge lines ถูกตัดออกไป จึงตัดสินใจย้อนกลับการเปลี่ยนแปลงทั้ง 3 ไฟล์สู่
+สถานะเดิม และเลื่อนการแก้ไขปัญหา FPS ออกไปดำเนินการในภายหลังอย่างรอบคอบ
+
+ประเด็นที่ 2 — FFT false positive บนกล้อง IP Camera (RTSP H.264)
+หลังการย้อนกลับ พบว่าปัญหา FFT ยังคงมีอยู่ สาเหตุเกิดจากกล้อง RTSP H.264 สร้าง
+DCT block artifact ทำให้ค่า peak_rate และ radial_cov สูงเกิน baseline ของสูตรเดิม
+ซึ่ง calibrate สำหรับกล้องทั่วไป จึงปรับสูตร _fft_score() ดังนี้:
+  สูตรเดิม: peak_rate × 25.0 + (radial_cov − 0.7) × 2.0
+  สูตรใหม่: peak_rate × 12.0 + (radial_cov − 1.5) × 1.0
+
+ประเด็นที่ 3 — GPU ไม่ถูกใช้งาน (InsightFace fallback มา CPU ทั้งหมด)
+ตรวจพบว่า InsightFace ทุกโมเดลไม่สามารถโหลดบน GPU ได้ เนื่องจาก
+nvidia-cudnn-cu12 เวอร์ชัน 9.10.2 ออกมาใหม่กว่าที่ onnxruntime-gpu 1.20.1
+รองรับ (ออกแบบมาสำหรับ cuDNN 9.4–9.5) แก้ไขโดย downgrade:
+  pip install "nvidia-cudnn-cu12==9.5.1.17" --force-reinstall
+หลังดำเนินการแก้ไข ทั้ง 3 โมเดลสามารถโหลดและประมวลผลบน GPU ได้ตามปกติ
+
+================================================================================
+### วันอังคารที่ 31 มีนาคม — ระบบยืนยันตัวตนซ้ำ (Absence Re-Verification) และ FAS Hardening
+================================================================================
+
+ดำเนินการปิดช่องโหว่ด้านความปลอดภัยและเพิ่มความแม่นยำของระบบป้องกันการปลอมแปลง
+
+ช่องโหว่การบันทึกเวลาออก (Checkout Manipulation)
+ตรวจพบช่องโหว่เชิงสถาปัตยกรรมใน session_manager.py กล่าวคือ ค่า last_seen
+ถูกอัปเดตทุกครั้งที่กล้องตรวจพบใบหน้า โดยไม่จำเป็นต้องผ่านกระบวนการยืนยันตัวตน
+(liveness check) ส่งผลให้มีความเป็นไปได้ที่บุคคลอื่นจะนำรูปภาพมาแสดงต่อกล้อง
+ภายหลังเจ้าตัวออกไปแล้ว เพื่อให้ระบบบันทึกเวลาออกล่าช้ากว่าความเป็นจริง
+
+ดำเนินการแก้ไขโดยแยก last_detected_ts (อัปเดตทุกครั้งที่ตรวจพบใบหน้า) ออกจาก
+last_seen (อัปเดตเฉพาะเมื่อผ่าน liveness check เท่านั้น) และเพิ่มกลไก Absence-Based
+Re-Verification โดยหากไม่พบใบหน้าเกินระยะเวลาที่กำหนด (ABSENCE_TIMEOUT_SEC)
+ระบบจะรีเซ็ต liveness state และบังคับให้ผ่านกระบวนการยืนยันตัวตนใหม่ตั้งแต่ต้น
+
+การแก้ไข Bug ที่เกี่ยวข้องกับ FAS (MiniFASNet)
+  1. Python id() Reuse: หลังการรีเซ็ต absence ระบบสร้าง LivenessState ใหม่ขึ้นมา
+     แต่ CPython อาจนำ memory address เดิมมาใช้ซ้ำ ทำให้ id(new_state) เท่ากับ
+     id(old_state) ส่งผลให้ FAS background thread ดึงผลลัพธ์เก่า (spoof) มาใช้และ
+     fail ทันที แก้ไขโดยเพิ่ม fas_uid ที่สร้างจาก itertools.count() แทนการใช้ id()
+  2. FAS False Positive จากมุมหน้าข้าง: MiniFASNet ให้ค่า score ต่ำสำหรับบุคคลจริง
+     ที่หันหน้าข้าง เนื่องจากโมเดลถูก train บน frontal face เป็นหลัก แก้ไขโดยเพิ่ม
+     FAS_SPOOF_CONFIRM_SEC = 4.0 วินาที กำหนดให้ระบบต้องตรวจพบ spoof ต่อเนื่อง
+     ครบระยะเวลาดังกล่าวก่อนจึงจะตัดสินว่า fail
+
+นอกจากนี้ยังแก้ไขปัญหาการแสดงผลไม่เต็มจอโดยเพิ่มการ resize frame ใน _imshow()
+และเพิ่ม USB_CAM_WIDTH / USB_CAM_HEIGHT ใน config.py เพื่อรองรับการปรับ
+ความละเอียดกล้อง USB จากไฟล์กำหนดค่าเพียงไฟล์เดียว
+
+================================================================================
+### วันพุธที่ 1 เมษายน — ปรับ Architecture เป็น External API + Node.js Dual Server
+================================================================================
+
+ดำเนินการปรับสถาปัตยกรรมระบบครั้งสำคัญ เนื่องจากได้รับ API Key สำหรับเรียกใช้
+ระบบบุคลากรภายนอก (external personnel API) จึงเปลี่ยนจากการจัดเก็บข้อมูลพนักงาน
+ใน local PostgreSQL มาเป็นการดึงข้อมูลผ่าน API ดังกล่าวแทน
+
+สถาปัตยกรรมก่อนและหลังการเปลี่ยนแปลง:
+  v8 เดิม: main.py → session_manager → attendance_db.py → PostgreSQL (employees + logs)
+  v9 ใหม่: main.py → session_manager → api_client → [External API] (ข้อมูลพนักงาน)
+                                                  → [Local FastAPI] → PostgreSQL (logs เท่านั้น)
+
+การเปลี่ยนแปลงสำคัญ ได้แก่ ปรับ face_label จากชื่อบุคคลเป็น per_id (เลข 13 หลัก)
+เขียน api_client.py ใหม่ทั้งหมดพร้อม MOCK_MODE สำหรับทดสอบโดยไม่ต้องรอ API
+จริง ปรับ session_manager.py ให้รับข้อมูลจาก API แทน local DB และสร้าง migrate_v9.sql
+เพื่อเพิ่ม snapshot fields ใน attendance_logs ซึ่งช่วยให้ดูรายงานย้อนหลังได้แม้ API
+ภายนอกจะหยุดให้บริการหรือข้อมูลพนักงานมีการเปลี่ยนแปลง
+
+จากนั้นได้สร้าง server.js (Express + pg) ขึ้นมาใหม่ เนื่องจากระบบที่ใช้งานจริง
+ต้องการ Node.js โดยมี endpoints ครบถ้วนเช่นเดียวกับ api.py นอกจากนี้ยังออกแบบ
+ระบบ Dual DB Config ผ่านไฟล์ db_config.json ไฟล์เดียว ทำให้ทั้ง Python และ
+Node.js สามารถสลับระหว่าง local/server database ได้โดยแก้ไขเพียงบรรทัดเดียว
+
+การรัน database migration ติดปัญหา 2 รอบ ได้แก่ face_user ไม่มีสิทธิ์ ALTER TABLE
+(แก้ไขโดยใช้ sudo -u postgres) และ migration รันค้างกลางทาง (แก้ไขโดยเขียน
+migration script ใหม่ที่ตรวจสอบ state ปัจจุบันก่อนดำเนินการด้วย DO $$ block)
+
+================================================================================
+### วันพฤหัสบดีที่ 2 เมษายน — เชื่อมต่อ External API จริง และ Security Hardening
+================================================================================
+
+ได้รับ URL และ API Key จริงสำหรับ external personnel API พบว่ารูปแบบการเรียก
+ต่างจากที่เตรียมไว้ในโครงสร้าง skeleton ดังนี้:
+  - HTTP method: GET → POST
+  - Authentication header: Authorization: Bearer → x-api-key
+  - Request body: เปลี่ยนเป็น { "per_cardno": per_id }
+ดำเนินการแก้ไข _real_fetch() และทดสอบแล้ว ระบบสามารถดึงข้อมูลพนักงานจาก
+API จริงได้สำเร็จ โดย response format ตรงกับ mock ที่เตรียมไว้ทั้งหมด
+
+จากนั้นดำเนินการตรวจสอบความปลอดภัย (security audit) ทั้ง codebase พบและ
+แก้ไขปัญหาดังต่อไปนี้:
+  ระดับ Critical:
+    - API Key และ RTSP URL ของกล้องถูก hardcode ไว้ใน source code โดยตรง
+      → ย้าย secrets ทั้งหมดไปเก็บใน .env (อยู่ใน .gitignore แล้ว)
+      → สร้าง .env.example เป็น template สำหรับการติดตั้งใหม่
+  ระดับ High:
+    - PUT/DELETE /attendance ไม่มีการตรวจสอบสิทธิ์ใดๆ
+      → เพิ่ม X-Admin-Key header authentication ทั้งใน api.py และ server.js
+    - server.js ส่ง err.message กลับคืน client โดยตรง เสี่ยงต่อการเปิดเผย
+      โครงสร้างฐานข้อมูล → เปลี่ยนเป็นข้อความทั่วไป
+
+นอกจากนี้ยังพบว่า api_client.py ถูกระบุอยู่ใน .gitignore ทั้งไฟล์ ทำให้ไม่เคย
+ถูก track ใน git history เลย ดำเนินการนำออกจาก .gitignore และปรับให้อ่าน secrets
+จาก .env แทนการ hardcode เพื่อให้ปลอดภัยและสามารถ commit ได้ตามปกติ
+
+================================================================================
+### วันศุกร์ที่ 3 เมษายน — พัฒนา Pi5 Snapshot Edition และแก้ไขปัญหาการติดตั้งจริง
+================================================================================
+
+ดำเนินการออกแบบและพัฒนาระบบ Pi5 Edition ในโฟลเดอร์ PIVer/ เนื่องจาก
+Raspberry Pi 5 ไม่มี NVIDIA GPU จึงไม่สามารถใช้ระบบหลักได้โดยตรง แนวทางที่
+เลือกใช้คือ "Snapshot Mode" ซึ่งแทนที่การประมวลผลทุกเฟรม (15–30 ครั้งต่อวินาที)
+ด้วยการจับภาพ snapshot ทุก 1.5 วินาที ช่วยลด CPU load ลงประมาณ 80–90%
+
+ไฟล์ที่สร้างขึ้นใหม่ทั้งหมดภายใน PIVer/ มีดังนี้:
+  - main_pi5.py      — Main loop แบบ state machine (IDLE→LIVENESS→CHALLENGE→SUCCESS/FAILED)
+  - config_pi5.py    — กำหนดค่าสำหรับ Pi5 (buffalo_sc, DET_SIZE 160×160, ONNX CPU 4 threads)
+  - liveness_lite.py — Anti-spoofing แบบ stateless สำหรับ single frame (Texture, FAS, Finger)
+  - ui_pi5.py        — UI overlay ตาม state ปัจจุบัน ไม่มี side panel เพื่อประหยัด CPU
+  - requirements_pi5.txt และ คู่มือติดตั้ง-Pi5.txt
+
+ในช่วงบ่ายได้ติดตามการนำระบบไปติดตั้งบน Pi5 จริง พบปัญหาต่อเนื่อง 4 ประเด็น
+ซึ่งได้ดำเนินการแก้ไขแบบ real-time ดังนี้:
+  1. Pi OS Trixie (Debian 13) ใช้ Python 3.13 ซึ่ง mediapipe ยังไม่รองรับ
+     แนวทางแก้ไข: ติดตั้ง Python 3.12.9 ผ่าน pyenv แทน
+  2. python3.11 ไม่มีใน apt repository ของ Trixie
+     แนวทางแก้ไข: ใช้ pyenv ติดตั้ง Python 3.12.9
+  3. pyenv compile Python ขาด system build libraries ได้แก่ libbz2, libffi,
+     libreadline, libsqlite3 และ liblzma
+     แนวทางแก้ไข: ติดตั้ง dev libraries ทีละรายการ แล้ว compile ใหม่
+  4. piwheels (ARM package mirror) มี jax wheel ที่ checksum ไม่ตรงกัน
+     แนวทางแก้ไข: ติดตั้ง jax จาก PyPI โดยตรงก่อน:
+       pip install jax --index-url https://pypi.org/simple/
+
+================================================================================
+### สรุปประจำสัปดาห์
+================================================================================
+
+สิ่งที่ได้ดำเนินการทั้งหมดในสัปดาห์นี้:
+  - วิเคราะห์ต้นเหตุ FPS ต่ำ (Double Computation ใน ScreenDetector + Panel Cache)
+  - ย้อนกลับการแก้ไข FPS หลังพบว่าส่งผลกระทบต่อการทำงานของ FFT
+  - ปรับสูตร _fft_score() ให้รองรับ artifact ของกล้อง RTSP H.264
+  - Downgrade nvidia-cudnn-cu12 เป็น 9.5.1.17 เพื่อแก้ไข GPU fallback
+  - ออกแบบและ implement ระบบ Absence-Based Re-Verification ปิดช่องโหว่โกงเวลาออก
+  - แก้ไข bug Python id() reuse ใน FAS background thread ด้วย fas_uid counter
+  - เพิ่ม FAS_CONFIRM_SEC และ FAS_SPOOF_CONFIRM_SEC เพื่อลด false positive
+  - ปรับ architecture เป็น v9: External API + Local FastAPI + Node.js Dual Server
+  - เขียน api_client.py ใหม่พร้อม MOCK_MODE และ real API integration
+  - สร้าง migrate_v9.sql เพิ่ม personnel snapshot fields ใน attendance_logs
+  - ออกแบบ Dual DB Config ผ่าน db_config.json รองรับการสลับ local/server
+  - เชื่อมต่อ external personnel API จริง (POST + x-api-key) สำเร็จ
+  - ตรวจสอบและแก้ไข security issues ระดับ Critical และ High ทั้งหมด
+  - ย้าย secrets ออกจาก source code ไปเก็บใน .env
+  - เพิ่ม Admin Key authentication สำหรับ endpoint PUT/DELETE
+  - ออกแบบและพัฒนา Pi5 Snapshot Edition (PIVer/) พร้อมคู่มือติดตั้ง
+  - แก้ไขปัญหาการติดตั้งบน Pi OS Trixie แบบ real-time (Python version, pyenv, piwheels)
+
+ปัญหาที่พบตลอดสัปดาห์:
+  - FPS ลดลงอย่างมีนัยสำคัญขณะตรวจพบใบหน้า (Double Computation + Panel Cache)
+  - FFT false positive บนกล้อง RTSP H.264 เนื่องจากสูตรถูก calibrate ผิด platform
+  - nvidia-cudnn-cu12 9.10.2 ไม่รองรับ onnxruntime-gpu 1.20.1
+  - ช่องโหว่การบันทึกเวลาออกโดยใช้รูปภาพ (last_seen อัปเดตโดยไม่ผ่าน liveness)
+  - Python CPython id() reuse ทำให้ FAS ดึงผลลัพธ์เก่ามาใช้หลัง absence reset
+  - External API จริงมี format ต่างจากที่เตรียมไว้ (GET→POST, Bearer→x-api-key)
+  - API Key และ RTSP URL ถูก hardcode อยู่ใน source code
+  - api_client.py ถูก ignore ใน .gitignore ทั้งไฟล์ตลอด git history
+  - Pi OS Trixie ใช้ Python 3.13 ซึ่ง mediapipe ยังไม่รองรับ
+  - pyenv ต้องการ system build dependencies ที่ Pi OS ไม่ได้ติดตั้งมาให้
+  - piwheels มี jax wheel ที่ checksum ไม่ถูกต้อง
+
+แนวทางการแก้ไขปัญหา:
+  - FPS: เลื่อนการแก้ไขออกไป ปรับสูตร FFT โดยลด weight ของ peak_rate
+    และเพิ่ม baseline ของ radial_cov ให้เหมาะสมกับ RTSP H.264
+  - GPU: downgrade nvidia-cudnn-cu12 ให้ตรงกับเวอร์ชันที่ onnxruntime-gpu รองรับ
+  - ช่องโหว่โกงเวลา: แยก last_detected_ts / last_seen + absence reset + confirm_presence
+  - id() reuse: ใช้ itertools.count() สร้าง unique ID แทน id()
+  - API format: ตรวจสอบ Swagger documentation ก่อนดำเนินการแก้ไข code
+  - Secrets: ย้ายทั้งหมดไปเก็บใน .env และสร้าง .env.example
+  - Admin Key: เพิ่ม middleware ตรวจสอบ X-Admin-Key header ใน api.py และ server.js
+  - Pi Python 3.13: ใช้ pyenv ติดตั้ง Python 3.12.9 และสร้าง venv แยกต่างหาก
+  - pyenv build libs: ติดตั้ง libreadline-dev, libsqlite3-dev, liblzma-dev ก่อน compile
+  - piwheels jax: ใช้ pip install jax --index-url https://pypi.org/simple/ ข้าม piwheels

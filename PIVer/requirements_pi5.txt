@@ -1,13 +1,18 @@
 # requirements_pi5.txt — สำหรับ Raspberry Pi 5 (ARM64/aarch64)
 # ติดตั้ง: pip install -r requirements_pi5.txt
 #
+# ⚠️  ต้องใช้ Python 3.11 หรือ 3.12 เท่านั้น
+#     mediapipe และ numpy ยังไม่รองรับ Python 3.13
+#     สร้าง venv ด้วย: python3.11 -m venv venv
+#
 # หมายเหตุ:
 #   - ไม่มี CUDA/GPU packages (Pi5 ไม่มี NVIDIA GPU)
 #   - onnxruntime เป็น CPU เท่านั้น
-#   - torch เป็น CPU build (ใช้โดย deepface/MiniFASNet)
+#   - torch ต้องติดตั้งแยกก่อน:
+#     pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
 # ─── Core ──────────────────────────────────
-numpy==1.26.4
+numpy>=1.26.4,<2.0
 Pillow
 python-dotenv
 requests
