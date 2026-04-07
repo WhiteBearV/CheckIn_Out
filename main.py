@@ -49,6 +49,7 @@ import config as cfg
 from camera import ThreadedCamera
 from session_manager import SessionManager
 import ui_renderer as ui
+import stream_server
 
 # ─── ดึงความละเอียดหน้าจอจริงจาก xrandr ───
 import subprocess as _sp, re as _re
@@ -193,6 +194,9 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
         min_tracking_confidence=0.5,
     )
 
+    # ─── Stream Server ───
+    stream_server.start()
+
     # ─── Session Manager ───
     session = SessionManager()
 
@@ -236,6 +240,7 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
         if is_fullscreen and (display.shape[1] != SCREEN_W or display.shape[0] != SCREEN_H):
             display = cv2.resize(display, (SCREEN_W, SCREEN_H), interpolation=cv2.INTER_LINEAR)
         cv2.imshow(win_name, display)
+        stream_server.push_frame(display)
         if not _window_ready:
             _window_ready = True
             cv2.waitKey(1)   # ให้ window manager map หน้าต่างก่อน
