@@ -1,0 +1,21 @@
+/* ── Tailwind directives (ต้องมี 3 บรรทัดนี้) ────────────────────── */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Base styles ─────────────────────────────────────────────────── */
+body {
+  @apply bg-gui-bg text-gui-text font-sans;
+  min-height: 100vh;
+  /* ป้องกัน scrollbar layout shift */
+  overflow-y: scroll;
+}
+
+/* ── Custom scrollbar (dark theme) ──────────────────────────────── */
+::-webkit-scrollbar        { width: 5px; height: 5px; }
+::-webkit-scrollbar-track  { background: #161b22; }
+::-webkit-scrollbar-thumb  { background: #30363d; border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background: #484f58; }
+
+/* ── Utility: tabular numbers (ตัวเลขไม่กระโดด) ─────────────────── */
+.tabular-nums { font-variant-numeric: tabular-nums; }

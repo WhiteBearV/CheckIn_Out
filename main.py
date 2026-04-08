@@ -119,6 +119,98 @@ def landmarks_68_to_dict(pts) -> dict:
     }
 
 
+# ─── Live State Writer (สำหรับ Dashboard) ───────────────────────────────────
+# เขียน live_state.json ทุก 1 วินาที เพื่อให้ Dashboard อ่านได้แบบ real-time
+# ไม่กระทบ performance เพราะ throttle ด้วย _LIVE_WRITE_INTERVAL
+import json as _json
+
+_LIVE_WRITE_INTERVAL = 1.0    # เขียนทุก N วินาที
+_LIVE_STATE_PATH     = os.path.join(os.path.dirname(__file__), "live_state.json")
+
+# ─── Live Frame Writer (สำหรับ Dashboard Camera Stream) ─────────────────────
+# เขียน live_frame.jpg ทุก ~67ms (15fps) เพื่อให้ Dashboard แสดง stream
+# ใช้ atomic rename เพื่อป้องกัน race condition กับ api.py
+_LIVE_FRAME_PATH     = os.path.join(os.path.dirname(__file__), "live_frame.jpg")
+_LIVE_FRAME_INTERVAL = 1.0 / 15   # ~15fps
+
+def _write_live_frame(frame_bgr):
+    """เขียน frame พร้อม overlay ทั้งหมดเป็น JPEG สำหรับ Dashboard stream"""
+    tmp = _LIVE_FRAME_PATH + ".tmp"
+    try:
+        ok, buf = cv2.imencode('.jpg', frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 70])
+        if ok:
+            with open(tmp, 'wb') as _fh:
+                _fh.write(buf.tobytes())
+            os.replace(tmp, _LIVE_FRAME_PATH)
+    except Exception:
+        pass
+
+def _write_live_state(now_ts: float, session, active: bool):
+    """
+    เขียน session state ปัจจุบันลง live_state.json
+    ─────────────────────────────────────────────────────────────────
+    Dashboard อ่านผ่าน GET /session/live ทุก 2 วินาที
+    ถ้า main.py หยุด → Dashboard ตรวจจาก ts ว่า stale (> 5 วิ)
+    """
+    persons_data = []
+    for name, person in session.persons.items():
+        lv = session.liveness.get(name)
+
+        # แปลง liveness state → สถานะที่อ่านง่าย (เหมือน GUI label)
+        if lv and lv.confirmed:
+            liveness     = "confirmed"
+            liveness_msg = "ผ่านการตรวจสอบ"
+        elif lv and lv.failed:
+            liveness     = "failed"
+            liveness_msg = f"ล้มเหลว ({lv.fail_reason or '?'})"
+        elif lv and lv.challenge_phase == "active":
+            cn           = lv.challenge_number
+            dn           = len(lv.challenge_done)
+            liveness     = "challenge"
+            liveness_msg = f"โชว์ {cn} นิ้ว (ขั้น {dn+1}/{cfg.CHALLENGE_COUNT})"
+        else:
+            # pending — แสดงด่านที่กำลัง block อยู่
+            if lv:
+                dp = lv.depth_pass_count
+                if dp < cfg.DEPTH_FRAMES_REQUIRED:
+                    liveness_msg = f"กำลังสแกน ({dp}/{cfg.DEPTH_FRAMES_REQUIRED})"
+                elif cfg.BLINK_ENABLED and not lv.blink_ok:
+                    liveness_msg = f"กรุณากะพริบตา ({lv.blink_count}/{cfg.BLINK_MIN})"
+                elif not lv.motion_ok:
+                    liveness_msg = "กรุณาขยับเล็กน้อย"
+                elif not lv.texture_ok:
+                    liveness_msg = "กำลังตรวจ texture..."
+                elif not lv.fas_ok:
+                    liveness_msg = "กำลังตรวจ AI..."
+                else:
+                    liveness_msg = "กำลังตรวจสอบ..."
+            else:
+                liveness_msg = "รอตรวจสอบ"
+            liveness = "pending"
+
+        persons_data.append({
+            "per_id":       person.per_id,
+            "display_name": person.display_name  or person.per_id,
+            "per_name":     person.per_name      or "",
+            "per_surname":  person.per_surname   or "",
+            "organize_th":  person.organize_th   or "",
+            "posname_th":   person.posname_th    or "",
+            "checked_in":   person.checked_in,
+            "checked_out":  person.checked_out,
+            "first_seen":   person.first_seen.isoformat() if person.first_seen else None,
+            "last_seen":    person.last_seen.isoformat()  if person.last_seen  else None,
+            "liveness":     liveness,       # confirmed | pending | failed | challenge
+            "liveness_msg": liveness_msg,   # ข้อความสำหรับแสดงบน Dashboard
+        })
+
+    try:
+        with open(_LIVE_STATE_PATH, "w", encoding="utf-8") as _f:
+            _json.dump({"ts": now_ts, "active": active, "persons": persons_data},
+                       _f, ensure_ascii=False)
+    except Exception as _e:
+        pass   # ไม่ให้ crash หลัก loop
+
+
 # ─── Face Matching (cosine similarity) ──────
 def identify_face(embedding, known_norms: np.ndarray, known_names) -> str:
     """เทียบ 512d embedding กับฐานข้อมูล ด้วย cosine similarity (vectorized)
@@ -206,18 +298,36 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
         print(f"[CHALLENGE] x{cfg.CHALLENGE_COUNT}  timeout={cfg.CHALLENGE_TIMEOUT}s")
     print(f"[FAS]       {'ON' if cfg.FAS_ENABLED else 'OFF'}")
 
+    # ─── Headless mode (สำหรับ Dashboard) ───
+    # ตั้ง env var FACE_HEADLESS=1 เพื่อปิด GUI (ใช้เมื่อ start จาก api.py)
+    # รัน python main.py ตรงๆ = GUI ปกติ
+    import time as _time_gui
+    _HEADLESS = os.environ.get("FACE_HEADLESS", "").lower() in ("1", "true", "yes")
+    if _HEADLESS:
+        print("[HEADLESS] GUI ปิด — ส่ง frame ผ่าน live_frame.jpg เท่านั้น")
+
+    # ─── Always Active mode (สำหรับ Dashboard) ───
+    # ตั้ง env var FACE_ALWAYS_ACTIVE=1 เพื่อข้าม Active Windows scheduler
+    # รันตลอด 24 ชม. จนกว่าจะหยุดเอง — reset session รายวันตอนเที่ยงคืน
+    _ALWAYS_ACTIVE = os.environ.get("FACE_ALWAYS_ACTIVE", "").lower() in ("1", "true", "yes")
+    if _ALWAYS_ACTIVE:
+        print("[ALWAYS_ACTIVE] ข้าม Active Windows — รันตลอดจนกว่าจะหยุดเอง")
+
     # ─── หน้าต่าง ───
     win_name = "Face Attendance System"
-    cv2.namedWindow(win_name, cv2.WINDOW_NORMAL)   # NORMAL เสมอ เพื่อให้ toggle ได้
+    if not _HEADLESS:
+        cv2.namedWindow(win_name, cv2.WINDOW_NORMAL)   # NORMAL เสมอ เพื่อให้ toggle ได้
     is_fullscreen  = cfg.FULLSCREEN
     _window_ready  = False   # True หลัง imshow ครั้งแรก
 
     def _apply_fullscreen():
+        if _HEADLESS: return
         cv2.setWindowProperty(win_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
         cv2.moveWindow(win_name, 0, 0)
         cv2.resizeWindow(win_name, SCREEN_W, SCREEN_H)
 
     def _apply_windowed():
+        if _HEADLESS: return
         cv2.setWindowProperty(win_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(win_name, 1280, 720)
         cv2.moveWindow(win_name, 100, 100)
@@ -231,7 +341,9 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
             _apply_windowed()
 
     def _imshow(display):
-        """imshow + apply fullscreen หลัง frame แรก (Linux ต้อง map window ก่อน)"""
+        """imshow + apply fullscreen หลัง frame แรก — ข้ามทั้งหมดถ้า headless"""
+        if _HEADLESS:
+            return
         nonlocal _window_ready
         if is_fullscreen and (display.shape[1] != SCREEN_W or display.shape[0] != SCREEN_H):
             display = cv2.resize(display, (SCREEN_W, SCREEN_H), interpolation=cv2.INTER_LINEAR)
@@ -242,9 +354,19 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
             if is_fullscreen:
                 _apply_fullscreen()
 
+    def _waitkey(ms: int) -> int:
+        """cv2.waitKey ใน normal mode — time.sleep + return -1 ใน headless mode"""
+        if _HEADLESS:
+            _time_gui.sleep(ms / 1000.0)
+            return -1
+        return cv2.waitKey(ms)
+
     # ─── ตัวแปร loop ───
-    start_ts      = datetime.now().timestamp()
-    checkout_done = False
+    start_ts           = datetime.now().timestamp()
+    checkout_done      = False
+    _last_state_write  = 0.0   # timestamp ล่าสุดที่เขียน live_state.json
+    _last_frame_write  = 0.0   # timestamp ล่าสุดที่เขียน live_frame.jpg
+    _current_date      = datetime.now().date()   # สำหรับ daily reset ใน always-active mode
     frame_count   = 0
     _was_active: bool | None = None   # None = iteration แรก (ยังไม่รู้ว่า active หรือเปล่า)
     last_faces    = []     # cache ผลลัพธ์ insightface
@@ -287,46 +409,93 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
             display_fps = fps_counter / (now_ts - fps_timer)
             fps_counter, fps_timer = 0, now_ts
 
-        # ─── Checkout (TEST_MODE / CHECKOUT_TIME) ───
-        should_checkout = (
-            (now_ts - start_ts >= cfg.TEST_DURATION_SECONDS) if cfg.TEST_MODE
-            else (now.time() >= cfg.CHECKOUT_TIME)
-        )
-        if should_checkout and not checkout_done:
-            checkout_done = True
-            session.do_checkout(camera_name, now)
-        if cfg.TEST_MODE and checkout_done:
-            break
-
-        # ─── Active Window Check ───
-        _active = _in_active_window(now.time(), cfg.ACTIVE_WINDOWS)
-
-        if _active and _was_active is False:
-            # idle → active: เริ่มช่วงใหม่ — reset session และ checkout flag
-            session       = SessionManager()
-            last_faces    = []
-            last_face_ts  = now_ts
-            checkout_done = False
-            print(f"[SCHEDULER] Active window เริ่ม {now.strftime('%H:%M:%S')}")
-
-        if not _active and _was_active is True:
-            # active → idle: checkout คนที่ยังไม่ได้ออก แล้วพัก
-            if not checkout_done:
+        # ─── Checkout (TEST_MODE เท่านั้น — ALWAYS_ACTIVE จัดการเองใน transition) ───
+        if not _ALWAYS_ACTIVE:
+            should_checkout = (
+                (now_ts - start_ts >= cfg.TEST_DURATION_SECONDS) if cfg.TEST_MODE
+                else (now.time() >= cfg.CHECKOUT_TIME)
+            )
+            if should_checkout and not checkout_done:
                 checkout_done = True
                 session.do_checkout(camera_name, now)
-            session.save_snapshots()
-            print(f"[SCHEDULER] Idle mode เริ่ม {now.strftime('%H:%M:%S')}")
+            if cfg.TEST_MODE and checkout_done:
+                break
+
+        # ─── Active Window Check ───
+        if _ALWAYS_ACTIVE:
+            # ── Always Active: ใช้ ACTIVE_WINDOWS แบ่ง face mode / CCTV mode ──
+            _in_face_window = _in_active_window(now.time(), cfg.ACTIVE_WINDOWS)
+
+            # reset วันใหม่ตอนเที่ยงคืน (อัพเดต _current_date เท่านั้น)
+            if now.date() != _current_date:
+                _current_date = now.date()
+                print(f"[DAILY RESET] วันใหม่ {now.strftime('%Y-%m-%d')}")
+
+            if _in_face_window and _was_active is False:
+                # CCTV → Face recognition: reset session
+                session       = SessionManager()
+                last_faces    = []
+                last_face_ts  = now_ts
+                checkout_done = False
+                print(f"[CCTV→FACE] เริ่มโหมด Face Recognition {now.strftime('%H:%M')}")
+
+            if not _in_face_window and _was_active is True:
+                # Face → CCTV mode: checkout คนที่ยังอยู่
+                if not checkout_done:
+                    checkout_done = True
+                    session.do_checkout(camera_name, now)
+                    session.save_snapshots()
+                print(f"[FACE→CCTV] เข้าโหมด CCTV {now.strftime('%H:%M')}")
+
+            _active = _in_face_window
+        else:
+            # ── ใช้ Active Windows ตาม config ──
+            _active = _in_active_window(now.time(), cfg.ACTIVE_WINDOWS)
+
+            if _active and _was_active is False:
+                # idle → active: เริ่มช่วงใหม่ — reset session และ checkout flag
+                session       = SessionManager()
+                last_faces    = []
+                last_face_ts  = now_ts
+                checkout_done = False
+                print(f"[SCHEDULER] Active window เริ่ม {now.strftime('%H:%M:%S')}")
+
+            if not _active and _was_active is True:
+                # active → idle: checkout คนที่ยังไม่ได้ออก แล้วพัก
+                if not checkout_done:
+                    checkout_done = True
+                    session.do_checkout(camera_name, now)
+                session.save_snapshots()
+                print(f"[SCHEDULER] Idle mode เริ่ม {now.strftime('%H:%M:%S')}")
 
         _was_active = _active
 
         if not _active:
-            # ── Idle mode: แสดงหน้าจอรอ ลด CPU/GPU ──
-            next_dt = _next_window_start(now, cfg.ACTIVE_WINDOWS)
-            ui.draw_idle_screen(frame, now, next_dt)
-            # hstack panel ดำให้ขนาด window เท่ากับตอน active (กันหน้าต่างหด)
-            idle_panel = np.zeros((frame.shape[0], cfg.PANEL_WIDTH, 3), dtype=np.uint8)
-            _imshow(np.hstack([frame, idle_panel]))
-            key = cv2.waitKey(500) & 0xFF   # ตรวจ key ทุก 500ms แทน 1ms → ลด CPU
+            if _ALWAYS_ACTIVE:
+                # ── CCTV mode: สตรีม raw frame ไม่มี face processing ──
+                cctv_frame = frame.copy()
+                cv2.putText(
+                    cctv_frame,
+                    now.strftime('%H:%M:%S'),
+                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9,
+                    (180, 180, 180), 1, cv2.LINE_AA,
+                )
+                cctv_panel = np.zeros((cctv_frame.shape[0], cfg.PANEL_WIDTH, 3), dtype=np.uint8)
+                _imshow(np.hstack([cctv_frame, cctv_panel]))
+                if now_ts - _last_frame_write >= _LIVE_FRAME_INTERVAL:
+                    _last_frame_write = now_ts
+                    _write_live_frame(cctv_frame)
+                key = _waitkey(33) & 0xFF   # ~30fps
+            else:
+                # ── Idle mode: แสดงหน้าจอรอ ลด CPU/GPU ──
+                next_dt = _next_window_start(now, cfg.ACTIVE_WINDOWS)
+                ui.draw_idle_screen(frame, now, next_dt)
+                idle_panel = np.zeros((frame.shape[0], cfg.PANEL_WIDTH, 3), dtype=np.uint8)
+                _imshow(np.hstack([frame, idle_panel]))
+                if now_ts - _last_frame_write >= _LIVE_FRAME_INTERVAL:
+                    _last_frame_write = now_ts
+                    _write_live_frame(frame)
+                key = _waitkey(500) & 0xFF   # ตรวจ key ทุก 500ms → ลด CPU
             if key == ord("q") or key == 27:
                 break
             elif key == ord("f"):
@@ -501,11 +670,21 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
         remaining = max(0, cfg.TEST_DURATION_SECONDS - int(now_ts - start_ts)) if cfg.TEST_MODE else 0
         ui.draw_hud(frame, display_fps, cfg.TEST_MODE, checkout_done, remaining, cfg.SHOW_FPS)
 
+        # ─── เขียน live frame สำหรับ Dashboard stream ────────────────────────────
+        if now_ts - _last_frame_write >= _LIVE_FRAME_INTERVAL:
+            _last_frame_write = now_ts
+            _write_live_frame(frame)
+
         panel = ui.build_panel(session.persons, session.liveness, frame.shape[0],
                                screen_debug=_screen_debug_display if cfg.TEST_MODE else None)
         _imshow(np.hstack([frame, panel]))
 
-        key = cv2.waitKey(1) & 0xFF
+        # ─── เขียน live state สำหรับ Dashboard (throttle 1 วิ) ────────────────
+        if now_ts - _last_state_write >= _LIVE_WRITE_INTERVAL:
+            _last_state_write = now_ts
+            _write_live_state(now_ts, session, _active)
+
+        key = _waitkey(1) & 0xFF
         if key == ord("q") or key == 27:
             break
         elif key == ord("f"):
@@ -514,8 +693,20 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
     session.save_snapshots()
     hands.close()
     cam.release()
-    cv2.destroyAllWindows()
+    if not _HEADLESS:
+        cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
-    run_camera(camera_index=1, camera_name="CAM_MAIN")
+    import time as _time
+    while True:
+        try:
+            run_camera(camera_index=1, camera_name="CAM_MAIN")
+            break  # ออกตั้งใจ (q / ESC / TEST_MODE)
+        except KeyboardInterrupt:
+            print("\n[STOP] หยุดโดย Ctrl+C")
+            break
+        except Exception as _err:
+            print(f"\n[CRASH] เกิดข้อผิดพลาด: {_err}")
+            print("[RESTART] รีสตาร์ทใน 3 วินาที...")
+            _time.sleep(3)

@@ -1,0 +1,87 @@
+════════════════════════════════════════════════════════════════════════
+  รายงานการปฏิบัติงานฝึกประสบการณ์วิชาชีพ
+  วันที่  : จันทร์ที่ 7 เมษายน 2568
+  สัปดาห์ : สัปดาห์ที่ 4
+════════════════════════════════════════════════════════════════════════
+
+■ งานที่ดำเนินการในวันนี้
+────────────────────────────────────────────────────────────────────────
+
+1. พัฒนาระบบ Web Dashboard สำหรับระบบ Face Attendance (ต่อเนื่อง)
+   ─────────────────────────────────────────────────────────────────
+   พัฒนาหน้า Dashboard บนเว็บให้สามารถแสดงผลข้อมูลแบบ real-time
+   เชื่อมต่อกับระบบ Face Recognition (main.py) ที่ทำงานอยู่เบื้องหลัง
+
+2. เพิ่มระบบ Live Detection บน Dashboard
+   ─────────────────────────────────────────────────────────────────
+   - สร้างกลไก IPC (Inter-Process Communication) ผ่านไฟล์ live_state.json
+     โดย main.py จะเขียนข้อมูลสถานะปัจจุบันลงไฟล์ดังกล่าวทุก 1 วินาที
+   - เพิ่ม API endpoint GET /session/live ใน api.py
+     เพื่ออ่าน live_state.json และส่งข้อมูลไปให้ Dashboard
+   - สร้าง composable useLiveSession.js สำหรับ polling ข้อมูลทุก 2 วินาที
+
+3. สร้าง Component สำหรับแสดงผล Liveness Status
+   ─────────────────────────────────────────────────────────────────
+   - LiveDetection.vue  — แสดงรายชื่อบุคคลที่กล้องตรวจพบในขณะนั้น
+                          พร้อมสถานะ liveness แบบ real-time
+   - LivenessBadge.vue  — Badge แสดงสถานะ liveness แต่ละระดับ ได้แก่
+       • confirmed  (เขียว)  — ผ่านการตรวจสอบ liveness ครบทุกด่าน
+       • pending    (เหลือง) — อยู่ระหว่างการตรวจสอบ พร้อมแสดงด่านที่ค้างอยู่
+       • challenge  (ม่วง)   — อยู่ระหว่างทดสอบ Finger Challenge
+       • failed     (แดง)    — ล้มเหลวการตรวจสอบ พร้อมแสดงสาเหตุ
+
+4. ปรับปรุง DashboardView.vue
+   ─────────────────────────────────────────────────────────────────
+   เพิ่ม section LiveDetection ในหน้า Dashboard หลัก
+   วางระหว่าง Person Cards (สรุปรายวัน) และ Attendance Feed (ตารางรายการ)
+   เพื่อให้เห็นทั้งข้อมูลประวัติและสถานะ real-time ในหน้าเดียวกัน
+
+5. แก้ไข Bug — รูปแบบเวลา first_seen / last_seen ใน main.py
+   ─────────────────────────────────────────────────────────────────
+   เปลี่ยนจาก strftime("%H:%M:%S") เป็น isoformat()
+   เพื่อให้ JavaScript สามารถ parse ค่าวันที่-เวลาได้อย่างถูกต้อง
+
+■ สรุปไฟล์ที่สร้าง / แก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  [แก้ไข] api.py
+    → เพิ่ม GET /session/live endpoint อ่าน live_state.json
+    → คืนสถานะ active, stale, persons พร้อม liveness ของแต่ละคน
+
+  [แก้ไข] main.py
+    → แก้ first_seen/last_seen ให้ใช้ .isoformat() แทน strftime
+
+  [ใหม่]  dashboard/src/composables/useLiveSession.js
+    → polling GET /session/live ทุก 2 วินาที
+    → expose: active, stale, persons, loading, error, lastUpdate
+
+  [ใหม่]  dashboard/src/components/LivenessBadge.vue
+    → Badge สำหรับแสดง liveness state 4 ระดับ (confirmed/pending/challenge/failed)
+
+  [ใหม่]  dashboard/src/components/LiveDetection.vue
+    → Section แสดงบุคคลที่กล้องตรวจพบ + สถานะ liveness แบบ real-time
+    → แสดง offline banner เมื่อ main.py ไม่ได้ทำงาน
+
+  [แก้ไข] dashboard/src/views/DashboardView.vue
+    → import และเพิ่ม <LiveDetection /> ก่อน AttendanceFeed
+
+■ เทคโนโลยีที่ใช้
+────────────────────────────────────────────────────────────────────────
+
+  - Python / FastAPI     — Backend API server
+  - Vue 3 (Composition API, <script setup>)  — Frontend framework
+  - TailwindCSS          — Styling with custom GUI color scheme
+  - File-based IPC       — การสื่อสารระหว่าง main.py และ Dashboard
+                           ผ่านไฟล์ live_state.json
+  - HTTP Polling         — Dashboard ดึงข้อมูลทุก 2 วินาที
+
+■ ปัญหาที่พบและแนวทางแก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  ปัญหา : main.py และ Dashboard เป็น process แยกกัน ไม่สามารถแชร์
+           ตัวแปรในหน่วยความจำได้โดยตรง
+  แก้ไข : ใช้ file-based IPC โดย main.py เขียน live_state.json
+           ทุก 1 วินาที และ Dashboard อ่านผ่าน REST API
+           พร้อมตรวจสอบความ stale จาก timestamp (> 5 วินาที = offline)
+
+════════════════════════════════════════════════════════════════════════
