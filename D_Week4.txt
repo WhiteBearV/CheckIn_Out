@@ -1,5 +1,100 @@
 ════════════════════════════════════════════════════════════════════════
   รายงานการปฏิบัติงานฝึกประสบการณ์วิชาชีพ
+  วันที่  : พุธที่ 9 เมษายน 2568
+  สัปดาห์ : สัปดาห์ที่ 4
+════════════════════════════════════════════════════════════════════════
+
+■ งานที่ดำเนินการในวันนี้
+────────────────────────────────────────────────────────────────────────
+
+1. เพิ่มรายชื่อวันนี้ในโหมด Fullscreen ของ Web Dashboard (CameraView)
+   ─────────────────────────────────────────────────────────────────
+   - เปลี่ยน fullscreen target จาก div ของกล้องอย่างเดียว
+     เป็น wrapper ที่ครอบทั้งกล้องและ sidebar รายชื่อ
+   - โหมด Fullscreen แสดง Layout แบบ 2 ฝั่ง
+       • ซ้าย : กล้อง Face Recognition (flex-1 เต็มความสูง)
+       • ขวา : sidebar รายชื่อวันนี้ (ความกว้าง 340px)
+   - Sidebar ประกอบด้วย
+       • Header  — ชื่อ "รายชื่อวันนี้" + จำนวนคน + dot LIVE
+                   (แสดงเมื่อ main.py กำลังทำงาน)
+       • Stats   — แถบ IN / OUT / ยังอยู่ แบบ 3 ช่อง
+       • Legend  — สีของสถานะ ยังอยู่ / ออกแล้ว / กำลังตรวจ
+       • รายการ  — status bar 3px + avatar/รูป + ชื่อ/หน่วยงาน
+                   + เวลา IN และ OUT แบบ font mono
+       • Footer  — วันที่ปัจจุบัน (ภาษาไทย พร้อมวันของสัปดาห์)
+   - ข้อมูลดึงจาก mergedPersons (รวม live session + DB วันนี้)
+     เรียงลำดับ IN → PENDING → OUT เหมือนหน้าหลัก Dashboard
+
+2. เพิ่มรูป Face Crop (Bounding Box) สำหรับ Sidebar Fullscreen
+   ─────────────────────────────────────────────────────────────────
+   ก่อนหน้านี้รูปในการ์ดพนักงานใช้ภาพเต็ม frame (full frame snapshot)
+   แก้ให้ Sidebar Fullscreen แสดงเฉพาะ bounding box ที่จับหน้า
+   โดยเพิ่ม pipeline ตั้งแต่การเก็บข้อมูลจนถึงการแสดงผล ดังนี้
+
+   - session_manager.py
+       • เพิ่ม attribute snapshot_face = None ใน PersonState
+       • เพิ่มการบันทึกไฟล์ HH-MM-SS_{per_id}_FACE.jpg
+         ใน save_snapshots() แยกจาก _IN.jpg เดิม
+
+   - main.py
+       • เก็บ person.snapshot_face = crop.copy() ทันทีที่
+         liveness confirmed และยังไม่ได้ check-in
+         (crop คือ bounding box + padding 15px ที่ใช้อยู่แล้ว)
+
+   - api.py
+       • เพิ่ม endpoint GET /person-face/{per_id}
+         ค้นหา _FACE.jpg ก่อน fallback เป็น _IN.jpg
+         ถ้าไม่พบทั้งคู่คืน 404
+
+   - CameraView.vue (Fullscreen sidebar)
+       • เปลี่ยน src รูปจาก /person-photo/ เป็น /person-face/
+
+■ สรุปไฟล์ที่สร้าง / แก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  [แก้ไข] dashboard/src/views/CameraView.vue
+    → เปลี่ยน fullscreen target เป็น wrapper (กล้อง + sidebar)
+    → เพิ่ม sidebar "รายชื่อวันนี้" แสดงเฉพาะโหมด Fullscreen
+    → เพิ่ม failedPhotos ref + onPhotoFailed() สำหรับ fallback avatar
+    → เพิ่ม fmtTime() และ todayStr สำหรับแสดงใน sidebar
+    → เปลี่ยน src รูปใน sidebar เป็น /person-face/
+
+  [แก้ไข] session_manager.py
+    → เพิ่ม self.snapshot_face = None ใน PersonState.__init__
+    → เพิ่มบันทึก _FACE.jpg ใน save_snapshots()
+
+  [แก้ไข] main.py
+    → เพิ่ม person.snapshot_face = crop.copy() ตอน liveness confirmed
+
+  [แก้ไข] api.py
+    → เพิ่ม GET /person-face/{per_id}
+      ค้นหา _FACE.jpg → fallback _IN.jpg → 404
+
+■ เทคโนโลยีที่ใช้
+────────────────────────────────────────────────────────────────────────
+
+  - Python / OpenCV      — เก็บ face crop จาก bounding box
+  - FastAPI              — เพิ่ม endpoint /person-face
+  - Vue 3 (Composition API, <script setup>)  — Frontend framework
+  - Browser Fullscreen API  — requestFullscreen / exitFullscreen
+  - TailwindCSS          — Styling สำหรับ sidebar layout
+
+■ ปัญหาที่พบและแนวทางแก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  ปัญหา : รูปที่บันทึกเป็น snapshot เดิมคือ full frame ทั้งภาพ
+           ทำให้ Sidebar แสดงรูปคนที่เล็กและมีฉากหลังรบกวน
+  แก้ไข : เพิ่ม snapshot_face แยกต่างหาก เก็บเฉพาะ bounding box crop
+           (พร้อม padding 15px) ที่ใช้อยู่แล้วในกระบวนการ liveness
+           จึงไม่ต้อง crop ซ้ำ เพียงแค่ .copy() มาเก็บเพิ่ม
+
+  ปัญหา : Vue ไม่ track mutation ของ Set โดยตรง
+  แก้ไข : ใช้ ref(new Set()) และเมื่อเพิ่มสมาชิกให้ reassign ใหม่
+           failedPhotos.value = new Set([...failedPhotos.value, pid])
+           เพื่อให้ Vue detect การเปลี่ยนแปลงและ re-render
+
+════════════════════════════════════════════════════════════════════════
+  รายงานการปฏิบัติงานฝึกประสบการณ์วิชาชีพ
   วันที่  : อังคารที่ 8 เมษายน 2568
   สัปดาห์ : สัปดาห์ที่ 4
 ════════════════════════════════════════════════════════════════════════

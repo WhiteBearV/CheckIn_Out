@@ -605,7 +605,8 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
                 )
 
             if liveness.confirmed and not person.checked_in:
-                person.snapshot = orig_frame.copy()
+                person.snapshot      = orig_frame.copy()
+                person.snapshot_face = crop.copy()   # face crop สำหรับ Dashboard fullscreen
             elif liveness.confirmed and person.checked_in and not person.checked_out:
                 # ผ่าน liveness ซ้ำหลัง absence → อัปเดต last_seen (ไม่สร้าง record ใหม่)
                 is_reverify = person.absence_reset  # True เฉพาะ frame แรกที่ผ่านหลัง absence

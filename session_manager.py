@@ -31,6 +31,7 @@ class PersonInfo:
         self.last_seen        = now
         self.last_detected_ts = now.timestamp()
         self.snapshot         = snapshot.copy() if snapshot is not None and snapshot.size > 0 else None
+        self.snapshot_face    = None  # face crop (bounding box) ตอน confirm liveness
         self.snapshot_out     = None  # อัปเดตทุกครั้งที่เจอหลัง check-in → รูปล่าสุด
         self.checked_in      = False
         self.checked_out     = False
@@ -203,11 +204,17 @@ class SessionManager:
             )
             os.makedirs(folder, exist_ok=True)
 
-            # รูป IN
+            # รูป IN (full frame)
             if person.snapshot is not None and person.snapshot.size > 0:
                 path = os.path.join(folder, f"{in_dt.strftime('%H-%M-%S')}_{person.per_id}_IN.jpg")
                 cv2.imwrite(path, person.snapshot)
                 print(f"[SAVE] {path}")
+                saved += 1
+
+            # รูป FACE (bounding box crop) — ใช้แสดงบน Dashboard fullscreen
+            if person.snapshot_face is not None and person.snapshot_face.size > 0:
+                path = os.path.join(folder, f"{in_dt.strftime('%H-%M-%S')}_{person.per_id}_FACE.jpg")
+                cv2.imwrite(path, person.snapshot_face)
                 saved += 1
 
             # รูป OUT (มีเฉพาะถ้าเจอใบหน้าหลัง check-in อย่างน้อยครั้งหนึ่ง)

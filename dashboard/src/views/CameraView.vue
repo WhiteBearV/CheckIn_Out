@@ -1,11 +1,23 @@
 <template>
   <div class="p-4 md:p-6 max-w-screen-2xl mx-auto w-full space-y-4">
 
-    <!-- ══ กล้อง ══════════════════════════════════════════════════════ -->
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4" style="min-height: 520px">
+    <!-- ════ FULLSCREEN WRAPPER: กล้อง + รายชื่อวันนี้ ════════════════ -->
+    <div
+      ref="fullscreenWrapper"
+      :class="isFullscreen
+        ? 'flex flex-row bg-[#0a0a0a] overflow-hidden'
+        : 'grid grid-cols-1 lg:grid-cols-3 gap-4'"
+      style="min-height: 520px"
+    >
 
-      <!-- ซ้าย: Camera Feed (2/3) -->
-      <div ref="cameraContainer" class="lg:col-span-2 bg-black rounded-xl overflow-hidden flex flex-col border border-gui-border">
+      <!-- ── กล้อง (ซ้าย) ─────────────────────────────────────────── -->
+      <div
+        ref="cameraContainer"
+        class="bg-black flex flex-col overflow-hidden"
+        :class="isFullscreen
+          ? 'flex-1 border-r border-gui-border'
+          : 'lg:col-span-2 rounded-xl border border-gui-border'"
+      >
 
         <!-- Header -->
         <div class="px-4 py-3 border-b border-gui-border flex items-center justify-between shrink-0 bg-gui-panel">
@@ -147,69 +159,229 @@
                    hover:border-gui-in/40 transition-colors"
             title="ขยายหน้าจอ (F)"
           >
-            <span>{{ isFullscreen ? '⛶' : '⛶' }}</span>
+            <span>⛶</span>
             {{ isFullscreen ? 'ย่อ' : 'ขยาย' }}
             <kbd class="text-[10px] opacity-50 bg-gui-border/30 px-1 rounded">F</kbd>
           </button>
         </div>
 
       </div>
+      <!-- ── /กล้อง ─────────────────────────────────────────────── -->
 
-      <!-- ขวา: Detection Panel + สถานะ (1/3) -->
-      <div class="space-y-4 flex flex-col">
+      <!-- ── Right panel ────────────────────────────────────────────
+           Normal mode : LiveDetection + สถานะระบบ + วิธีใช้
+           Fullscreen  : รายชื่อวันนี้ (kiosk sidebar)
+      ─────────────────────────────────────────────────────────────── -->
+      <div
+        :class="isFullscreen
+          ? 'w-[340px] flex flex-col bg-gui-bg overflow-hidden'
+          : 'space-y-4 flex flex-col'"
+      >
 
-        <div class="bg-gui-panel border border-gui-border rounded-xl p-4 flex-1 overflow-y-auto"
-             style="max-height: 420px">
-          <LiveDetection />
-        </div>
+        <!-- ─ Normal mode ─ -->
+        <template v-if="!isFullscreen">
 
-        <div class="bg-gui-panel border border-gui-border rounded-xl p-4 shrink-0">
-          <h3 class="font-semibold text-sm mb-3 text-gui-dim">สถานะระบบ</h3>
-          <div class="space-y-2.5 text-sm">
-
-            <div class="flex items-center justify-between">
-              <span class="text-gui-dim">Face Recognition</span>
-              <span
-                class="font-medium"
-                :class="faceStatus.running ? 'text-gui-in' : 'text-gui-dim'"
-              >
-                {{ faceStatus.running ? 'กำลังทำงาน' : 'หยุดทำงาน' }}
-              </span>
-            </div>
-
-            <div v-if="faceStatus.pid" class="flex items-center justify-between">
-              <span class="text-gui-dim">PID</span>
-              <span class="font-mono text-xs text-gui-text">{{ faceStatus.pid }}</span>
-            </div>
-
-            <div class="flex items-center justify-between">
-              <span class="text-gui-dim">Live Frame</span>
-              <span
-                class="font-medium text-xs"
-                :class="hasRecentFrame ? 'text-gui-in' : 'text-gui-dim'"
-              >
-                {{ hasRecentFrame ? `${frameAge}s ago` : 'ไม่มีข้อมูล' }}
-              </span>
-            </div>
-
+          <div class="bg-gui-panel border border-gui-border rounded-xl p-4 flex-1 overflow-y-auto"
+               style="max-height: 420px">
+            <LiveDetection />
           </div>
-        </div>
 
-        <div class="bg-gui-panel border border-gui-border rounded-xl p-4 shrink-0">
-          <h3 class="font-semibold text-sm mb-3 text-gui-dim">วิธีใช้</h3>
-          <ul class="text-xs text-gui-dim space-y-1.5 leading-relaxed">
-            <li>• กด <span class="text-gui-in font-medium">▶ เปิด</span> เพื่อ start main.py</li>
-            <li>• วางใบหน้าในกรอบวงรีเพื่อยืนยัน</li>
-            <li>• Panel ขวาแสดงสถานะ liveness แบบ real-time</li>
-            <li>• กด <span class="text-gui-fail font-medium">⏹ หยุด</span> เพื่อ stop main.py</li>
-            <li>• หรือรัน <code class="bg-gui-border/30 px-1 rounded">python main.py</code> เอง</li>
-          </ul>
-        </div>
+          <div class="bg-gui-panel border border-gui-border rounded-xl p-4 shrink-0">
+            <h3 class="font-semibold text-sm mb-3 text-gui-dim">สถานะระบบ</h3>
+            <div class="space-y-2.5 text-sm">
+
+              <div class="flex items-center justify-between">
+                <span class="text-gui-dim">Face Recognition</span>
+                <span
+                  class="font-medium"
+                  :class="faceStatus.running ? 'text-gui-in' : 'text-gui-dim'"
+                >
+                  {{ faceStatus.running ? 'กำลังทำงาน' : 'หยุดทำงาน' }}
+                </span>
+              </div>
+
+              <div v-if="faceStatus.pid" class="flex items-center justify-between">
+                <span class="text-gui-dim">PID</span>
+                <span class="font-mono text-xs text-gui-text">{{ faceStatus.pid }}</span>
+              </div>
+
+              <div class="flex items-center justify-between">
+                <span class="text-gui-dim">Live Frame</span>
+                <span
+                  class="font-medium text-xs"
+                  :class="hasRecentFrame ? 'text-gui-in' : 'text-gui-dim'"
+                >
+                  {{ hasRecentFrame ? `${frameAge}s ago` : 'ไม่มีข้อมูล' }}
+                </span>
+              </div>
+
+            </div>
+          </div>
+
+          <div class="bg-gui-panel border border-gui-border rounded-xl p-4 shrink-0">
+            <h3 class="font-semibold text-sm mb-3 text-gui-dim">วิธีใช้</h3>
+            <ul class="text-xs text-gui-dim space-y-1.5 leading-relaxed">
+              <li>• กด <span class="text-gui-in font-medium">▶ เปิด</span> เพื่อ start main.py</li>
+              <li>• วางใบหน้าในกรอบวงรีเพื่อยืนยัน</li>
+              <li>• Panel ขวาแสดงสถานะ liveness แบบ real-time</li>
+              <li>• กด <span class="text-gui-fail font-medium">⏹ หยุด</span> เพื่อ stop main.py</li>
+              <li>• หรือรัน <code class="bg-gui-border/30 px-1 rounded">python main.py</code> เอง</li>
+            </ul>
+          </div>
+
+        </template>
+        <!-- ─ /Normal mode ─ -->
+
+        <!-- ─ Fullscreen mode: รายชื่อวันนี้ (kiosk sidebar) ──────── -->
+        <template v-else>
+
+          <!-- Header -->
+          <div class="px-4 py-3 border-b border-gui-border bg-gui-panel flex items-center justify-between shrink-0">
+            <div class="flex items-center gap-2">
+              <span class="text-gui-in font-bold text-base">▣</span>
+              <span class="font-semibold text-sm text-gui-text">รายชื่อวันนี้</span>
+              <span class="text-xs px-2 py-0.5 rounded-full bg-gui-border/60 text-gui-dim font-mono tabular-nums">
+                {{ mergedPersons.length }} คน
+              </span>
+            </div>
+            <span v-if="!liveStale" class="flex items-center gap-1.5 text-xs text-gui-in font-semibold">
+              <span class="w-1.5 h-1.5 rounded-full bg-gui-in animate-pulse" />
+              LIVE
+            </span>
+            <span v-else class="text-xs text-gui-dim">offline</span>
+          </div>
+
+          <!-- Stats bar -->
+          <div class="grid grid-cols-3 border-b border-gui-border shrink-0 bg-gui-panel/40">
+            <div class="py-3 text-center border-r border-gui-border">
+              <div class="text-xl font-bold text-gui-in tabular-nums">{{ stats.totalIn }}</div>
+              <div class="text-[10px] text-gui-dim uppercase tracking-wider mt-0.5">เช็คอิน</div>
+            </div>
+            <div class="py-3 text-center border-r border-gui-border">
+              <div class="text-xl font-bold text-gui-out tabular-nums">{{ stats.totalOut }}</div>
+              <div class="text-[10px] text-gui-dim uppercase tracking-wider mt-0.5">เช็คเอาท์</div>
+            </div>
+            <div class="py-3 text-center">
+              <div class="text-xl font-bold text-gui-text tabular-nums">{{ stats.currentlyIn }}</div>
+              <div class="text-[10px] text-gui-dim uppercase tracking-wider mt-0.5">ยังอยู่</div>
+            </div>
+          </div>
+
+          <!-- Legend -->
+          <div class="flex items-center gap-3 px-4 py-1.5 border-b border-gui-border/40 shrink-0">
+            <span class="flex items-center gap-1 text-[10px] text-gui-dim">
+              <span class="w-1.5 h-1.5 rounded-full bg-gui-in" /> ยังอยู่
+            </span>
+            <span class="flex items-center gap-1 text-[10px] text-gui-dim">
+              <span class="w-1.5 h-1.5 rounded-full bg-gui-out" /> ออกแล้ว
+            </span>
+            <span v-if="!liveStale" class="flex items-center gap-1 text-[10px] text-gui-dim">
+              <span class="w-1.5 h-1.5 rounded-full bg-purple-400" /> กำลังตรวจ
+            </span>
+            <span class="ml-auto text-[10px] text-gui-dim/50 font-mono tabular-nums">IN&nbsp;&nbsp;&nbsp;OUT</span>
+          </div>
+
+          <!-- Person list (scrollable) -->
+          <div class="flex-1 overflow-y-auto">
+
+            <!-- Empty state -->
+            <div
+              v-if="mergedPersons.length === 0"
+              class="flex flex-col items-center justify-center h-full gap-3 text-gui-dim"
+            >
+              <span class="text-4xl opacity-40">👁</span>
+              <span class="text-sm">ยังไม่มีการลงเวลาวันนี้</span>
+            </div>
+
+            <!-- Person rows -->
+            <div
+              v-for="p in mergedPersons"
+              :key="p.per_id"
+              class="flex items-center gap-3 px-3 py-2.5 border-b border-gui-border/30
+                     hover:bg-gui-panel/50 transition-colors relative"
+            >
+              <!-- Status bar (left edge 3px) -->
+              <div
+                class="absolute left-0 inset-y-0 w-[3px] rounded-r-sm"
+                :class="p.status === 'IN'
+                  ? 'bg-gui-in'
+                  : p.status === 'PENDING'
+                  ? 'bg-purple-400'
+                  : 'bg-gui-out'"
+              />
+
+              <!-- Avatar / photo -->
+              <div class="w-9 h-9 rounded-full overflow-hidden shrink-0 ml-1.5 ring-1"
+                   :class="p.status === 'IN'
+                     ? 'ring-gui-in/40'
+                     : p.status === 'PENDING'
+                     ? 'ring-purple-400/40'
+                     : 'ring-gui-out/30'"
+              >
+                <img
+                  v-if="!failedPhotos.has(p.per_id)"
+                  :src="`${API_BASE}/person-face/${p.per_id}`"
+                  class="w-full h-full object-cover"
+                  @error="onPhotoFailed(p.per_id)"
+                  alt=""
+                />
+                <div
+                  v-else
+                  class="w-full h-full flex items-center justify-center font-bold text-sm"
+                  :class="p.status === 'IN'
+                    ? 'bg-gui-in/20 text-gui-in'
+                    : p.status === 'PENDING'
+                    ? 'bg-purple-500/20 text-purple-400'
+                    : 'bg-gui-out/20 text-gui-out'"
+                >
+                  {{ (p.per_name || p.name || '?')[0] }}
+                </div>
+              </div>
+
+              <!-- Name + dept -->
+              <div class="flex-1 min-w-0">
+                <div class="text-sm font-medium text-gui-text truncate leading-snug">
+                  {{ p.name || [p.per_name, p.per_surname].filter(Boolean).join(' ') || p.per_id }}
+                </div>
+                <div class="text-[11px] text-gui-dim truncate leading-snug">
+                  {{ p.organize_th || p.posname_th || '\u00a0' }}
+                </div>
+              </div>
+
+              <!-- Times (IN / OUT) -->
+              <div class="text-right shrink-0">
+                <div class="text-xs font-mono text-gui-in tabular-nums leading-snug">
+                  {{ fmtTime(p.in_time) }}
+                </div>
+                <div
+                  class="text-xs font-mono tabular-nums leading-snug"
+                  :class="p.out_time ? 'text-gui-out' : 'text-gui-dim/30'"
+                >
+                  {{ p.out_time ? fmtTime(p.out_time) : '\u2014\u2014\u2014' }}
+                </div>
+              </div>
+
+            </div>
+          </div>
+          <!-- /Person list -->
+
+          <!-- Footer: วันที่ -->
+          <div class="px-4 py-2 border-t border-gui-border shrink-0 text-center bg-gui-panel/30">
+            <span class="text-[11px] text-gui-dim">
+              {{ todayStr }}
+            </span>
+          </div>
+
+        </template>
+        <!-- ─ /Fullscreen mode ─ -->
 
       </div>
-    </div>
+      <!-- ── /Right panel ────────────────────────────────────────── -->
 
-    <!-- ══ แถบสถานะ refresh ══════════════════════════════════════════ -->
+    </div>
+    <!-- ════ /FULLSCREEN WRAPPER ════════════════════════════════════ -->
+
+    <!-- ══ แถบสถานะ refresh ════════════════════════════════════════ -->
     <div class="flex items-center justify-between gap-3 text-xs">
       <div class="flex items-center gap-2 text-gui-dim">
         <span
@@ -406,8 +578,9 @@ const CLEAR_TODAY_URL  = `${API_BASE}/attendance/today/all`
 const POLL_MS          = 2_000
 
 // ── Camera State ───────────────────────────────────────────────────
-const cameraContainer = ref(null)
-const isFullscreen    = ref(false)
+const fullscreenWrapper = ref(null)   // fullscreen target (camera + sidebar)
+const cameraContainer   = ref(null)   // ref ไว้ใช้ถ้าต้องการในอนาคต
+const isFullscreen      = ref(false)
 const faceStatus  = ref({ running: false, pid: null, has_frame: false, frame_age_sec: null })
 const isStarting  = ref(false)
 const streamError = ref(false)
@@ -466,7 +639,7 @@ function onStreamError() { streamError.value = true }
 // ── Fullscreen ─────────────────────────────────────────────────────
 function toggleFullscreen() {
   if (!document.fullscreenElement) {
-    cameraContainer.value?.requestFullscreen()
+    fullscreenWrapper.value?.requestFullscreen()
   } else {
     document.exitFullscreen()
   }
@@ -566,6 +739,24 @@ const mergedPersons = computed(() => {
   })
 })
 
+// ── Attendance sidebar helpers ──────────────────────────────────────
+// photo error tracking — reactive Set (reassign เพื่อให้ Vue track ได้)
+const failedPhotos = ref(new Set())
+function onPhotoFailed(pid) {
+  failedPhotos.value = new Set([...failedPhotos.value, pid])
+}
+
+// แสดงเวลาแบบ HH:MM
+function fmtTime(iso) {
+  if (!iso) return '——'
+  return new Date(iso).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })
+}
+
+// วันที่ปัจจุบันภาษาไทย
+const todayStr = new Date().toLocaleDateString('th-TH', {
+  year: 'numeric', month: 'long', day: 'numeric', weekday: 'long',
+})
+
 // ── Clear Today ────────────────────────────────────────────────────
 const showConfirm = ref(false)
 const clearing    = ref(false)
@@ -594,26 +785,3 @@ const lastFetchStr = computed(() => {
   return `${Math.floor(diff / 60)} นาทีที่แล้ว`
 })
 </script>
-
-<style scoped>
-/* เมื่อ element กล้องอยู่ในโหมด fullscreen */
-:deep(*:fullscreen),
-:fullscreen {
-  background: #000;
-  display: flex;
-  flex-direction: column;
-}
-
-:deep(*:fullscreen) .flex-1,
-:fullscreen .flex-1 {
-  flex: 1;
-  min-height: 0;
-}
-
-:deep(*:fullscreen) img,
-:fullscreen img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
-</style>

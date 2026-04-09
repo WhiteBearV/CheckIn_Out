@@ -512,6 +512,39 @@ def person_photo(per_id: str):
                         headers={"Cache-Control": "max-age=300"})
 
 
+@app.get("/person-face/{per_id}")
+def person_face(per_id: str):
+    """
+    คืนรูป face crop (bounding box) ล่าสุดของพนักงานวันนี้
+    ────────────────────────────────────────────────────────
+    ค้นหาใน PicSAVE/YYYY/MM/DD/*_{per_id}_FACE.jpg
+    ถ้าไม่พบ → fallback ไปที่ _IN.jpg → ถ้ายังไม่มี → 404
+
+    ใช้ใน CameraView.vue fullscreen sidebar:
+      <img :src="`/api/person-face/${p.per_id}`" />
+    """
+    import glob as _glob
+    from fastapi.responses import FileResponse
+    from datetime import date as _date
+
+    today   = _date.today()
+    folder  = _ROOT / "PicSAVE" / today.strftime("%Y") / today.strftime("%m") / today.strftime("%d")
+
+    # ลองหา FACE crop ก่อน
+    matches = sorted(_glob.glob(str(folder / f"*_{per_id}_FACE.jpg")))
+    if matches:
+        return FileResponse(matches[-1], media_type="image/jpeg",
+                            headers={"Cache-Control": "no-cache"})
+
+    # fallback: ใช้ IN photo ถ้ายังไม่มี FACE (เช่น session เก่าก่อน update)
+    matches = sorted(_glob.glob(str(folder / f"*_{per_id}_IN.jpg")))
+    if matches:
+        return FileResponse(matches[-1], media_type="image/jpeg",
+                            headers={"Cache-Control": "max-age=300"})
+
+    raise HTTPException(status_code=404, detail="No face photo found")
+
+
 # ╔═══════════════════════════════════════════════════════════════════════════╗
 # ║  Live Session Endpoint (อ่านสถานะ real-time จาก main.py)                  ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
