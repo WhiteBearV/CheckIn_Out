@@ -1,5 +1,100 @@
 ════════════════════════════════════════════════════════════════════════
   รายงานการปฏิบัติงานฝึกประสบการณ์วิชาชีพ
+  วันที่  : พฤหัสบดีที่ 10 เมษายน 2568
+  สัปดาห์ : สัปดาห์ที่ 4
+════════════════════════════════════════════════════════════════════════
+
+■ งานที่ดำเนินการในวันนี้
+────────────────────────────────────────────────────────────────────────
+
+1. วิเคราะห์และแก้ไขปัญหารูปภาพไม่แสดงในหน้ารายชื่อวันนี้ (Dashboard)
+   ─────────────────────────────────────────────────────────────────
+   พบว่ารูปหน้าพนักงานในหน้า "รายชื่อวันนี้" ไม่แสดงผล ทั้งที่เมื่อวาน
+   ยังทำงานได้ปกติ จึงทำการวิเคราะห์ทีละชั้นจนพบสาเหตุ 2 จุด
+
+   สาเหตุที่ 1 — main.py ไม่บันทึกรูปทันทีหลัง check-in
+     Dashboard V2 เพิ่ม PENDING state ทำให้พนักงานโผล่ในรายชื่อตั้งแต่
+     กำลังสแกนอยู่ (ก่อน check-in) ในขณะที่ save_snapshots() เดิม
+     ถูกเรียกเฉพาะตอน session จบหรือกด q เท่านั้น
+     ทำให้ช่วง PENDING → IN ยังไม่มีไฟล์รูปบน disk เลย
+
+     แก้ไข : เพิ่มการเรียก session.save_snapshots() ทันทีหลัง
+              session.try_checkin() คืนค่า True ใน main.py
+
+   สาเหตุที่ 2 — browser cache 404 + photoError ไม่ reset
+     เมื่อ PersonCard โหลดรูปของคนที่ยัง PENDING → API คืน 404
+     → photoError = true → แสดง avatar แทน
+     แม้ check-in สำเร็จแล้วมีรูปแล้ว photoError ก็ยังค้างเป็น true
+     อยู่ ทำให้ไม่โหลดรูปซ้ำ และแม้รีเซ็ต photoError แล้ว browser
+     ก็ยังใช้ 404 ที่ cache ไว้อยู่ดี
+
+     แก้ไข : เพิ่ม watch ตาม status ของ person ใน PersonCard.vue
+              เมื่อ status เปลี่ยนเป็น IN จะ reset photoError และ
+              เปลี่ยน URL เป็น /person-photo/{per_id}?t=<timestamp>
+              เพื่อบังคับให้ browser ยิง request ใหม่ข้ามผ่าน cache
+
+2. แก้ไขปัญหาเดียวกันใน CameraView Fullscreen Sidebar
+   ─────────────────────────────────────────────────────────────────
+   Sidebar รายชื่อในโหมด Fullscreen ใช้ /person-face/{per_id}
+   และมี failedPhotos (reactive Set) สำหรับ track รูปที่โหลดไม่ได้
+   ซึ่งมีปัญหาเดียวกัน คือเมื่อเพิ่ม per_id เข้า failedPhotos แล้ว
+   ไม่มีกลไก reset เมื่อสถานะเปลี่ยนเป็น IN
+
+   แก้ไข :
+     • เพิ่ม watch(mergedPersons) ตรวจสอบทุก person ว่า status = IN
+       และยังอยู่ใน failedPhotos หรือไม่ ถ้าใช่ให้ลบออกพร้อมกัน
+     • เพิ่ม photoRetry Map สำหรับเก็บ timestamp ต่อ per_id
+     • เพิ่มฟังก์ชัน photoSrc(pid) คืน URL พร้อม ?t=timestamp
+       เพื่อ bypass browser 404 cache
+     • เพิ่ม watch ใน import จาก vue (แก้ ReferenceError ที่ทำให้
+       หน้า Dashboard แสดงผลเป็นหน้าว่าง)
+
+■ สรุปไฟล์ที่สร้าง / แก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  [แก้ไข] main.py
+    → เพิ่ม session.save_snapshots() หลัง try_checkin() คืน True
+      ให้บันทึกรูปลง PicSAVE/YYYY/MM/DD/ ทันทีหลัง check-in สำเร็จ
+
+  [แก้ไข] dashboard/src/components/PersonCard.vue
+    → เพิ่ม photoBust ref สำหรับ cache-busting timestamp
+    → เปลี่ยน photoUrl computed ให้ใส่ ?t=... เมื่อมีการ retry
+    → เพิ่ม watch ตาม person.status เมื่อเป็น IN ให้ reset
+      photoError และอัปเดต photoBust เป็น Date.now()
+
+  [แก้ไข] dashboard/src/views/CameraView.vue
+    → เพิ่ม watch ใน import จาก vue
+    → เพิ่ม photoRetry ref (Map) สำหรับ cache-busting ต่อ per_id
+    → เพิ่ม photoSrc() ฟังก์ชันคืน URL พร้อม ?t= เมื่อมี retry
+    → เพิ่ม watch(mergedPersons) reset failedPhotos และอัปเดต
+      photoRetry เมื่อ person.status เปลี่ยนเป็น IN
+    → เปลี่ยน template ให้ใช้ photoSrc(p.per_id) แทน URL ตรงๆ
+
+■ เทคโนโลยีที่ใช้
+────────────────────────────────────────────────────────────────────────
+
+  - Python / OpenCV      — บันทึกรูป snapshot ลง disk ด้วย cv2.imwrite
+  - FastAPI              — API endpoint /person-photo, /person-face
+  - Vue 3 (Composition API, watch, computed)  — Frontend framework
+  - Browser Cache        — Cache-busting ผ่าน query string ?t=timestamp
+  - TailwindCSS          — Styling
+
+■ ปัญหาที่พบและแนวทางแก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  ปัญหา : รูปภาพไม่แสดงในหน้า Dashboard แม้ check-in สำเร็จแล้ว
+  วิเคราะห์: Dashboard V2 เพิ่ม PENDING state ทำให้ PersonCard โหลดรูป
+             ก่อนที่รูปจะถูกบันทึกลง disk → 404 → photoError = true
+             ค้างอยู่ตลอด ถึงแม้มีรูปแล้วก็ไม่โหลดซ้ำ
+  แก้ไข : แก้ 2 จุดพร้อมกัน ได้แก่ ให้ main.py บันทึกรูปทันทีหลัง
+           check-in และให้ Frontend retry โหลดรูปพร้อม cache-busting
+           เมื่อสถานะเปลี่ยนจาก PENDING เป็น IN
+
+  ปัญหา : เพิ่ม watch ใน CameraView แต่ลืม import ทำให้หน้าเว็บเป็นหน้าว่าง
+  แก้ไข : เพิ่ม watch เข้า import statement จาก 'vue' ทันที
+
+════════════════════════════════════════════════════════════════════════
+  รายงานการปฏิบัติงานฝึกประสบการณ์วิชาชีพ
   วันที่  : พุธที่ 9 เมษายน 2568
   สัปดาห์ : สัปดาห์ที่ 4
 ════════════════════════════════════════════════════════════════════════
