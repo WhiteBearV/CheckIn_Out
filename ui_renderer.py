@@ -473,8 +473,6 @@ def draw_hud(frame, fps, test_mode, checkout_done, remaining_sec=0, show_fps=Tru
 
 # ─── Side Panel (ใช้ cfg.PANEL_*) ───────────
 
-_panel_cache: dict = {"panel": None, "key": None, "tick": 0}
-
 def draw_screen_debug_panel(panel: np.ndarray, dbg: dict):
     """
     วาดค่า Screen Detection ใน side panel (TEST_MODE)
@@ -556,9 +554,17 @@ def draw_screen_debug_panel(panel: np.ndarray, dbg: dict):
 
 
 def build_panel(persons: dict, liveness_map: dict, frame_height: int,
-                screen_debug: dict = None) -> np.ndarray:
+                screen_debug: dict = None,
+                _cache: dict = None) -> np.ndarray:
+    """
+    _cache ควรเป็น dict ของแต่ละ camera worker เอง ({"panel": None, "key": None, "tick": 0})
+    เพื่อป้องกัน race condition ระหว่าง cameras
+    """
+    if _cache is None:
+        _cache = {"panel": None, "key": None, "tick": 0}
+
     # cache key: rebuild เมื่อ checked_in/out เปลี่ยน หรือ snapshot เปลี่ยน หรือทุก 15 frames
-    _panel_cache["tick"] = (_panel_cache["tick"] + 1) % 15
+    _cache["tick"] = (_cache["tick"] + 1) % 15
     cache_key = (
         tuple((n, p.checked_in, p.checked_out,
                id(p.snapshot),
@@ -568,9 +574,9 @@ def build_panel(persons: dict, liveness_map: dict, frame_height: int,
     )
     # TEST_MODE: ไม่ cache เพื่อให้ screen debug อัปเดตได้ทุก frame
     if not cfg.TEST_MODE:
-        if _panel_cache["tick"] != 0 and _panel_cache["panel"] is not None and _panel_cache["key"] == cache_key:
-            return _panel_cache["panel"]
-    _panel_cache["key"] = cache_key
+        if _cache["tick"] != 0 and _cache["panel"] is not None and _cache["key"] == cache_key:
+            return _cache["panel"]
+    _cache["key"] = cache_key
 
     W = cfg.PANEL_WIDTH
     panel = np.zeros((frame_height, W, 3), dtype=np.uint8)
@@ -650,5 +656,5 @@ def build_panel(persons: dict, liveness_map: dict, frame_height: int,
     if cfg.TEST_MODE and screen_debug:
         draw_screen_debug_panel(panel, screen_debug)
 
-    _panel_cache["panel"] = panel
+    _cache["panel"] = panel
     return panel
