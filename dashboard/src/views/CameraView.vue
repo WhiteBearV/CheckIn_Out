@@ -320,7 +320,7 @@
               >
                 <img
                   v-if="!failedPhotos.has(p.per_id)"
-                  :src="`${API_BASE}/person-face/${p.per_id}`"
+                  :src="photoSrc(p.per_id)"
                   class="w-full h-full object-cover"
                   @error="onPhotoFailed(p.per_id)"
                   alt=""
@@ -557,7 +557,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import LiveDetection  from '@/components/LiveDetection.vue'
 import StatCard       from '@/components/StatCard.vue'
 import PersonCard     from '@/components/PersonCard.vue'
@@ -742,9 +742,32 @@ const mergedPersons = computed(() => {
 // ── Attendance sidebar helpers ──────────────────────────────────────
 // photo error tracking — reactive Set (reassign เพื่อให้ Vue track ได้)
 const failedPhotos = ref(new Set())
+const photoRetry   = ref(new Map())   // per_id → cache-bust timestamp
+
 function onPhotoFailed(pid) {
   failedPhotos.value = new Set([...failedPhotos.value, pid])
 }
+
+function photoSrc(pid) {
+  const bust = photoRetry.value.get(pid)
+  return bust
+    ? `${API_BASE}/person-face/${pid}?t=${bust}`
+    : `${API_BASE}/person-face/${pid}`
+}
+
+// เมื่อ status เปลี่ยนเป็น IN → ลบออกจาก failedPhotos + เปลี่ยน URL ให้ bypass cache
+watch(mergedPersons, (persons) => {
+  persons.forEach(p => {
+    if (p.status === 'IN' && failedPhotos.value.has(p.per_id)) {
+      const next = new Set(failedPhotos.value)
+      next.delete(p.per_id)
+      failedPhotos.value = next
+      const m = new Map(photoRetry.value)
+      m.set(p.per_id, Date.now())
+      photoRetry.value = m
+    }
+  })
+}, { deep: true })
 
 // แสดงเวลาแบบ HH:MM
 function fmtTime(iso) {

@@ -614,7 +614,8 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
                 if is_reverify:
                     person.snapshot_out = orig_frame.copy()
 
-            session.try_checkin(name, camera_name)
+            if session.try_checkin(name, camera_name):
+                session.save_snapshots()   # บันทึกรูปลง PicSAVE ทันทีหลัง check-in
 
             # ── Screen Debug (TEST_MODE) — เก็บค่าล่าสุด อัปเดต EMA ทีหลัง ──
             if cfg.TEST_MODE and do_detect:

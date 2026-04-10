@@ -128,7 +128,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import StatusBadge   from './StatusBadge.vue'
 import LivenessBadge from './LivenessBadge.vue'
 
@@ -140,11 +140,21 @@ const props = defineProps({
 
 // ── Photo ─────────────────────────────────────────────────────────
 const photoError = ref(false)
+const photoBust  = ref('')   // cache-busting suffix — เปลี่ยนเมื่อ retry
 
 // URL ดึงรูปจาก endpoint (ถ้า 404 → photoError = true → แสดง avatar)
 const photoUrl = computed(() =>
-  `${props.apiBase}/person-photo/${props.person.per_id}`
+  `${props.apiBase}/person-photo/${props.person.per_id}${photoBust.value}`
 )
+
+// เมื่อ status เปลี่ยนเป็น IN (PENDING → IN = check-in สำเร็จ รูปพร้อมแล้ว)
+// → reset error + เปลี่ยน URL ด้วย timestamp เพื่อ bypass browser 404 cache
+watch(() => props.person.status, (newStatus) => {
+  if (newStatus === 'IN') {
+    photoError.value = false
+    photoBust.value  = `?t=${Date.now()}`
+  }
+})
 
 // ── Display name ───────────────────────────────────────────────────
 const displayName = computed(() => {
