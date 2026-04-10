@@ -40,16 +40,27 @@ _ensure_nvidia_libs()
 
 import cv2
 import pickle
+import time
 import numpy as np
 import mediapipe as mp
 from datetime import datetime, timedelta
 from numpy.linalg import norm
 
+import threading as _t
 import config as cfg
 from camera import ThreadedCamera
 from session_manager import SessionManager
 import ui_renderer as ui
 import stream_server
+
+# ─── Multi-cam display buffer (worker thread → main thread) ──────────────────
+# Single slot — เฉพาะกล้องที่ถูกเลือก (_sel_cam) เท่านั้นที่เขียน
+# ไม่มี per-cam dict → ไม่มีโอกาส bleeding ข้ามกล้อง
+_disp_lock       = _t.Lock()
+_disp_slot       = {"frame": None}   # frame ล่าสุดจากกล้องที่ active
+_cam_has_pushed  = set()             # cam_id ที่เคย push แล้ว (สำหรับ status dot)
+_sel_cam         = {"id": ""}        # กล้องที่เลือกอยู่ — worker อ่าน, main thread เขียน
+_stop_event      = _t.Event()        # set() เพื่อหยุดทุก worker
 
 # ─── ดึงความละเอียดหน้าจอจริงจาก xrandr ───
 import subprocess as _sp, re as _re
@@ -134,8 +145,92 @@ def identify_face(embedding, known_norms: np.ndarray, known_names) -> str:
     return "Unknown"
 
 
-def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
-    """Main loop"""
+def _compute_guide_state(face_with_names, liveness_map,
+                         oval_cx, oval_cy, oval_ew, oval_eh, now_ts):
+    """คำนวณ guide overlay state สำหรับ web canvas"""
+    if not cfg.GUIDE_OVERLAY or cfg.TEST_MODE:
+        return {"enabled": False}
+
+    C = cfg.Color
+
+    # หาหน้าในวงรี
+    face_in_oval = False
+    oval_name    = None
+    for face_box, name in face_with_names:
+        top, right, bottom, left = face_box
+        fcx = (left + right) / 2.0
+        fcy = (top + bottom) / 2.0
+        if (((fcx - oval_cx) / oval_ew) ** 2 +
+                ((fcy - oval_cy) / oval_eh) ** 2) <= cfg.GUIDE_IN_OVAL_TOL:
+            face_in_oval, oval_name = True, name
+            break
+
+    oval_color = list(C.OVAL_DEFAULT)
+    main_text  = "Place your face in the oval"
+    sub_text   = ""
+
+    if face_in_oval and oval_name and oval_name in (liveness_map or {}):
+        lv = liveness_map[oval_name]
+
+        if lv.confirmed:
+            oval_color = list(C.CHECKED_IN)
+            main_text  = "Verified!"
+        elif lv.failed:
+            oval_color = list(C.LIVENESS_FAIL)
+            retry_at   = lv.start_ts + cfg.LIVENESS_TIMEOUT + cfg.LIVENESS_RETRY_AFTER
+            main_text  = "Verification failed"
+            sub_text   = f"{lv.fail_reason or ''}  |  Retry {max(0, retry_at - now_ts):.0f}s"
+        elif lv.challenge_phase == "active":
+            cn, dn    = lv.challenge_number, len(lv.challenge_done)
+            rem       = max(0, cfg.CHALLENGE_TIMEOUT - (now_ts - lv.challenge_start_ts))
+            oval_color = list(C.CHALLENGE)
+            main_text  = f"Show {cn} finger(s)"
+            sub_text   = f"Step {dn+1}/{cfg.CHALLENGE_COUNT}  |  {rem:.1f}s left"
+        else:
+            oval_color = list(C.LIVENESS)
+            dp = lv.depth_pass_count
+            m  = "OK" if lv.motion_ok  else "--"
+            bk = f"{lv.blink_count}/{cfg.BLINK_MIN}" if not lv.blink_ok else "OK"
+            t  = "OK" if lv.texture_ok else "--"
+            s  = "OK" if lv.screen_ok  else "FAIL"
+            f  = "OK" if lv.fas_ok     else (f"{lv.fas_score:.1f}" if lv.fas_score >= 0 else "--")
+
+            if dp < cfg.DEPTH_FRAMES_REQUIRED:
+                main_text = f"Hold still...  {dp}/{cfg.DEPTH_FRAMES_REQUIRED}"
+            elif cfg.BLINK_ENABLED and not lv.blink_ok:
+                main_text = f"Please blink  {lv.blink_count}/{cfg.BLINK_MIN}"
+            elif not lv.motion_ok:
+                main_text = "Move your head slightly"
+            elif not lv.texture_ok:
+                main_text = "Hold still (texture)..."
+            elif not lv.fas_ok:
+                main_text = "Hold still (AI check)..."
+            else:
+                main_text = "Hold still..."
+
+            bk_part  = f"  Blink {bk}" if cfg.BLINK_ENABLED else ""
+            scr_part = f"  Scr {s}"    if cfg.SCREEN_DETECT_ENABLED else ""
+            sub_text = f"Mot {m}{bk_part}  Tex {t}{scr_part}  FAS {f}"
+
+    elif face_in_oval:
+        oval_color = list(C.LIVENESS)
+        main_text  = "Hold still..."
+
+    return {
+        "enabled":    True,
+        "oval":       {"cx": oval_cx, "cy": oval_cy, "ew": oval_ew, "eh": oval_eh},
+        "oval_color": oval_color,
+        "dim_factor": cfg.GUIDE_DIM_FACTOR,
+        "main_text":  main_text,
+        "sub_text":   sub_text,
+    }
+
+
+def run_camera(cam_cfg: dict):
+    """Main loop สำหรับกล้อง 1 ตัว — รัน 1 thread ต่อ cam_cfg"""
+    cam_id      = cam_cfg["id"]
+    camera_name = cam_cfg["name"]
+    cam_flip    = cam_cfg.get("flip", cfg.CAMERA_FLIP)
 
     # ─── โหลด face encodings (ArcFace 512d) ───
     if not os.path.exists(cfg.ENCODINGS_FILE):
@@ -181,10 +276,17 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
     print(f"[ARCFACE] InsightFace ready  det_size={cfg.DET_SIZE}")
 
     # ─── เปิดกล้อง ───
-    cam_src = cfg.CAMERA_URL if cfg.CAMERA_URL else camera_index
-    if cfg.CAMERA_URL:
-        print(f"[CAM] IP camera: {cfg.CAMERA_URL}")
-    cam = ThreadedCamera(cam_src)
+    cam_src = cam_cfg.get("url") or cam_cfg.get("index", 0)
+    if isinstance(cam_src, str) and cam_src:
+        print(f"[CAM] {cam_id} IP camera: {cam_src}")
+    else:
+        print(f"[CAM] {cam_id} USB index: {cam_src}")
+    try:
+        cam = ThreadedCamera(cam_src)
+    except Exception as e:
+        print(f"[CAM ERROR] {cam_id} เปิดกล้องไม่ได้: {e}")
+        print(f"[CAM ERROR] {cam_id} worker หยุดทำงาน — กล้องอื่นยังรันต่อ")
+        return
 
     # ─── MediaPipe Hands ───
     hands = mp.solutions.hands.Hands(
@@ -194,15 +296,12 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
         min_tracking_confidence=0.5,
     )
 
-    # ─── Stream Server ───
-    stream_server.start()
-
     # ─── Session Manager ───
     session = SessionManager()
 
     # ─── แสดงข้อมูลเริ่มต้น ───
-    print("=== ระบบตรวจใบหน้า (ArcFace + Multi-Layer Anti-Spoof) ===")
-    print(f"[CAM]       {cam.width}x{cam.height}")
+    print(f"=== [{cam_id}] ระบบตรวจใบหน้า (ArcFace + Multi-Layer Anti-Spoof) ===")
+    print(f"[CAM]       {cam_id}  {cam.width}x{cam.height}")
     print(f"[DEPTH]     {cfg.DEPTH_FRAMES_REQUIRED}/{cfg.DEPTH_FRAMES_WINDOW}")
     print(f"[TEXTURE]   {'ON' if cfg.TEXTURE_ENABLED else 'OFF'}")
     print(f"[SCREEN]    {'ON' if cfg.SCREEN_DETECT_ENABLED else 'OFF'}")
@@ -211,10 +310,13 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
     print(f"[FAS]       {'ON' if cfg.FAS_ENABLED else 'OFF'}")
 
     # ─── หน้าต่าง ───
-    win_name = "Face Attendance System"
-    cv2.namedWindow(win_name, cv2.WINDOW_NORMAL)   # NORMAL เสมอ เพื่อให้ toggle ได้
-    is_fullscreen  = cfg.FULLSCREEN
-    _window_ready  = False   # True หลัง imshow ครั้งแรก
+    win_name      = f"Face Attendance - {camera_name}"
+    is_fullscreen = cfg.FULLSCREEN
+    _window_ready = False   # True หลัง imshow ครั้งแรก
+
+    # สร้าง window เฉพาะตอนที่ CV_WINDOW เปิด (ป้องกัน X11 crash ใน background thread)
+    if stream_server.get_cv_window():
+        cv2.namedWindow(win_name, cv2.WINDOW_NORMAL)
 
     def _apply_fullscreen():
         cv2.setWindowProperty(win_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
@@ -235,12 +337,19 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
             _apply_windowed()
 
     def _imshow(display):
-        """imshow + apply fullscreen หลัง frame แรก (Linux ต้อง map window ก่อน)"""
+        """imshow + apply fullscreen หลัง frame แรก (Linux ต้อง map window ก่อน)
+        Multi-cam: push frame ไป _disp_frames ให้ main thread แสดงแทน
+        """
         nonlocal _window_ready
+        if not stream_server.get_cv_window():
+            with _disp_lock:
+                _cam_has_pushed.add(cam_id)
+                if cam_id == _sel_cam["id"]:      # เขียนเฉพาะกล้องที่ถูกเลือก
+                    _disp_slot["frame"] = display.copy()
+            return
         if is_fullscreen and (display.shape[1] != SCREEN_W or display.shape[0] != SCREEN_H):
             display = cv2.resize(display, (SCREEN_W, SCREEN_H), interpolation=cv2.INTER_LINEAR)
         cv2.imshow(win_name, display)
-        stream_server.push_frame(display)
         if not _window_ready:
             _window_ready = True
             cv2.waitKey(1)   # ให้ window manager map หน้าต่างก่อน
@@ -264,6 +373,9 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
     _screen_ema: dict = {}   # EMA ของ float values
     _screen_debug_display: dict = {}   # ส่งเข้า build_panel
 
+    # ─── Panel cache ของกล้องนี้โดยเฉพาะ (ป้องกัน race กับกล้องอื่น) ───
+    _local_panel_cache: dict = {"panel": None, "key": None, "tick": 0}
+
     # ─── คำนวณ oval ───
     def _compute_oval(h, w):
         cx = w // 2
@@ -279,7 +391,7 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
         ret, frame = cam.read()
         if not ret or frame is None:
             continue
-        if cfg.CAMERA_FLIP:
+        if cam_flip:
             frame = cv2.flip(frame, 1)
 
         now    = datetime.now()
@@ -327,15 +439,31 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
         if not _active:
             # ── Idle mode: แสดงหน้าจอรอ ลด CPU/GPU ──
             next_dt = _next_window_start(now, cfg.ACTIVE_WINDOWS)
+
+            # Push raw frame + idle state สำหรับ web overlay
+            stream_server.push_frame(cam_id, frame)
+            stream_server.push_state(cam_id, {
+                "ts": now_ts, "fps": display_fps,
+                "frame_size": list(frame.shape[:2]),
+                "idle": True,
+                "next_window": next_dt.strftime("%H:%M") if next_dt else None,
+                "faces": [], "guide": {"enabled": False}, "persons": {},
+                "hud": {"show_fps": cfg.SHOW_FPS, "test_mode": False,
+                        "checkout_done": False, "remaining": 0},
+            })
+
             ui.draw_idle_screen(frame, now, next_dt)
-            # hstack panel ดำให้ขนาด window เท่ากับตอน active (กันหน้าต่างหด)
             idle_panel = np.zeros((frame.shape[0], cfg.PANEL_WIDTH, 3), dtype=np.uint8)
             _imshow(np.hstack([frame, idle_panel]))
-            key = cv2.waitKey(500) & 0xFF   # ตรวจ key ทุก 500ms แทน 1ms → ลด CPU
-            if key == ord("q") or key == 27:
-                break
-            elif key == ord("f"):
-                _toggle_fullscreen()
+            if stream_server.get_cv_window():
+                key = cv2.waitKey(500) & 0xFF
+                if key == ord("q") or key == 27:
+                    break
+                elif key == ord("f"):
+                    _toggle_fullscreen()
+            else:
+                if _stop_event.wait(0.5):
+                    break
             continue                         # ข้ามการประมวลผลใบหน้าทั้งหมด
 
         # ─── Face detection (InsightFace) ───
@@ -366,6 +494,9 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
                     del session.liveness[name]
             last_faces = []
             last_face_ts = now_ts
+
+        # Raw frame สำหรับ web stream (ก่อนวาด overlay)
+        raw_frame = frame.copy()
 
         # copy frame เฉพาะเมื่อมีคนที่ยังไม่ได้ snapshot (ประหยัด copy ส่วนใหญ่)
         _need_snapshot = any(
@@ -405,8 +536,6 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
             embedding = face.embedding
             name = identify_face(embedding, known_norms, known_names)
 
-            _face_with_names.append((face_box, name))
-
             # ── Face crop ──
             pad = 15
             crop = orig_frame[max(0, top-pad):min(fh, bottom+pad),
@@ -416,6 +545,8 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
                 ui.draw_face_box(frame, left, top, right, bottom,
                                  cfg.Color.UNKNOWN, "Unknown")
                 continue
+
+            _face_with_names.append((face_box, name))
 
             # ── Landmarks (68-point → dict) ──
             lm_dict = None
@@ -507,20 +638,234 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
         ui.draw_hud(frame, display_fps, cfg.TEST_MODE, checkout_done, remaining, cfg.SHOW_FPS)
 
         panel = ui.build_panel(session.persons, session.liveness, frame.shape[0],
-                               screen_debug=_screen_debug_display if cfg.TEST_MODE else None)
+                               screen_debug=_screen_debug_display if cfg.TEST_MODE else None,
+                               _cache=_local_panel_cache)
+
+        # ─── Push raw frame + state สำหรับ web frontend ───────────────────────
+        remaining = max(0, cfg.TEST_DURATION_SECONDS - int(now_ts - start_ts)) if cfg.TEST_MODE else 0
+        stream_server.push_frame(cam_id, raw_frame)
+        stream_server.push_state(cam_id, {
+            "ts":         now_ts,
+            "fps":        display_fps,
+            "frame_size": list(raw_frame.shape[:2]),
+            "idle":       False,
+            "next_window": None,
+            "faces": [
+                {
+                    "name":  name,
+                    "bbox":  [int(l), int(t), int(r2), int(b)],
+                    "color": list(ui.get_face_visual(name,
+                                  session.persons.get(name),
+                                  session.liveness.get(name))[0]),
+                    "label": ui.get_face_visual(name,
+                                  session.persons.get(name),
+                                  session.liveness.get(name))[1],
+                    "in_oval": True,
+                }
+                for (t, r2, b, l), name in _face_with_names
+            ],
+            "guide": _compute_guide_state(
+                _face_with_names, session.liveness,
+                oval_cx, oval_cy, oval_ew, oval_eh, now_ts,
+            ),
+            "persons": {
+                n: {
+                    "display_name": p.display_name or n,
+                    "per_id":       p.per_id or "",
+                    "organize_th":  p.organize_th or "",
+                    "posname_th":   p.posname_th or "",
+                    "checked_in":   p.checked_in,
+                    "checked_out":  p.checked_out,
+                    "first_seen":   p.first_seen.strftime("%H:%M:%S") if p.first_seen else "-",
+                    "last_seen":    p.last_seen.strftime("%H:%M:%S")  if p.last_seen  else "-",
+                }
+                for n, p in session.persons.items()
+            },
+            "hud": {
+                "test_mode":     cfg.TEST_MODE,
+                "checkout_done": checkout_done,
+                "remaining":     remaining,
+                "show_fps":      cfg.SHOW_FPS,
+            },
+        })
+
         _imshow(np.hstack([frame, panel]))
 
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord("q") or key == 27:
-            break
-        elif key == ord("f"):
-            _toggle_fullscreen()
+        if stream_server.get_cv_window():
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q") or key == 27:
+                break
+            elif key == ord("f"):
+                _toggle_fullscreen()
+        else:
+            if _stop_event.is_set():
+                break
+            time.sleep(0.001)
 
     session.save_snapshots()
     hands.close()
     cam.release()
-    cv2.destroyAllWindows()
+    if stream_server.get_cv_window():
+        cv2.destroyWindow(win_name)
 
 
 if __name__ == "__main__":
-    run_camera(camera_index=1, camera_name="CAM_MAIN")
+    import threading as _threading
+
+    cameras = getattr(cfg, "CAMERAS", [])
+
+    # กรอง cam ที่ไม่มี url ว่างออก (CAM1="" → ข้าม)
+    cameras = [c for c in cameras if c.get("url") or c.get("index") is not None]
+
+    if not cameras:
+        # Fallback: legacy single-cam
+        cameras = [{
+            "id":    "cam1",
+            "name":  "CAM_MAIN",
+            "url":   cfg.CAMERA_URL or None,
+            "index": 1,
+            "flip":  cfg.CAMERA_FLIP,
+        }]
+
+    stream_server.start()
+
+    if len(cameras) == 1:
+        run_camera(cameras[0])
+    else:
+        # ─── Multi-cam mode ───────────────────────────────────────────────────
+        stream_server.set_cv_window(False)
+        print(f"[MAIN] Multi-camera mode: {[c['id'] for c in cameras]}")
+
+        cam_ids   = [c["id"]   for c in cameras]
+        cam_names = {c["id"]: c["name"] for c in cameras}
+
+        # กำหนดกล้องเริ่มต้น — workers อ่าน _sel_cam["id"] ก่อน push
+        _sel_cam["id"] = cam_ids[0]
+
+        threads = [
+            _threading.Thread(
+                target=run_camera,
+                args=(cam_cfg,),
+                name=f"cam-{cam_cfg['id']}",
+                daemon=True,
+            )
+            for cam_cfg in cameras
+        ]
+        for t in threads:
+            t.start()
+
+        # ─── Main thread: single-window display loop ─────────────────────────
+        BAR_H    = 44
+        WIN_NAME = "Face Attendance System"
+        _fs      = {"on": False}
+
+        def _draw_bar(frame_w: int, cur_active: str, pushed: set) -> tuple:
+            bar   = np.full((BAR_H, frame_w, 3), (28, 28, 28), dtype=np.uint8)
+            tab_w = frame_w // len(cam_ids)
+            tabs  = []
+            for i, cid in enumerate(cam_ids):
+                x1, x2 = i * tab_w, min((i + 1) * tab_w, frame_w)
+                active  = (cid == cur_active)
+                if active:
+                    cv2.rectangle(bar, (x1, 0), (x2 - 1, BAR_H - 1), (45, 45, 45), -1)
+                cv2.rectangle(bar, (x1, BAR_H - 3), (x2 - 1, BAR_H - 1),
+                              (0, 255, 255) if active else (60, 60, 60), -1)
+                label = cam_names.get(cid, cid)
+                col   = (0, 255, 255) if active else (140, 140, 140)
+                (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.44, 1)
+                cv2.putText(bar, label,
+                            (x1 + (x2 - x1 - tw) // 2, (BAR_H + th) // 2 - 2),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.44, col, 1, cv2.LINE_AA)
+                dot_col = (0, 220, 80) if cid in pushed else (70, 70, 70)
+                cv2.circle(bar, (x1 + 10, BAR_H // 2), 4, dot_col, -1)
+                tabs.append((x1, x2, cid))
+            return bar, tabs
+
+        _sc       = {"x": 1.0, "y": 1.0}
+        _tabs_ref = [[]]
+
+        def _switch_cam(new_cid: str):
+            """สลับกล้อง: clear slot ก่อน ป้องกัน frame เก่าค้างอยู่"""
+            with _disp_lock:
+                _disp_slot["frame"] = None   # flush frame เก่าออก
+                _sel_cam["id"]      = new_cid
+            print(f"[DISPLAY] สลับกล้อง → {new_cid} ({cam_names.get(new_cid, new_cid)})")
+
+        def _on_mouse(event, x, y, flags, param):
+            if event != cv2.EVENT_LBUTTONDOWN:
+                return
+            ox, oy = x / _sc["x"], y / _sc["y"]
+            if oy < BAR_H:
+                for (x1, x2, cid) in _tabs_ref[0]:
+                    if x1 <= ox < x2:
+                        _switch_cam(cid)
+                        break
+
+        cv2.namedWindow(WIN_NAME, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(WIN_NAME, 1280, 760)
+        cv2.setMouseCallback(WIN_NAME, _on_mouse)
+
+        _placeholder = np.zeros((480, 960, 3), dtype=np.uint8)
+        cv2.putText(_placeholder, "Waiting for camera...",
+                    (280, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.8,
+                    (80, 80, 80), 1, cv2.LINE_AA)
+        _last_frame  = None   # frame ล่าสุดจากกล้องปัจจุบัน (single)
+        _prev_active = _sel_cam["id"]   # ใช้ตรวจว่ามีการสลับกล้องหรือเปล่า
+
+        def _toggle_fs():
+            _fs["on"] = not _fs["on"]
+            cv2.setWindowProperty(WIN_NAME, cv2.WND_PROP_FULLSCREEN,
+                cv2.WINDOW_FULLSCREEN if _fs["on"] else cv2.WINDOW_NORMAL)
+
+        _FS_KEYS = frozenset([ord('f'), ord('F'), ord('d'), ord('D'), 3604, 3650])
+
+        while any(t.is_alive() for t in threads):
+            # อ่าน shared state ทั้งหมดใน lock เดียว
+            with _disp_lock:
+                frame  = _disp_slot["frame"]
+                frame  = frame.copy() if frame is not None else None
+                active = _sel_cam["id"]
+                pushed = set(_cam_has_pushed)
+
+            # ตรวจว่าสลับกล้อง → clear cache ทันที ป้องกัน frame เก่าค้าง
+            if active != _prev_active:
+                _last_frame  = None
+                _prev_active = active
+
+            if frame is not None:
+                _last_frame = frame
+            content = _last_frame if _last_frame is not None else _placeholder
+
+            bar, tabs = _draw_bar(content.shape[1], active, pushed)
+            _tabs_ref[0] = tabs
+            combined = np.vstack([bar, content])
+
+            if _fs["on"]:
+                orig_h, orig_w = combined.shape[:2]
+                combined = cv2.resize(combined, (SCREEN_W, SCREEN_H),
+                                      interpolation=cv2.INTER_LINEAR)
+                _sc["x"] = SCREEN_W / orig_w
+                _sc["y"] = SCREEN_H / orig_h
+            else:
+                _sc["x"] = 1.0
+                _sc["y"] = 1.0
+
+            cv2.imshow(WIN_NAME, combined)
+
+            key = cv2.waitKeyEx(1)
+            if key == -1:
+                pass
+            elif key == ord("q") or key == 27:
+                _stop_event.set()
+                break
+            elif key in _FS_KEYS:
+                _toggle_fs()
+            else:
+                for i, cid in enumerate(cam_ids):
+                    if key == ord(str(i + 1)):
+                        _switch_cam(cid)
+                        break
+
+        for t in threads:
+            t.join(timeout=5)
+        cv2.destroyAllWindows()

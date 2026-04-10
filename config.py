@@ -51,11 +51,40 @@ USB_CAM_HEIGHT        = 720        # เช่น 480, 720, 1080   (None = ไ�
 #   CAMERA_URL = "http://192.168.1.13:8080/?action=stream"  # MJPEG (IP Webcam app)
 CAMERA_URL            = os.environ.get("CAMERA_URL", "")   # ตั้งค่าใน .env
 
+# ─── Multi-Camera Config ─────────────────────────────────────────────────────
+# แต่ละ entry:
+#   id    — ชื่อ unique → ใช้เป็น key ใน /stream/{id}, /state/{id}
+#   name  — camera_name ที่บันทึกใน attendance record
+#   url   — RTSP/HTTP URL (IP camera) — ถ้ามี url จะไม่ใช้ index
+#   index — index USB webcam (0, 1, ...)
+#   flip  — กลับซ้าย-ขวา (override CAMERA_FLIP สำหรับกล้องนี้)
+CAMERAS = [
+    {
+        "id":    "cam1",
+        "name":  "CAM_MAIN",
+        "url":   os.environ.get("CAM1", ""),   # ตั้งค่าใน .env  CAM1_URL=rtsp://...
+        "flip":  False,
+    },
+    {
+        "id":    "cam2",
+        "name":  "CAM_WEBCAM",
+        "index": int(os.environ.get("CAM2", "1")),
+        "flip":  True,
+    },
+    {
+        "id":    "cam3",
+        "name":  "CAM_PHONE",
+        "index": int(os.environ.get("CAM3", "0")),
+        "flip":  True,
+    },
+]
+
 # ╔═══════════════════════════════════════════╗
 # ║  Performance                              ║
 # ╚═══════════════════════════════════════════╝
 DETECT_EVERY_N_FRAMES = 2 #MAX Skip frames between detections
 FULLSCREEN            = True
+CV_WINDOW             = True   # True = แสดงหน้าต่าง OpenCV, False = ซ่อน (web-only mode)
 ABSENCE_TIMEOUT_SEC   = 15     # วินาที — ไม่เจอใบหน้านานกว่านี้ → reset liveness ต้องสแกนใหม่ (production ใช้ 1800)
 # IP camera ส่งภาพตรง (ไม่กลับซ้าย-ขวา) → ตั้ง False ถ้าใช้ CAMERA_URL
 CAMERA_FLIP           = False
@@ -140,7 +169,7 @@ FAS_DETECTOR_BACKEND  = "skip"
 # ║  UI: General                              ║
 # ╚═══════════════════════════════════════════╝
 SHOW_LANDMARKS        = False
-SHOW_FPS              = False       # แสดง FPS มุมล่างซ้าย (False = ซ่อน)
+SHOW_FPS              = True       # แสดง FPS มุมล่างซ้าย (False = ซ่อน)
 NO_FACE_RESET_SEC     = 5
 
 # ╔═══════════════════════════════════════════╗
