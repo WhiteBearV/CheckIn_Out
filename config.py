@@ -79,6 +79,18 @@ CAMERAS = [
     },
 ]
 
+# ─── ถ้ามี cameras.json (จัดการผ่าน GUI) → override CAMERAS ─────────────────
+import json as _cjson, pathlib as _cpath
+_cam_json_path = _cpath.Path(__file__).parent / "cameras.json"
+if _cam_json_path.exists():
+    try:
+        with open(_cam_json_path, encoding="utf-8") as _cjf:
+            CAMERAS = _cjson.load(_cjf)
+        print(f"[CONFIG] cameras.json โหลด {len(CAMERAS)} กล้อง")
+    except Exception as _cje:
+        print(f"[CONFIG] cameras.json อ่านไม่ได้: {_cje} — ใช้ค่า hardcoded")
+del _cjson, _cpath, _cam_json_path
+
 # ╔═══════════════════════════════════════════╗
 # ║  Performance                              ║
 # ╚═══════════════════════════════════════════╝

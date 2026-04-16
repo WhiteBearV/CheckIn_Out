@@ -52,6 +52,8 @@ from camera import ThreadedCamera
 from session_manager import SessionManager
 import ui_renderer as ui
 import stream_server
+import json as _json_mod
+from pathlib import Path as _pl_mod
 
 # ─── Multi-cam display buffer (worker thread → main thread) ──────────────────
 # Single slot — เฉพาะกล้องที่ถูกเลือก (_sel_cam) เท่านั้นที่เขียน
@@ -224,6 +226,74 @@ def _compute_guide_state(face_with_names, liveness_map,
         "main_text":  main_text,
         "sub_text":   sub_text,
     }
+
+
+# ─── Camera Management Helpers ────────────────────────────────────────────────
+_CAMERAS_JSON_PATH = _pl_mod(__file__).parent / "cameras.json"
+_ENV_PATH          = _pl_mod(__file__).parent / ".env"
+
+
+# ─── .env helpers ─────────────────────────────────────────────────────────────
+
+def _env_set(key: str, value: str):
+    """เพิ่ม / อัปเดต KEY=value ใน .env (สร้างไฟล์ถ้ายังไม่มี)"""
+    lines: list[str] = []
+    if _ENV_PATH.exists():
+        with open(_ENV_PATH, encoding="utf-8") as _f:
+            lines = _f.readlines()
+    new_lines, found = [], False
+    for line in lines:
+        if line.strip().startswith(f"{key}="):
+            new_lines.append(f"{key}={value}\n")
+            found = True
+        else:
+            new_lines.append(line)
+    if not found:
+        new_lines.append(f"{key}={value}\n")
+    with open(_ENV_PATH, "w", encoding="utf-8") as _f:
+        _f.writelines(new_lines)
+
+
+def _env_del(key: str):
+    """ลบ KEY=... ออกจาก .env"""
+    if not _ENV_PATH.exists():
+        return
+    with open(_ENV_PATH, encoding="utf-8") as _f:
+        lines = _f.readlines()
+    with open(_ENV_PATH, "w", encoding="utf-8") as _f:
+        _f.writelines(l for l in lines if not l.strip().startswith(f"{key}="))
+
+
+def _cam_env_key(cam_id: str) -> str:
+    """cam4 → CAM4_URL"""
+    return cam_id.upper().replace("-", "_") + "_URL"
+
+
+def _resolve_url(url) -> str:
+    """แปลง '$VAR_NAME' → os.environ.get('VAR_NAME') | ค่าตรง"""
+    if isinstance(url, str) and url.startswith("$"):
+        return os.environ.get(url[1:], "")
+    return url or ""
+
+
+def _cm_load() -> list:
+    """โหลด camera config จาก cameras.json หรือ fallback ไป cfg.CAMERAS"""
+    if _CAMERAS_JSON_PATH.exists():
+        try:
+            with open(_CAMERAS_JSON_PATH, encoding="utf-8") as _f:
+                return _json_mod.load(_f)
+        except Exception as _e:
+            print(f"[CM] cameras.json อ่านไม่ได้: {_e}")
+    return list(cfg.CAMERAS)
+
+def _cm_save(configs: list):
+    with open(_CAMERAS_JSON_PATH, "w", encoding="utf-8") as _f:
+        _json_mod.dump(configs, _f, ensure_ascii=False, indent=2)
+
+def _cm_next_id(configs: list) -> str:
+    nums = [int(c["id"][3:]) for c in configs
+            if c.get("id", "").startswith("cam") and c["id"][3:].isdigit()]
+    return f"cam{max(nums, default=0) + 1}"
 
 
 def run_camera(cam_cfg: dict):
@@ -727,14 +797,25 @@ if __name__ == "__main__":
             "flip":  cfg.CAMERA_FLIP,
         }]
 
+    # ── Auto-init cameras.json ครั้งแรก (decouple จาก hardcode ใน config.py) ─
+    if not _CAMERAS_JSON_PATH.exists() and cameras:
+        _cm_save(cameras)
+        print(f"[CM] สร้าง cameras.json จาก config ({len(cameras)} กล้อง)")
+
+    # ── Resolve $ENV_VAR references ในทุก URL ──────────────────────────────────
+    cameras = [
+        {**c, "url": _resolve_url(c["url"])} if "url" in c else c
+        for c in cameras
+    ]
+
     stream_server.start()
 
-    if len(cameras) == 1:
-        run_camera(cameras[0])
-    else:
-        # ─── Multi-cam mode ───────────────────────────────────────────────────
+    if False:
+        pass  # placeholder — always use multi-cam mode (supports management UI)
+    if True:
+        # ─── Multi-cam mode (always) ──────────────────────────────────────────
         stream_server.set_cv_window(False)
-        print(f"[MAIN] Multi-camera mode: {[c['id'] for c in cameras]}")
+        print(f"[MAIN] Camera mode: {[c['id'] for c in cameras]}")
 
         cam_ids   = [c["id"]   for c in cameras]
         cam_names = {c["id"]: c["name"] for c in cameras}
@@ -755,51 +836,402 @@ if __name__ == "__main__":
             t.start()
 
         # ─── Main thread: single-window display loop ─────────────────────────
-        BAR_H    = 44
-        WIN_NAME = "Face Attendance System"
-        _fs      = {"on": False}
+        BAR_H      = 44
+        WIN_NAME   = "Face Attendance System"
+        _ADD_BTN_W = 44    # ความกว้างปุ่ม "+"
+        _DEL_BTN_W = 28    # ความกว้างปุ่ม "×" ในแต่ละ tab
+        _fs        = {"on": False}
 
+        # ─── UI state สำหรับ camera management ──────────────────────────────
+        _mgmt = {
+            "mode":    None,   # None | "add" | "del"
+            "field":   0,      # field ที่ active ใน form
+            "data":    {},     # ข้อมูลใน form
+            "del_cam": None,   # cam_id ที่กำลังจะลบ
+            "msg":     "",     # toast message
+            "msg_ts":  0.0,
+        }
+        _del_btns_ref = [[]]
+        _add_btn_ref  = [(0, 0)]
+
+        # ─── Form field definitions ──────────────────────────────────────────
+        _FIELDS_USB = [("Name",       "name"),
+                       ("Type",       "type"),
+                       ("USB Index",  "index"),
+                       ("Flip",       "flip")]
+        _FIELDS_IP  = [("Name",       "name"),
+                       ("Type",       "type"),
+                       ("URL (RTSP)", "url"),
+                       ("Flip",       "flip")]
+
+        def _form_init() -> dict:
+            return {"name": "", "type": "usb", "index": "0", "url": "", "flip": False}
+
+        def _open_add_form():
+            _mgmt["mode"]  = "add"
+            _mgmt["field"] = 0
+            _mgmt["data"]  = _form_init()
+
+        def _open_del_confirm(cid: str):
+            _mgmt["mode"]    = "del"
+            _mgmt["del_cam"] = cid
+
+        # ─── Tab bar (with + and × buttons) ─────────────────────────────────
         def _draw_bar(frame_w: int, cur_active: str, pushed: set) -> tuple:
-            bar   = np.full((BAR_H, frame_w, 3), (28, 28, 28), dtype=np.uint8)
-            tab_w = frame_w // len(cam_ids)
-            tabs  = []
+            bar        = np.full((BAR_H, frame_w, 3), (28, 28, 28), dtype=np.uint8)
+            tab_area_w = frame_w - _ADD_BTN_W
+            tab_w      = tab_area_w // max(len(cam_ids), 1)
+            tabs, del_btns = [], []
+
             for i, cid in enumerate(cam_ids):
-                x1, x2 = i * tab_w, min((i + 1) * tab_w, frame_w)
-                active  = (cid == cur_active)
-                if active:
-                    cv2.rectangle(bar, (x1, 0), (x2 - 1, BAR_H - 1), (45, 45, 45), -1)
-                cv2.rectangle(bar, (x1, BAR_H - 3), (x2 - 1, BAR_H - 1),
-                              (0, 255, 255) if active else (60, 60, 60), -1)
-                label = cam_names.get(cid, cid)
-                col   = (0, 255, 255) if active else (140, 140, 140)
+                x1 = i * tab_w
+                x2 = min((i + 1) * tab_w, tab_area_w)
+                is_active = (cid == cur_active)
+                if is_active:
+                    cv2.rectangle(bar, (x1, 0), (x2-1, BAR_H-1), (45, 45, 45), -1)
+                cv2.rectangle(bar, (x1, BAR_H-3), (x2-1, BAR_H-1),
+                              (0, 255, 255) if is_active else (60, 60, 60), -1)
+
+                # ─ "×" delete button (ขวาสุดของ tab)
+                dx1, dx2 = x2 - _DEL_BTN_W, x2
+                cv2.putText(bar, "x", (dx1 + 5, BAR_H // 2 + 7),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.60,
+                            (0, 50, 230) if is_active else (0, 35, 160), 2, cv2.LINE_AA)
+                del_btns.append((dx1, dx2, cid))
+
+                # ─ ชื่อ tab (พื้นที่ซ้ายของ "×")
+                label    = cam_names.get(cid, cid)
+                col      = (0, 255, 255) if is_active else (140, 140, 140)
                 (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.44, 1)
-                cv2.putText(bar, label,
-                            (x1 + (x2 - x1 - tw) // 2, (BAR_H + th) // 2 - 2),
+                usable_w = (x2 - _DEL_BTN_W) - x1
+                lx       = x1 + max(12, (usable_w - tw) // 2)
+                cv2.putText(bar, label, (lx, (BAR_H + th) // 2 - 2),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.44, col, 1, cv2.LINE_AA)
                 dot_col = (0, 220, 80) if cid in pushed else (70, 70, 70)
                 cv2.circle(bar, (x1 + 10, BAR_H // 2), 4, dot_col, -1)
                 tabs.append((x1, x2, cid))
-            return bar, tabs
 
+            # ─ "+" add button (ขวาสุดของ bar)
+            ax = frame_w - _ADD_BTN_W
+            cv2.rectangle(bar, (ax+2, 3), (frame_w-3, BAR_H-4), (14, 36, 14), -1)
+            cv2.rectangle(bar, (ax+2, 3), (frame_w-3, BAR_H-4), (35, 80, 35), 1)
+            cv2.putText(bar, "+", (ax + 10, BAR_H // 2 + 7),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.75, (50, 200, 50), 1, cv2.LINE_AA)
+
+            return bar, tabs, del_btns, (ax, frame_w)
+
+        # ─── Overlay: Add Camera form ────────────────────────────────────────
+        def _draw_add_form(img, data: dict, active_field: int):
+            H, W = img.shape[:2]
+            ov = img.copy()
+            cv2.rectangle(ov, (0, 0), (W, H), (0, 0, 0), -1)
+            cv2.addWeighted(ov, 0.55, img, 0.45, 0, img)
+
+            FW, FH = 490, 310
+            fx, fy = (W - FW) // 2, (H - FH) // 2
+            cv2.rectangle(img, (fx+4, fy+4), (fx+FW+4, fy+FH+4), (0, 0, 0), -1)
+            cv2.rectangle(img, (fx, fy), (fx+FW, fy+FH), (20, 20, 20), -1)
+            cv2.rectangle(img, (fx, fy), (fx+FW, fy+FH), (55, 55, 55), 1)
+            cv2.rectangle(img, (fx, fy), (fx+FW, fy+40), (14, 14, 14), -1)
+            cv2.putText(img, "+ Add Camera",
+                        (fx+16, fy+27), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.55, (0, 200, 200), 1, cv2.LINE_AA)
+
+            fields = _FIELDS_IP if data.get("type") == "ip" else _FIELDS_USB
+            for i, (label, fkey) in enumerate(fields):
+                y      = fy + 68 + i * 52
+                is_act = (i == active_field)
+                lc     = (0, 200, 200) if is_act else (100, 100, 100)
+                cv2.putText(img, label, (fx+14, y),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.40, lc, 1, cv2.LINE_AA)
+
+                bx1, by1 = fx + 140, y - 22
+                bx2, by2 = fx + FW - 14, y + 8
+                cv2.rectangle(img, (bx1, by1), (bx2, by2),
+                              (40, 40, 40) if is_act else (18, 18, 18), -1)
+                cv2.rectangle(img, (bx1, by1), (bx2, by2),
+                              (0, 170, 170) if is_act else (42, 42, 42), 1)
+
+                # เคอเซอร์กะพริบ ~2 Hz
+                _cur = "|" if (is_act and int(time.time() * 2) % 2 == 0) else ""
+
+                if fkey == "type":
+                    val  = "USB Webcam (index)" if data.get("type") == "usb" else "IP Camera (RTSP/HTTP)"
+                    vc   = (160, 220, 160) if data.get("type") == "usb" else (160, 160, 220)
+                    hint = "  [Space=toggle]"
+                elif fkey == "url":
+                    raw  = data.get(fkey, "")
+                    val  = raw + _cur
+                    vc   = (180, 220, 180) if raw.startswith("$") else (220, 220, 220)
+                    hint = "  → auto-saved to .env"
+                elif fkey == "flip":
+                    val  = "ON (flip horizontal)" if data.get("flip") else "OFF"
+                    vc   = (200, 200, 100) if data.get("flip") else (150, 150, 150)
+                    hint = "  [Space=toggle]"
+                else:
+                    raw  = data.get(fkey, "")
+                    val  = raw + _cur
+                    vc   = (220, 220, 220)
+                    hint = ""
+
+                # trim ถ้าข้อความยาวเกิน
+                max_px = bx2 - bx1 - 10
+                fs = 0.40
+                (tw, _), _ = cv2.getTextSize(val, cv2.FONT_HERSHEY_SIMPLEX, fs, 1)
+                while tw > max_px and len(val) > 2:
+                    val = "..." + val[4:]
+                    (tw, _), _ = cv2.getTextSize(val, cv2.FONT_HERSHEY_SIMPLEX, fs, 1)
+
+                cv2.putText(img, val, (bx1+6, y-4),
+                            cv2.FONT_HERSHEY_SIMPLEX, fs, vc, 1, cv2.LINE_AA)
+                if hint and is_act:
+                    cv2.putText(img, hint, (bx2+4, y-4),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.30,
+                                (70, 70, 70), 1, cv2.LINE_AA)
+
+            cv2.putText(img,
+                        "Tab/Down=Next  Up=Back  Space=Toggle  Enter=Save  Esc=Cancel",
+                        (fx+14, fy+FH-12),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.31, (65, 65, 65), 1, cv2.LINE_AA)
+
+        # ─── Overlay: Delete confirm ─────────────────────────────────────────
+        def _draw_del_confirm(img, cam_id: str):
+            H, W = img.shape[:2]
+            ov = img.copy()
+            cv2.rectangle(ov, (0, 0), (W, H), (0, 0, 0), -1)
+            cv2.addWeighted(ov, 0.60, img, 0.40, 0, img)
+
+            BW, BH = 400, 165
+            bx, by = (W - BW) // 2, (H - BH) // 2
+            cv2.rectangle(img, (bx+3, by+3), (bx+BW+3, by+BH+3), (0, 0, 0), -1)
+            cv2.rectangle(img, (bx, by), (bx+BW, by+BH), (25, 10, 10), -1)
+            cv2.rectangle(img, (bx, by), (bx+BW, by+BH), (100, 30, 30), 1)
+            cv2.putText(img, "Delete Camera?",
+                        (bx+16, by+36), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.60, (80, 80, 220), 1, cv2.LINE_AA)
+            name = cam_names.get(cam_id, cam_id)
+            cv2.putText(img, f"{cam_id}: {name}",
+                        (bx+16, by+70), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.46, (200, 200, 200), 1, cv2.LINE_AA)
+            cv2.putText(img, "Restart required to apply changes",
+                        (bx+16, by+98), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.37, (120, 100, 50), 1, cv2.LINE_AA)
+            cv2.putText(img, "[Y] / Enter = Confirm    [N] / Esc = Cancel",
+                        (bx+16, by+132), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.41, (160, 160, 160), 1, cv2.LINE_AA)
+
+        # ─── Toast message ───────────────────────────────────────────────────
+        def _draw_toast(img, msg: str):
+            H, W = img.shape[:2]
+            col = (0, 160, 60) if msg.startswith("✓") else (0, 100, 200)
+            (tw, th), _ = cv2.getTextSize(msg, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
+            px, py = 14, 8
+            rx1 = W - tw - px * 2 - 20
+            ry1 = H - th - py * 2 - 10
+            rx2, ry2 = W - 10, H - 10
+            cv2.rectangle(img, (rx1-2, ry1-2), (rx2+2, ry2+2), (0, 0, 0), -1)
+            cv2.rectangle(img, (rx1, ry1), (rx2, ry2), col, -1)
+            cv2.putText(img, msg, (rx1 + px, ry2 - py - 2),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
+
+        # ─── Camera Management Actions ───────────────────────────────────────
+        def _do_save_camera():
+            data = _mgmt["data"]
+            name = data.get("name", "").strip()
+            if not name:
+                _mgmt["field"] = 0
+                return
+            configs = _cm_load()
+            cam_id  = _cm_next_id(configs)
+            new_cam: dict = {"id": cam_id, "name": name, "flip": bool(data.get("flip"))}
+            if data.get("type") == "ip":
+                url = data.get("url", "").strip()
+                if url and not url.startswith("$"):
+                    # URL ตรง → auto-save ลง .env แล้วเก็บ reference แทน
+                    env_key = _cam_env_key(cam_id)
+                    _env_set(env_key, url)
+                    os.environ[env_key] = url   # ให้ process ปัจจุบันเห็นด้วย
+                    new_cam["url"] = f"${env_key}"
+                    print(f"[CM] URL saved to .env as {env_key}")
+                else:
+                    new_cam["url"] = url   # ว่าง หรือ $VAR_NAME → เก็บตรง
+            else:
+                try:
+                    new_cam["index"] = int(data.get("index", 0))
+                except ValueError:
+                    new_cam["index"] = 0
+            configs.append(new_cam)
+            _cm_save(configs)
+            print(f"[CM] เพิ่มกล้อง {cam_id} ({name})")
+            # Live update tab bar immediately
+            cam_ids.append(cam_id)
+            cam_names[cam_id] = name
+            _mgmt["mode"]   = None
+            _mgmt["msg"]    = f"✓ Added {cam_id} ({name}) — press R to activate"
+            _mgmt["msg_ts"] = time.time()
+
+        def _do_refresh_cameras():
+            """Spawn threads for cameras added since startup (press R)"""
+            configs = _cm_load()
+            configs = [
+                {**c, "url": _resolve_url(c["url"])} if "url" in c else c
+                for c in configs
+            ]
+            running = {t.name for t in threads if t.is_alive()}
+            new_cams = [c for c in configs if f"cam-{c['id']}" not in running]
+            if not new_cams:
+                _mgmt["msg"]    = "All cameras already running"
+                _mgmt["msg_ts"] = time.time()
+                return
+            for cam_cfg in new_cams:
+                t = _threading.Thread(
+                    target=run_camera,
+                    args=(cam_cfg,),
+                    name=f"cam-{cam_cfg['id']}",
+                    daemon=True,
+                )
+                threads.append(t)
+                t.start()
+                print(f"[CM] Started thread for {cam_cfg['id']}")
+            _mgmt["msg"]    = f"Reloaded: {len(new_cams)} new cam(s) started"
+            _mgmt["msg_ts"] = time.time()
+
+        def _do_delete_camera():
+            cam_id = _mgmt.get("del_cam")
+            if not cam_id:
+                return
+            if len(cam_ids) <= 1:
+                _mgmt["mode"]    = None
+                _mgmt["del_cam"] = None
+                _mgmt["msg"]     = "! Cannot delete the last camera"
+                _mgmt["msg_ts"]  = time.time()
+                return
+            configs = _cm_load()
+            # ลบ env var ถ้ากล้องนี้ใช้ $VAR_NAME
+            deleted = next((c for c in configs if c.get("id") == cam_id), None)
+            if deleted:
+                url = deleted.get("url", "")
+                if isinstance(url, str) and url.startswith("$"):
+                    env_key = url[1:]
+                    _env_del(env_key)
+                    os.environ.pop(env_key, None)
+                    print(f"[CM] Removed {env_key} from .env")
+            new_configs = [c for c in configs if c.get("id") != cam_id]
+            _cm_save(new_configs)
+            # Live update tab bar
+            if cam_id in cam_ids:
+                cam_ids.remove(cam_id)
+                cam_names.pop(cam_id, None)
+            with _disp_lock:
+                if _sel_cam["id"] == cam_id and cam_ids:
+                    _disp_slot["frame"] = None
+                    _sel_cam["id"]      = cam_ids[0]
+            print(f"[CM] ลบกล้อง {cam_id}")
+            _mgmt["mode"]    = None
+            _mgmt["del_cam"] = None
+            _mgmt["msg"]     = f"✓ Deleted {cam_id} — restart to apply"
+            _mgmt["msg_ts"]  = time.time()
+
+        # ─── Keyboard handlers ───────────────────────────────────────────────
+        _KEY_DOWN    = frozenset([9, 65289, 2621440, 65364])   # Tab / ↓
+        _KEY_UP      = frozenset([65362, 2490368])              # ↑
+        _KEY_ENTER   = frozenset([13])
+        _KEY_BS      = frozenset([8, 65288])                    # Backspace
+        _CAPSLOCK_KEY = 65509                                   # CapsLock (X11)
+        _IGNORE_KEYS  = frozenset([                             # modifier keys ที่ไม่ใช่ตัวอักษร
+            65505, 65506,   # Shift L/R
+            65507, 65508,   # Ctrl L/R
+            65513, 65514,   # Alt L/R
+            65515, 65516,   # Super L/R
+        ])
+
+        _caps = {"lock": False}   # ─ track CapsLock state เอง
+
+        def _handle_form_key(key: int):
+            data   = _mgmt["data"]
+            fields = _FIELDS_IP if data.get("type") == "ip" else _FIELDS_USB
+            fi     = _mgmt["field"]
+            _, fkey = fields[fi]
+
+            # ── Modifier / special keys ────────────────────────────────────
+            if key == 27:   # ESC → ยกเลิก
+                _mgmt["mode"] = None
+                return
+            if key == _CAPSLOCK_KEY:
+                _caps["lock"] = not _caps["lock"]
+                return
+            if key in _IGNORE_KEYS:
+                return
+            if key in _KEY_DOWN:
+                _mgmt["field"] = (fi + 1) % len(fields)
+                return
+            if key in _KEY_UP:
+                _mgmt["field"] = (fi - 1) % len(fields)
+                return
+            if key in _KEY_ENTER:
+                if fi == len(fields) - 1:
+                    _do_save_camera()
+                else:
+                    _mgmt["field"] = (fi + 1) % len(fields)
+                return
+            if fkey in ("type", "flip"):
+                if key == ord(" "):
+                    if fkey == "type":
+                        data["type"] = "ip" if data.get("type") == "usb" else "usb"
+                    else:
+                        data["flip"] = not data.get("flip", False)
+                return
+            # ── Text fields: name / index / url ───────────────────────────
+            if key in _KEY_BS:
+                data[fkey] = data.get(fkey, "")[:-1]
+            elif 32 <= key < 127:
+                ch = chr(key)
+                # CapsLock: convert lowercase → uppercase (OS บางตัวไม่ apply เอง)
+                if _caps["lock"] and ch.isalpha() and ch.islower():
+                    ch = ch.upper()
+                data[fkey] = data.get(fkey, "") + ch
+
+        def _handle_del_key(key: int):
+            if key in _KEY_ENTER or key == ord("y") or key == ord("Y"):
+                _do_delete_camera()
+            elif key == 27 or key == ord("n") or key == ord("N"):
+                _mgmt["mode"]    = None
+                _mgmt["del_cam"] = None
+
+        # ─── Mouse callback ──────────────────────────────────────────────────
         _sc       = {"x": 1.0, "y": 1.0}
         _tabs_ref = [[]]
 
         def _switch_cam(new_cid: str):
             """สลับกล้อง: clear slot ก่อน ป้องกัน frame เก่าค้างอยู่"""
             with _disp_lock:
-                _disp_slot["frame"] = None   # flush frame เก่าออก
+                _disp_slot["frame"] = None
                 _sel_cam["id"]      = new_cid
             print(f"[DISPLAY] สลับกล้อง → {new_cid} ({cam_names.get(new_cid, new_cid)})")
 
         def _on_mouse(event, x, y, flags, param):
             if event != cv2.EVENT_LBUTTONDOWN:
                 return
+            if _mgmt["mode"] is not None:
+                return   # ignore clicks ขณะ overlay เปิดอยู่
             ox, oy = x / _sc["x"], y / _sc["y"]
-            if oy < BAR_H:
-                for (x1, x2, cid) in _tabs_ref[0]:
-                    if x1 <= ox < x2:
-                        _switch_cam(cid)
-                        break
+            if oy >= BAR_H:
+                return
+            # ตรวจปุ่ม "+"
+            ax1, ax2 = _add_btn_ref[0]
+            if ax1 <= ox <= ax2:
+                _open_add_form()
+                return
+            # ตรวจปุ่ม "×" ของแต่ละ tab
+            for (dx1, dx2, cid) in _del_btns_ref[0]:
+                if dx1 <= ox < dx2:
+                    _open_del_confirm(cid)
+                    return
+            # สลับกล้อง
+            for (tx1, tx2, cid) in _tabs_ref[0]:
+                if tx1 <= ox < tx2:
+                    _switch_cam(cid)
+                    break
 
         cv2.namedWindow(WIN_NAME, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(WIN_NAME, 1280, 760)
@@ -809,8 +1241,8 @@ if __name__ == "__main__":
         cv2.putText(_placeholder, "Waiting for camera...",
                     (280, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.8,
                     (80, 80, 80), 1, cv2.LINE_AA)
-        _last_frame  = None   # frame ล่าสุดจากกล้องปัจจุบัน (single)
-        _prev_active = _sel_cam["id"]   # ใช้ตรวจว่ามีการสลับกล้องหรือเปล่า
+        _last_frame  = None
+        _prev_active = _sel_cam["id"]
 
         def _toggle_fs():
             _fs["on"] = not _fs["on"]
@@ -820,14 +1252,12 @@ if __name__ == "__main__":
         _FS_KEYS = frozenset([ord('f'), ord('F'), ord('d'), ord('D'), 3604, 3650])
 
         while any(t.is_alive() for t in threads):
-            # อ่าน shared state ทั้งหมดใน lock เดียว
             with _disp_lock:
                 frame  = _disp_slot["frame"]
                 frame  = frame.copy() if frame is not None else None
                 active = _sel_cam["id"]
                 pushed = set(_cam_has_pushed)
 
-            # ตรวจว่าสลับกล้อง → clear cache ทันที ป้องกัน frame เก่าค้าง
             if active != _prev_active:
                 _last_frame  = None
                 _prev_active = active
@@ -836,9 +1266,24 @@ if __name__ == "__main__":
                 _last_frame = frame
             content = _last_frame if _last_frame is not None else _placeholder
 
-            bar, tabs = _draw_bar(content.shape[1], active, pushed)
-            _tabs_ref[0] = tabs
+            bar, tabs, del_btns, add_btn = _draw_bar(content.shape[1], active, pushed)
+            _tabs_ref[0]     = tabs
+            _del_btns_ref[0] = del_btns
+            _add_btn_ref[0]  = add_btn
             combined = np.vstack([bar, content])
+
+            # ── วาด overlay ─────────────────────────────────────────────────
+            if _mgmt["mode"] == "add":
+                _draw_add_form(combined, _mgmt["data"], _mgmt["field"])
+            elif _mgmt["mode"] == "del" and _mgmt["del_cam"]:
+                _draw_del_confirm(combined, _mgmt["del_cam"])
+
+            # ── Toast message (หายไปใน 4 วิ) ────────────────────────────────
+            if _mgmt["msg"]:
+                if time.time() - _mgmt["msg_ts"] < 4.0:
+                    _draw_toast(combined, _mgmt["msg"])
+                else:
+                    _mgmt["msg"] = ""
 
             if _fs["on"]:
                 orig_h, orig_w = combined.shape[:2]
@@ -855,11 +1300,17 @@ if __name__ == "__main__":
             key = cv2.waitKeyEx(1)
             if key == -1:
                 pass
+            elif _mgmt["mode"] == "add":
+                _handle_form_key(key)
+            elif _mgmt["mode"] == "del":
+                _handle_del_key(key)
             elif key == ord("q") or key == 27:
                 _stop_event.set()
                 break
             elif key in _FS_KEYS:
                 _toggle_fs()
+            elif key == ord("r") or key == ord("R"):
+                _do_refresh_cameras()
             else:
                 for i, cid in enumerate(cam_ids):
                     if key == ord(str(i + 1)):
