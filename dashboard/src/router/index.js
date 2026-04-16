@@ -8,7 +8,8 @@
 // ─────────────────────────────────────────────────────────────────────
 
 import { createRouter, createWebHashHistory } from 'vue-router'
-import CameraView from '@/views/CameraView.vue'
+import CameraView       from '@/views/CameraView.vue'
+import SingleCameraView from '@/views/SingleCameraView.vue'
 
 // ── Route definitions ─────────────────────────────────────────────
 const routes = [
@@ -20,6 +21,12 @@ const routes = [
       label: 'หน้าหลัก',
       icon:  '📷',
     },
+  },
+  {
+    path:      '/camera/:camId',
+    name:      'camera-detail',
+    component: SingleCameraView,
+    // ไม่ใส่ meta.label เพื่อไม่ให้แสดงใน AppNav
   },
   // ── เพิ่ม route ใหม่ที่นี่ ──────────────────────────────────────
 ]

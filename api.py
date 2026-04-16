@@ -363,17 +363,26 @@ def _get_camera_source():
 # ── Helper: เปิดกล้องพร้อม timeout ────────────────────────────────────────────
 # รัน VideoCapture ใน thread แยก เพื่อไม่ให้ block FastAPI event loop
 # คืน (cap, True) ถ้าเปิดได้, (None, False) ถ้า timeout
-def _open_camera(source, timeout_sec: float = 8.0):
-    # ตั้ง FFMPEG stimeout สำหรับ RTSP (5 วินาที) เพื่อ fail fast
-    if isinstance(source, str):
-        os.environ.setdefault(
-            "OPENCV_FFMPEG_CAPTURE_OPTIONS",
-            "rtsp_transport;tcp|stimeout;5000000",
-        )
+def _open_camera(source, timeout_sec: float = 12.0):
+    """
+    เปิดกล้องใน thread แยกเพื่อไม่ block event loop
+    - USB (int): ใช้ CAP_V4L2 บน Linux
+    - RTSP/HTTP (str): ใช้ CAP_FFMPEG + rtsp_transport=tcp
+    คืน (cap, True) ถ้าสำเร็จ, (None, False) ถ้า timeout หรือเปิดไม่ได้
+    """
     result = [None, False]
 
     def _open():
-        cap = cv2.VideoCapture(source)
+        if isinstance(source, str):
+            # RTSP/HTTP — ใช้ FFMPEG backend + TCP transport (เสถียรกว่า UDP)
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
+                "rtsp_transport;tcp|stimeout;5000000"
+            )
+            cap = cv2.VideoCapture(source, cv2.CAP_FFMPEG)
+        else:
+            cap = cv2.VideoCapture(source, cv2.CAP_V4L2)
+            if not cap.isOpened():          # fallback ถ้า V4L2 ไม่มี
+                cap = cv2.VideoCapture(source)
         result[0] = cap
         result[1] = cap.isOpened()
 
@@ -381,9 +390,118 @@ def _open_camera(source, timeout_sec: float = 8.0):
     t.start()
     t.join(timeout=timeout_sec)
 
-    if t.is_alive():           # thread ยังรันอยู่ = timeout
+    if t.is_alive():    # thread ยังรันอยู่ = timeout
         return None, False
     return result[0], result[1]
+
+
+# ╔═══════════════════════════════════════════════════════════════════════════╗
+# ║  Multi-Camera Configuration                                               ║
+# ╟───────────────────────────────────────────────────────────────────────────╢
+# ║  แก้ไขกล้องที่นี่ — เพิ่ม/ลบ entry ใน CAMERAS_CONFIG ได้เลย             ║
+# ║                                                                           ║
+# ║  แต่ละกล้อง:                                                              ║
+# ║    id     — รหัสไม่ซ้ำ (ใช้ใน URL เช่น /cameras/cam1/stream)            ║
+# ║    name   — ชื่อแสดงผลบน Dashboard                                       ║
+# ║    source — USB index (int) หรือ RTSP/HTTP URL (str)                     ║
+# ║                                                                           ║
+# ║  Override ผ่าน .env:                                                      ║
+# ║    CAMERA1_URL=0          ← USB index 0 (laptop webcam)                  ║
+# ║    CAMERA1_URL=1          ← USB index 1 (external webcam)                ║
+# ║    CAMERA2_URL=rtsp://... ← IP camera                                    ║
+# ╚═══════════════════════════════════════════════════════════════════════════╝
+
+def _parse_cam_source(raw: str, default):
+    """แปลง string จาก env var → int index หรือ string URL"""
+    if not raw:
+        return default
+    return int(raw) if raw.isdigit() else raw
+
+_RTSP_CAM2 = "rtsp://admin:@dmin123456@192.168.1.13:554/unicast/c1/s0/live"
+
+CAMERAS_CONFIG = [
+    {
+        "id":     "cam1",
+        "name":   "กล้อง 1 (Laptop)",
+        "source": _parse_cam_source(os.environ.get("CAMERA1_URL", ""), 0),
+    },
+    {
+        "id":     "cam2",
+        "name":   "กล้อง 2 (IP Camera)",
+        "source": _parse_cam_source(os.environ.get("CAMERA2_URL", ""), _RTSP_CAM2),
+    },
+    # เพิ่มกล้องตัวที่ 3: uncomment แล้วแก้ตามต้องการ
+    # {
+    #     "id":     "cam3",
+    #     "name":   "กล้อง 3",
+    #     "source": _parse_cam_source(os.environ.get("CAMERA3_URL", ""), 2),
+    # },
+]
+_CAMERAS: dict = {c["id"]: c for c in CAMERAS_CONFIG}
+
+
+@app.get("/cameras")
+def list_cameras():
+    """คืนรายการกล้องทั้งหมดที่ตั้งค่าไว้ — ใช้โดย Dashboard เพื่อ render panels"""
+    return [
+        {
+            "id":          c["id"],
+            "name":        c["name"],
+            "source_type": "rtsp" if isinstance(c["source"], str) else "usb",
+        }
+        for c in CAMERAS_CONFIG
+    ]
+
+
+@app.get("/cameras/{cam_id}/stream")
+def cameras_raw_stream(cam_id: str):
+    """
+    MJPEG stream โดยตรงจากกล้องที่ระบุ (ไม่มี face recognition overlay)
+    ──────────────────────────────────────────────────────────────────────
+    ใช้ทดสอบว่ากล้องทำงานได้ก่อน start main.py
+    """
+    cam = _CAMERAS.get(cam_id)
+    if not cam:
+        raise HTTPException(status_code=404, detail=f"Camera '{cam_id}' not found")
+
+    def generate():
+        import time
+        source = cam["source"]
+        cap, ok = _open_camera(source, timeout_sec=10.0)
+        if not ok:
+            if cap:
+                cap.release()
+            yield (
+                b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'
+                + _make_error_frame(f"{cam['name']}: ไม่พร้อม")
+                + b'\r\n'
+            )
+            return
+        interval = 1.0 / 15
+        try:
+            while True:
+                t0 = time.time()
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                ok2, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 65])
+                if ok2:
+                    yield (
+                        b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'
+                        + buf.tobytes()
+                        + b'\r\n'
+                    )
+                elapsed = time.time() - t0
+                if elapsed < interval:
+                    time.sleep(interval - elapsed)
+        finally:
+            cap.release()
+
+    return StreamingResponse(
+        generate(),
+        media_type='multipart/x-mixed-replace; boundary=frame',
+        headers={"Cache-Control": "no-cache, no-store"},
+    )
 
 
 @app.get("/camera/info")
@@ -552,36 +670,63 @@ def person_face(per_id: str):
 import json as _json
 import time as _time
 
-_LIVE_STATE_PATH = _ROOT / "live_state.json"
+_LIVE_STATE_PATH = _ROOT / "live_state.json"   # legacy path (main.py รันตรง)
 
 @app.get("/session/live")
 def session_live():
     """
-    คืนสถานะ live จากไฟล์ live_state.json ที่ main.py เขียนทุก 1 วินาที
-    ────────────────────────────────────────────────────────────────────
+    คืนสถานะ live รวมจากทุกกล้อง
+    ─────────────────────────────────────────────────────────────────────
+    อ่านจาก live_state_{cam_id}.json (per-camera, start จาก /cameras/{id}/face/start)
+    และ fallback ไปที่ live_state.json (legacy: main.py รันตรง / old /camera/face/start)
+
     Response:
       {
-        "active": bool,      — main.py กำลังรันอยู่หรือเปล่า
-        "ts": float,         — unix timestamp ครั้งล่าสุดที่ main.py เขียน
-        "stale": bool,       — true ถ้าไม่ได้รับข้อมูลใหม่นาน > 5 วินาที
-        "persons": [...]     — รายชื่อที่ระบบตรวจพบ + liveness status
+        "active": bool,   — มีกล้องอย่างน้อย 1 ตัวที่ main.py กำลังรัน
+        "ts": float,      — unix timestamp ล่าสุด
+        "stale": bool,    — true ถ้าข้อมูลเก่าเกิน 5 วินาที
+        "persons": [...]  — รายชื่อรวมจากทุกกล้อง (ไม่ซ้ำ per_id)
       }
-
-    ถ้า main.py ไม่ได้รัน หรือไฟล์ไม่มี → คืน active=false, persons=[]
     """
-    if not _LIVE_STATE_PATH.exists():
-        return {"active": False, "ts": None, "stale": True, "persons": []}
+    merged: dict[str, dict] = {}
+    any_active = False
+    latest_ts: float | None = None
 
-    try:
-        data = _json.loads(_LIVE_STATE_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return {"active": False, "ts": None, "stale": True, "persons": []}
+    # ── อ่าน per-camera state files (live_state_cam1.json, live_state_cam2.json ฯลฯ) ──
+    for path in sorted(_ROOT.glob("live_state_*.json")):
+        try:
+            data = _json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        ts = data.get("ts")
+        if ts is not None and (_time.time() - ts <= 5):
+            any_active = True
+            if latest_ts is None or ts > latest_ts:
+                latest_ts = ts
+        for p in data.get("persons", []):
+            pid = p.get("per_id")
+            if pid and pid not in merged:
+                merged[pid] = p
 
-    # ถ้าไฟล์เก่าเกิน 5 วินาที = main.py หยุดทำงาน
-    stale = (data.get("ts") is None) or (_time.time() - data["ts"] > 5)
-    data["stale"] = stale
+    # ── Fallback: legacy live_state.json ────────────────────────────────────
+    if not merged:
+        if not _LIVE_STATE_PATH.exists():
+            return {"active": False, "ts": None, "stale": True, "persons": []}
+        try:
+            data = _json.loads(_LIVE_STATE_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            return {"active": False, "ts": None, "stale": True, "persons": []}
+        stale = (data.get("ts") is None) or (_time.time() - data["ts"] > 5)
+        data["stale"] = stale
+        return data
 
-    return data
+    stale = not any_active
+    return {
+        "active":  any_active,
+        "ts":      latest_ts,
+        "stale":   stale,
+        "persons": list(merged.values()),
+    }
 
 
 # ╔═══════════════════════════════════════════════════════════════════════════╗
@@ -715,3 +860,134 @@ def _make_error_frame(msg: str) -> bytes:
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (80, 80, 80), 2)
     _, buf = cv2.imencode('.jpg', blank)
     return buf.tobytes()
+
+
+# ╔═══════════════════════════════════════════════════════════════════════════╗
+# ║  Multi-Camera Face Recognition Endpoints                                  ║
+# ╟───────────────────────────────────────────────────────────────────────────╢
+# ║  จัดการ main.py แยกต่างหากสำหรับแต่ละกล้อง                               ║
+# ║  แต่ละกล้องเขียน live_frame_{cam_id}.jpg และ live_state_{cam_id}.json    ║
+# ╚═══════════════════════════════════════════════════════════════════════════╝
+
+_face_processes: dict[str, "_subprocess.Popen"] = {}
+
+
+def _live_frame_path_for(cam_id: str) -> pathlib.Path:
+    return _ROOT / f"live_frame_{cam_id}.jpg"
+
+
+def _live_state_path_for(cam_id: str) -> pathlib.Path:
+    return _ROOT / f"live_state_{cam_id}.json"
+
+
+@app.get("/cameras/{cam_id}/face-stream")
+def cameras_face_stream(cam_id: str):
+    """
+    MJPEG stream จาก main.py พร้อม face recognition overlay สำหรับกล้องที่ระบุ
+    อ่านจาก live_frame_{cam_id}.jpg ที่ main.py เขียนทุก ~67ms
+    """
+    if cam_id not in _CAMERAS:
+        raise HTTPException(status_code=404, detail=f"Camera '{cam_id}' not found")
+
+    live_frame = _live_frame_path_for(cam_id)
+
+    def generate():
+        import time
+        while True:
+            if live_frame.exists():
+                try:
+                    frame_bytes = live_frame.read_bytes()
+                    yield (
+                        b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'
+                        + frame_bytes
+                        + b'\r\n'
+                    )
+                except Exception:
+                    pass
+            time.sleep(0.067)
+
+    return StreamingResponse(
+        generate(),
+        media_type='multipart/x-mixed-replace; boundary=frame',
+        headers={"Cache-Control": "no-cache, no-store"},
+    )
+
+
+@app.get("/cameras/{cam_id}/face/status")
+def cameras_face_status(cam_id: str):
+    """สถานะ main.py process + live frame สำหรับกล้องที่ระบุ"""
+    if cam_id not in _CAMERAS:
+        raise HTTPException(status_code=404, detail=f"Camera '{cam_id}' not found")
+
+    proc = _face_processes.get(cam_id)
+    running = proc is not None and proc.poll() is None
+    live_frame = _live_frame_path_for(cam_id)
+    has_frame = live_frame.exists()
+    frame_age = None
+    if has_frame:
+        frame_age = round(_time.time() - live_frame.stat().st_mtime, 1)
+
+    return {
+        "cam_id":        cam_id,
+        "cam_name":      _CAMERAS[cam_id]["name"],
+        "running":       running,
+        "pid":           proc.pid if running else None,
+        "has_frame":     has_frame,
+        "frame_age_sec": frame_age,
+    }
+
+
+@app.post("/cameras/{cam_id}/face/start")
+def cameras_face_start(cam_id: str):
+    """
+    Start main.py สำหรับกล้องที่ระบุ
+    ─────────────────────────────────────────────────────────────────────
+    ส่ง env vars ไปให้ main.py:
+      CAMERA_URL           — camera source (index หรือ RTSP URL)
+      FACE_LIVE_FRAME_PATH — path ของ live_frame_{cam_id}.jpg
+      FACE_LIVE_STATE_PATH — path ของ live_state_{cam_id}.json
+    """
+    cam = _CAMERAS.get(cam_id)
+    if not cam:
+        raise HTTPException(status_code=404, detail=f"Camera '{cam_id}' not found")
+
+    proc = _face_processes.get(cam_id)
+    if proc is not None and proc.poll() is None:
+        return {"ok": False, "reason": "already running", "pid": proc.pid}
+
+    try:
+        env = os.environ.copy()
+        env["FACE_HEADLESS"]        = "1"
+        env["FACE_ALWAYS_ACTIVE"]   = "1"
+        env["FACE_CAMERA_CHILD"]    = "1"   # ป้องกัน multi-camera recursive spawn
+        env["CAMERA_URL"]           = str(cam["source"])
+        env["FACE_LIVE_FRAME_PATH"] = str(_live_frame_path_for(cam_id))
+        env["FACE_LIVE_STATE_PATH"] = str(_live_state_path_for(cam_id))
+
+        proc = _subprocess.Popen(
+            [_sys.executable, str(_ROOT / "main.py")],
+            cwd=str(_ROOT),
+            env=env,
+        )
+        _face_processes[cam_id] = proc
+        return {"ok": True, "pid": proc.pid}
+    except Exception as e:
+        return {"ok": False, "reason": str(e)}
+
+
+@app.post("/cameras/{cam_id}/face/stop")
+def cameras_face_stop(cam_id: str):
+    """หยุด main.py process สำหรับกล้องที่ระบุ"""
+    if cam_id not in _CAMERAS:
+        raise HTTPException(status_code=404, detail=f"Camera '{cam_id}' not found")
+
+    proc = _face_processes.get(cam_id)
+    if proc is None or proc.poll() is not None:
+        return {"ok": False, "reason": "not running"}
+
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except _subprocess.TimeoutExpired:
+        proc.kill()
+    return {"ok": True}

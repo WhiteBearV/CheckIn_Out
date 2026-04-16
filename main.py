@@ -125,27 +125,36 @@ def landmarks_68_to_dict(pts) -> dict:
 import json as _json
 
 _LIVE_WRITE_INTERVAL = 1.0    # เขียนทุก N วินาที
-_LIVE_STATE_PATH     = os.path.join(os.path.dirname(__file__), "live_state.json")
+# override ด้วย env FACE_LIVE_STATE_PATH เมื่อ start จาก api.py (multi-camera)
+_LIVE_STATE_PATH = (
+    os.environ.get("FACE_LIVE_STATE_PATH")
+    or os.path.join(os.path.dirname(__file__), "live_state.json")
+)
 
 # ─── Live Frame Writer (สำหรับ Dashboard Camera Stream) ─────────────────────
 # เขียน live_frame.jpg ทุก ~67ms (15fps) เพื่อให้ Dashboard แสดง stream
 # ใช้ atomic rename เพื่อป้องกัน race condition กับ api.py
-_LIVE_FRAME_PATH     = os.path.join(os.path.dirname(__file__), "live_frame.jpg")
+# override ด้วย env FACE_LIVE_FRAME_PATH เมื่อ start จาก api.py (multi-camera)
+_LIVE_FRAME_PATH = (
+    os.environ.get("FACE_LIVE_FRAME_PATH")
+    or os.path.join(os.path.dirname(__file__), "live_frame.jpg")
+)
 _LIVE_FRAME_INTERVAL = 1.0 / 15   # ~15fps
 
-def _write_live_frame(frame_bgr):
+def _write_live_frame(frame_bgr, path=None):
     """เขียน frame พร้อม overlay ทั้งหมดเป็น JPEG สำหรับ Dashboard stream"""
-    tmp = _LIVE_FRAME_PATH + ".tmp"
+    p = path or _LIVE_FRAME_PATH
+    tmp = p + ".tmp"
     try:
         ok, buf = cv2.imencode('.jpg', frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 70])
         if ok:
             with open(tmp, 'wb') as _fh:
                 _fh.write(buf.tobytes())
-            os.replace(tmp, _LIVE_FRAME_PATH)
+            os.replace(tmp, p)
     except Exception:
         pass
 
-def _write_live_state(now_ts: float, session, active: bool):
+def _write_live_state(now_ts: float, session, active: bool, path=None):
     """
     เขียน session state ปัจจุบันลง live_state.json
     ─────────────────────────────────────────────────────────────────
@@ -204,7 +213,8 @@ def _write_live_state(now_ts: float, session, active: bool):
         })
 
     try:
-        with open(_LIVE_STATE_PATH, "w", encoding="utf-8") as _f:
+        p = path or _LIVE_STATE_PATH
+        with open(p, "w", encoding="utf-8") as _f:
             _json.dump({"ts": now_ts, "active": active, "persons": persons_data},
                        _f, ensure_ascii=False)
     except Exception as _e:
@@ -225,8 +235,13 @@ def identify_face(embedding, known_norms: np.ndarray, known_names) -> str:
     return "Unknown"
 
 
-def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
-    """Main loop"""
+def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN",
+               camera_source=None, live_frame_path: str = None, live_state_path: str = None):
+    """Main loop
+    camera_source   — ถ้ากำหนด จะใช้แทน cfg.CAMERA_URL / camera_index
+    live_frame_path — ถ้ากำหนด จะเขียน frame ไปที่ path นี้แทน _LIVE_FRAME_PATH
+    live_state_path — ถ้ากำหนด จะเขียน state ไปที่ path นี้แทน _LIVE_STATE_PATH
+    """
 
     # ─── โหลด face encodings (ArcFace 512d) ───
     if not os.path.exists(cfg.ENCODINGS_FILE):
@@ -272,9 +287,12 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
     print(f"[ARCFACE] InsightFace ready  det_size={cfg.DET_SIZE}")
 
     # ─── เปิดกล้อง ───
-    cam_src = cfg.CAMERA_URL if cfg.CAMERA_URL else camera_index
-    if cfg.CAMERA_URL:
-        print(f"[CAM] IP camera: {cfg.CAMERA_URL}")
+    # ลำดับการใช้ source: parameter > env CAMERA_URL > camera_index
+    cam_src = camera_source if camera_source is not None else (cfg.CAMERA_URL if cfg.CAMERA_URL else camera_index)
+    # แปลง "0", "1" (string จาก env CAMERA_URL) เป็น int เพื่อให้ OpenCV เปิด USB ได้
+    if isinstance(cam_src, str) and cam_src.isdigit():
+        cam_src = int(cam_src)
+    print(f"[CAM] {camera_name} → {cam_src}")
     cam = ThreadedCamera(cam_src)
 
     # ─── MediaPipe Hands ───
@@ -484,7 +502,7 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
                 _imshow(np.hstack([cctv_frame, cctv_panel]))
                 if now_ts - _last_frame_write >= _LIVE_FRAME_INTERVAL:
                     _last_frame_write = now_ts
-                    _write_live_frame(cctv_frame)
+                    _write_live_frame(cctv_frame, path=live_frame_path)
                 key = _waitkey(33) & 0xFF   # ~30fps
             else:
                 # ── Idle mode: แสดงหน้าจอรอ ลด CPU/GPU ──
@@ -494,7 +512,7 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
                 _imshow(np.hstack([frame, idle_panel]))
                 if now_ts - _last_frame_write >= _LIVE_FRAME_INTERVAL:
                     _last_frame_write = now_ts
-                    _write_live_frame(frame)
+                    _write_live_frame(frame, path=live_frame_path)
                 key = _waitkey(500) & 0xFF   # ตรวจ key ทุก 500ms → ลด CPU
             if key == ord("q") or key == 27:
                 break
@@ -675,7 +693,7 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
         # ─── เขียน live frame สำหรับ Dashboard stream ────────────────────────────
         if now_ts - _last_frame_write >= _LIVE_FRAME_INTERVAL:
             _last_frame_write = now_ts
-            _write_live_frame(frame)
+            _write_live_frame(frame, path=live_frame_path)
 
         panel = ui.build_panel(session.persons, session.liveness, frame.shape[0],
                                screen_debug=_screen_debug_display if cfg.TEST_MODE else None)
@@ -684,7 +702,7 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
         # ─── เขียน live state สำหรับ Dashboard (throttle 1 วิ) ────────────────
         if now_ts - _last_state_write >= _LIVE_WRITE_INTERVAL:
             _last_state_write = now_ts
-            _write_live_state(now_ts, session, _active)
+            _write_live_state(now_ts, session, _active, path=live_state_path)
 
         key = _waitkey(1) & 0xFF
         if key == ord("q") or key == 27:
@@ -701,14 +719,57 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN"):
 
 if __name__ == "__main__":
     import time as _time
-    while True:
+
+    _cameras_list = getattr(cfg, "CAMERAS_LIST", None)
+
+    # ── Child process (spawned by multi-camera mode) หรือ Single-Camera ──
+    # - FACE_CAMERA_CHILD=1 → หมายถึงถูก spawn จาก multi-camera __main__ ด้านล่าง
+    # - api.py ก็ตั้ง FACE_CAMERA_CHILD=1 เพื่อป้องกัน recursive spawn
+    if os.environ.get("FACE_CAMERA_CHILD") or not _cameras_list or len(_cameras_list) < 2:
+        cam_name = os.environ.get("FACE_CAM_NAME", "CAM_MAIN")
+        while True:
+            try:
+                run_camera(camera_index=1, camera_name=cam_name)
+                break  # ออกตั้งใจ (q / ESC / TEST_MODE)
+            except KeyboardInterrupt:
+                print("\n[STOP] หยุดโดย Ctrl+C")
+                break
+            except Exception as _err:
+                print(f"\n[CRASH] เกิดข้อผิดพลาด: {_err}")
+                print("[RESTART] รีสตาร์ทใน 3 วินาที...")
+                _time.sleep(3)
+
+    else:
+        # ── Multi-Camera Mode ─────────────────────────────────────────────────
+        # เมื่อรัน python main.py → เปิดกล้องทุกตัวพร้อมกัน (subprocess แยกต่อกล้อง)
+        import subprocess as _sp
+        _base = os.path.dirname(os.path.abspath(__file__))
+        _procs: list[tuple[str, "_sp.Popen"]] = []
+
+        print(f"[MULTI-CAM] เปิด {len(_cameras_list)} กล้องพร้อมกัน")
+        for _cam in _cameras_list:
+            _env = os.environ.copy()
+            _env["FACE_CAMERA_CHILD"]    = "1"               # ป้องกัน recursive spawn
+            _env["FACE_HEADLESS"]        = "1"               # ไม่แสดง GUI (stream ผ่านไฟล์)
+            _env["FACE_ALWAYS_ACTIVE"]   = "1"               # รัน 24/7 ไม่หยุดตาม Active Windows
+            _env["CAMERA_URL"]           = str(_cam["source"])
+            _env["FACE_CAM_NAME"]        = _cam.get("name", _cam["id"])
+            _env["FACE_LIVE_FRAME_PATH"] = os.path.join(_base, f"live_frame_{_cam['id']}.jpg")
+            _env["FACE_LIVE_STATE_PATH"] = os.path.join(_base, f"live_state_{_cam['id']}.json")
+            print(f"[MULTI-CAM]  {_cam['id']} → {_cam['source']}")
+            _p = _sp.Popen([sys.executable, os.path.abspath(__file__)], cwd=_base, env=_env)
+            _procs.append((_cam["id"], _p))
+
+        print("[MULTI-CAM] กด Ctrl+C เพื่อหยุดทุกกล้อง")
         try:
-            run_camera(camera_index=1, camera_name="CAM_MAIN")
-            break  # ออกตั้งใจ (q / ESC / TEST_MODE)
+            for _, _p in _procs:
+                _p.wait()
         except KeyboardInterrupt:
-            print("\n[STOP] หยุดโดย Ctrl+C")
-            break
-        except Exception as _err:
-            print(f"\n[CRASH] เกิดข้อผิดพลาด: {_err}")
-            print("[RESTART] รีสตาร์ทใน 3 วินาที...")
-            _time.sleep(3)
+            print("\n[STOP] หยุดทุกกล้อง...")
+            for _, _p in _procs:
+                _p.terminate()
+            for _, _p in _procs:
+                try:
+                    _p.wait(timeout=5)
+                except Exception:
+                    _p.kill()

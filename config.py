@@ -52,6 +52,17 @@ USB_CAM_HEIGHT        = 720        # เช่น 480, 720, 1080   (None = ไ�
 CAMERA_URL            = os.environ.get("CAMERA_URL", "")   # ตั้งค่าใน .env
 
 # ╔═══════════════════════════════════════════╗
+# ║  Multi-Camera (python main.py)             ║
+# ╚═══════════════════════════════════════════╝
+# เมื่อรัน python main.py → จะเปิดกล้องทุกตัวใน list พร้อมกัน (subprocess แยก)
+# แต่ละกล้องเขียน live_frame_{id}.jpg และ live_state_{id}.json
+# ตั้ง CAMERAS_LIST = [] หรือ None เพื่อรันกล้องเดียวตาม CAMERA_URL
+CAMERAS_LIST = [
+    {"id": "cam1", "name": "กล้อง 1 (Laptop)",    "source": 0},
+    {"id": "cam2", "name": "กล้อง 2 (IP Camera)", "source": "rtsp://admin:@dmin123456@192.168.1.13:554/unicast/c1/s0/live"},
+]
+
+# ╔═══════════════════════════════════════════╗
 # ║  Performance                              ║
 # ╚═══════════════════════════════════════════╝
 DETECT_EVERY_N_FRAMES = 2 #MAX Skip frames between detections

@@ -1,0 +1,180 @@
+════════════════════════════════════════════════════════════════════════
+  รายงานการปฏิบัติงานฝึกประสบการณ์วิชาชีพ
+  วันที่  : พุธที่ 16 เมษายน 2568
+  สัปดาห์ : สัปดาห์ที่ 5
+════════════════════════════════════════════════════════════════════════
+
+■ งานที่ดำเนินการในวันนี้
+────────────────────────────────────────────────────────────────────────
+
+1. เพิ่มระบบ Multi-Camera ใน api.py — รองรับกล้องหลายตัวพร้อมกัน
+   ─────────────────────────────────────────────────────────────────
+   ออกแบบและพัฒนาสถาปัตยกรรมใหม่ให้ api.py รองรับกล้องหลายตัวได้
+   โดยแต่ละกล้องมี MJPEG stream, Face Recognition process และ
+   state file เป็นของตัวเองอิสระ
+
+   - เพิ่ม CAMERAS_CONFIG (list) สำหรับตั้งค่ากล้องทุกตัวในที่เดียว
+     แต่ละรายการมี id, name, source (USB index หรือ RTSP URL)
+   - รองรับ override ผ่าน environment variable (CAMERA1_URL, CAMERA2_URL)
+   - เพิ่มฟังก์ชัน _parse_cam_source() แปลง string จาก env → int
+     เมื่อเป็น USB index หรือคง string ไว้เมื่อเป็น RTSP URL
+
+   REST API endpoints ที่เพิ่มใหม่:
+     GET  /cameras                       — คืนรายการกล้องทั้งหมด
+     GET  /cameras/{id}/stream           — MJPEG stream โดยตรง (ไม่มี overlay)
+     GET  /cameras/{id}/face-stream      — MJPEG stream พร้อม face recognition overlay
+     GET  /cameras/{id}/face/status      — สถานะ process + frame age
+     POST /cameras/{id}/face/start       — start main.py สำหรับกล้องนั้น
+     POST /cameras/{id}/face/stop        — stop main.py สำหรับกล้องนั้น
+
+   - แต่ละกล้องใช้ live_frame_{cam_id}.jpg และ live_state_{cam_id}.json
+     แยกกัน ป้องกัน race condition ระหว่างกล้อง
+   - เพิ่ม helper _live_frame_path_for() และ _live_state_path_for()
+     สร้าง path จาก cam_id อัตโนมัติ
+
+2. อัปเดต /session/live ให้รวมข้อมูลจากทุกกล้อง
+   ─────────────────────────────────────────────────────────────────
+   /session/live เดิมอ่านจาก live_state.json ไฟล์เดียว
+   แก้ให้อ่านจาก live_state_{cam_id}.json ของทุกกล้องแล้วรวม
+   (merge) ผลลัพธ์ โดย:
+   - รวม persons จากทุกกล้อง ไม่ซ้ำ per_id
+   - active = True ถ้ามีกล้องอย่างน้อย 1 ตัวที่ยังรันอยู่
+   - stale = True ถ้าข้อมูลทุกกล้องเก่าเกิน 5 วินาที
+   - fallback ไปที่ live_state.json (legacy) เพื่อ backward compat
+
+3. แก้ไข _open_camera() ให้เสถียรขึ้นสำหรับ USB และ RTSP
+   ─────────────────────────────────────────────────────────────────
+   - USB: ใช้ cv2.CAP_V4L2 บน Linux (เสถียรกว่า default backend)
+     พร้อม fallback เป็น VideoCapture(source) ถ้า V4L2 ไม่พร้อม
+   - RTSP/HTTP: ใช้ cv2.CAP_FFMPEG โดยตรง + TCP transport
+     (ตั้ง rtsp_transport=tcp ลด packet loss)
+   - เพิ่ม timeout จาก 8 → 12 วินาที ให้ IP camera มีเวลา connect มากขึ้น
+
+4. อัปเดต main.py รองรับ per-camera path และ multi-process
+   ─────────────────────────────────────────────────────────────────
+   - run_camera() รับ parameter เพิ่ม 3 ตัว:
+       • camera_source    — override source (แทน cfg.CAMERA_URL)
+       • live_frame_path  — override path เขียน live_frame.jpg
+       • live_state_path  — override path เขียน live_state.json
+   - _write_live_frame() และ _write_live_state() รับ path=None
+     เมื่อกำหนด path จะเขียนไปที่นั้น แทนค่า global default
+   - _LIVE_STATE_PATH และ _LIVE_FRAME_PATH รองรับ override ผ่าน
+     env var FACE_LIVE_STATE_PATH และ FACE_LIVE_FRAME_PATH
+   - __main__ block: ถ้า cfg.CAMERAS_LIST มีกล้อง 2+ ตัว
+     จะ spawn subprocess แยกต่อกล้อง พร้อมตั้ง env FACE_CAMERA_CHILD=1
+     เพื่อป้องกัน recursive spawn
+   - แก้ cam_src: รองรับ string "0" / "1" จาก env ให้แปลงเป็น int
+     ก่อนส่งให้ ThreadedCamera
+
+5. เพิ่ม CAMERAS_LIST ใน config.py
+   ─────────────────────────────────────────────────────────────────
+   - เพิ่ม CAMERAS_LIST = [...] สำหรับ multi-camera mode
+     ปัจจุบันตั้งค่า 2 กล้อง:
+       • cam1 — USB index 0 (Laptop webcam)
+       • cam2 — RTSP IP Camera (rtsp://192.168.1.13:554/...)
+   - ตั้ง CAMERAS_LIST = [] หรือ None เพื่อรันแบบกล้องเดียว (legacy)
+
+6. สร้างหน้า SingleCameraView.vue — ดูกล้องตัวเดียวแบบ Detail
+   ─────────────────────────────────────────────────────────────────
+   สร้างไฟล์ใหม่ dashboard/src/views/SingleCameraView.vue
+   เป็นหน้า dedicated สำหรับดูกล้องแต่ละตัวแบบเต็มรายละเอียด
+
+   - Header bar: ชื่อกล้อง + status badge (LIVE/กำลังเริ่มต้น/ออฟไลน์)
+                 ปุ่ม Start/Stop + ปุ่ม Fullscreen + ปุ่มกลับ
+   - Stream area: แสดง MJPEG face-recognition stream ของกล้องนั้น
+                  Offline state แสดง oval guide + ปุ่มเปิดกล้อง
+                  Info bar แสดง PID, frame age, ประเภทกล้อง
+   - Right panel (Normal mode):
+       • LiveDetection component — สถานะ liveness real-time
+       • สถานะกล้อง — status, ประเภท, frame ล่าสุด, PID
+       • วิธีใช้ — คำแนะนำการใช้งาน
+   - Fullscreen mode: แสดง LiveDetection panel ในโหมด kiosk
+   - Polling สถานะกล้องทุก 2 วินาที (setInterval)
+   - รองรับ keyboard shortcut F สำหรับ toggle fullscreen
+
+7. เพิ่มปุ่ม "ดูหน้าเต็ม" ใน CameraView.vue และอัปเดต Router
+   ─────────────────────────────────────────────────────────────────
+   - เพิ่ม RouterLink ⛶ (top-right overlay) ในแต่ละ camera panel
+     ใน CameraView.vue เพื่อ link ไปยัง SingleCameraView
+   - เพิ่ม route camera-detail ใน router/index.js:
+       path: /camera/:camId → component: SingleCameraView
+     โดยไม่ใส่ meta.label เพื่อไม่ให้แสดงใน AppNav navigation
+
+■ สรุปไฟล์ที่สร้าง / แก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  [ใหม่]  dashboard/src/views/SingleCameraView.vue
+    → หน้า detail กล้องตัวเดียว พร้อม stream, status, LiveDetection
+    → Fullscreen mode (kiosk) + keyboard shortcut F
+    → RouterLink กลับหน้า CameraView
+
+  [แก้ไข] dashboard/src/router/index.js
+    → เพิ่ม import SingleCameraView
+    → เพิ่ม route { path: '/camera/:camId', name: 'camera-detail' }
+
+  [แก้ไข] dashboard/src/views/CameraView.vue
+    → เพิ่ม RouterLink ⛶ "เต็มจอ" บน overlay ของแต่ละ camera panel
+      เพื่อ link ไปยัง /camera/{cam_id}
+
+  [แก้ไข] api.py
+    → เพิ่ม CAMERAS_CONFIG + _CAMERAS dict สำหรับ multi-camera
+    → เพิ่ม _parse_cam_source() แปลง env string → source
+    → เพิ่ม GET /cameras (list)
+    → เพิ่ม GET /cameras/{id}/stream (raw MJPEG)
+    → เพิ่ม GET /cameras/{id}/face-stream (face recognition MJPEG)
+    → เพิ่ม GET /cameras/{id}/face/status
+    → เพิ่ม POST /cameras/{id}/face/start
+    → เพิ่ม POST /cameras/{id}/face/stop
+    → อัปเดต GET /session/live ให้ merge จากทุกกล้อง
+    → อัปเดต _open_camera() ใช้ CAP_V4L2 / CAP_FFMPEG + timeout 12s
+
+  [แก้ไข] main.py
+    → run_camera() รับ camera_source, live_frame_path, live_state_path
+    → _write_live_frame() และ _write_live_state() รับ path= param
+    → _LIVE_STATE_PATH / _LIVE_FRAME_PATH รองรับ env override
+    → __main__: multi-process spawn ต่อกล้องเมื่อ CAMERAS_LIST ≥ 2
+    → แก้ cam_src: string int → int สำหรับ USB index จาก env
+
+  [แก้ไข] config.py
+    → เพิ่ม CAMERAS_LIST สำหรับ multi-camera mode (cam1, cam2)
+
+  [ลบ]    live_state.json
+    → แทนที่ด้วย live_state_cam1.json และ live_state_cam2.json
+      (เขียนโดย main.py แต่ละ subprocess แยกกัน)
+
+  [ใหม่]  live_state_cam1.json, live_state_cam2.json
+    → per-camera state files สำหรับ multi-camera IPC
+
+■ เทคโนโลยีที่ใช้
+────────────────────────────────────────────────────────────────────────
+
+  - Python / subprocess    — spawn process แยกต่อกล้อง
+  - OpenCV (cv2)           — CAP_V4L2 (USB) + CAP_FFMPEG (RTSP)
+  - FastAPI                — REST API + MJPEG StreamingResponse
+  - File-based IPC         — live_state_{id}.json per-camera
+  - Vue 3 (Composition API, <script setup>, RouterLink)
+  - Vue Router             — dynamic route /camera/:camId
+  - TailwindCSS            — Styling + responsive layout
+  - Browser Fullscreen API — requestFullscreen / exitFullscreen
+
+■ ปัญหาที่พบและแนวทางแก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  ปัญหา : USB camera บน Linux บางครั้งเปิดช้าหรือล้มเหลวด้วย default backend
+  แก้ไข : เปลี่ยนมาใช้ cv2.CAP_V4L2 เป็น backend หลักบน Linux
+           เพราะ V4L2 ตรงกับ kernel driver มากกว่า GStreamer/auto
+           พร้อม fallback cv2.VideoCapture(source) กรณี V4L2 ไม่พร้อม
+
+  ปัญหา : แต่ละกล้องใช้ live_state.json ไฟล์เดียวกัน → เขียนทับกัน
+           ทำให้ Dashboard เห็นข้อมูลของกล้องล่าสุดที่เขียนเท่านั้น
+  แก้ไข : แยก path เป็น live_state_{cam_id}.json ต่อกล้อง
+           ส่ง path ลงไปใน run_camera() ผ่าน parameter
+           api.py รวม (merge) ผลลัพธ์จากทุกไฟล์ใน /session/live
+
+  ปัญหา : FACE_CAMERA_CHILD env ป้องกัน recursive spawn
+           เมื่อ api.py เรียก subprocess("python main.py") →
+           main.py __main__ ต้องไม่ spawn อีก
+  แก้ไข : ตรวจ os.environ.get("FACE_CAMERA_CHILD") ก่อน spawn
+           ถ้าตั้งค่าไว้ให้รัน single-camera mode เสมอ
+
+════════════════════════════════════════════════════════════════════════
