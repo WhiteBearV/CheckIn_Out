@@ -8,16 +8,20 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['Sarabun', 'sans-serif'],
+        sans: ['Sarabun', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        mono: ['JetBrains Mono', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'monospace'],
       },
       colors: {
-        brand: {
-          500: '#3b82f6',
-          600: '#2563eb',
-        },
+        void:  '#0f0f0f',
+        cyan:  '#00ffff',
+        brand: '#0007cd',
+      },
+      borderColor: {
+        'mist-10': 'rgba(255,255,255,0.10)',
+        'mist-06': 'rgba(255,255,255,0.06)',
+        'mist-04': 'rgba(255,255,255,0.04)',
       },
     },
   },
   plugins: [],
 }
-

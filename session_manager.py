@@ -181,13 +181,15 @@ class SessionManager:
         print(f"[CHECKOUT] สำเร็จ {count} คน\n{'='*50}\n")
         return count
 
-    def save_snapshots(self, save_root: str = "PicSAVE") -> int:
+    def save_snapshots(self, save_root: str = None) -> int:
         """
         บันทึก snapshot ของทุกคนลง PicSAVE/YYYY/MM/DD/
           - HH-MM-SS_{per_id}_IN.jpg   รูปตอน check-in
           - HH-MM-SS_{per_id}_OUT.jpg  รูปล่าสุดที่เจอ (มีเฉพาะถ้าเจอหลัง check-in)
         ใช้วันที่ check-in (first_seen) เป็นชื่อโฟลเดอร์เสมอ
         """
+        if save_root is None:
+            save_root = cfg.SNAPSHOT_SAVE_ROOT
         saved = 0
         for person in self.persons.values():
             if not person.checked_in:

@@ -21,6 +21,38 @@ export default defineConfig({
         target: 'http://localhost:8001',
         changeOrigin: true,
       },
+      '/state': {
+        target: 'http://localhost:8001',
+        changeOrigin: true,
+      },
+      '/snap': {
+        target: 'http://localhost:8001',
+        changeOrigin: true,
+      },
+      '/window': {
+        target: 'http://localhost:8001',
+        changeOrigin: true,
+      },
+      '/cameras': {
+        target: 'http://localhost:8001',
+        changeOrigin: true,
+      },
+      '/system': {
+        target: 'http://localhost:8001',
+        changeOrigin: true,
+      },
+      '/cache': {
+        target: 'http://localhost:8001',
+        changeOrigin: true,
+      },
+      '/snapfull': {
+        target: 'http://localhost:8001',
+        changeOrigin: true,
+      },
+      '/push': {
+        target: 'http://localhost:8001',
+        changeOrigin: true,
+      },
     },
   },
 })

@@ -1,9 +1,73 @@
-@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* ─────────────────────────────────────────────────────────────────────────────
+   Design Tokens — แก้สีทั้งระบบได้ที่นี่ที่เดียว
+   :root        = โหมดสว่าง (light mode)
+   html.dark    = โหมดมืด  (dark mode)
+───────────────────────────────────────────────────────────────────────────── */
+
+:root {
+  /* ── พื้นหลัง (Backgrounds) ───────────────────────────────────────────── */
+  --c-bg-app:          #f0f0f0;   /* พื้นหลังหลักของทั้งแอป */
+  --c-bg-card:         #ffffff;   /* พื้นหลังการ์ด / กล่อง / sidebar */
+  --c-bg-deep:         #e4e4e4;   /* พื้นหลังเข้มกว่า card เล็กน้อย (พื้นกล้อง offline) */
+  --c-bg-hover:        rgba(0,0,0,0.05);  /* สีตอน hover แถว / ปุ่ม */
+  --c-bg-input:        rgba(0,0,0,0.05);  /* พื้นหลัง input field */
+
+  /* ── เส้นขอบ (Borders) ────────────────────────────────────────────────── */
+  --c-border:          rgba(0,0,0,0.12);  /* เส้นขอบทั่วไป (กล่อง, ตาราง) */
+  --c-border-s:        rgba(0,0,0,0.07);  /* เส้นขอบบางกว่า (แถวย่อย) */
+
+  /* ── ตัวอักษร (Text) ──────────────────────────────────────────────────── */
+  --c-text:            #0a0a0a;           /* ตัวอักษรหลัก (หัวข้อ, ตัวเลข StatCard) */
+  --c-text-2:          rgba(0, 0, 0, 0.829);  /* ตัวอักษรทั่วไป (ชื่อในตาราง, ชื่อกล้อง) */
+  --c-text-3:          rgba(0, 0, 0, 0.705);  /* ตัวอักษรรอง (ตำแหน่ง, หน่วยงาน, nav) */
+  --c-text-4:          rgba(0, 0, 0, 0.541);  /* ตัวอักษรจาง (label เล็ก, timestamp, hint) */
+
+  /* ── สี Accent / Brand (cyan-teal) ───────────────────────────────────── */
+  --c-accent:          #007a7a;           /* สีหลัก (หัวข้อ section, ชื่อใน panel) */
+  --c-accent-bg:       rgba(0,122,122,0.09);   /* พื้นหลังปุ่ม/badge accent */
+  --c-accent-border:   rgba(0,122,122,0.28);   /* ขอบ badge accent */
+
+  /* ── Scrollbar ────────────────────────────────────────────────────────── */
+  --c-scrollbar:       rgba(0,0,0,0.12);
+  --c-scrollbar-hover: rgba(0,0,0,0.22);
+}
+
+/* ─── Dark mode overrides ─────────────────────────────────────────────────── */
+html.dark {
+  /* ── พื้นหลัง ─────────────────────────────────────────────────────────── */
+  --c-bg-app:          #0f0f0f;   /* พื้นหลังหลักของทั้งแอป */
+  --c-bg-card:         #000000;   /* พื้นหลังการ์ด / กล่อง / sidebar */
+  --c-bg-deep:         #000000;   /* พื้นหลังเข้ม (พื้นกล้อง offline) */
+  --c-bg-hover:        rgba(255,255,255,0.03);  /* สีตอน hover */
+  --c-bg-input:        rgba(255,255,255,0.04);  /* พื้นหลัง input */
+
+  /* ── เส้นขอบ ──────────────────────────────────────────────────────────── */
+  --c-border:          rgba(255,255,255,0.08);  /* เส้นขอบทั่วไป */
+  --c-border-s:        rgba(255,255,255,0.04);  /* เส้นขอบบาง */
+
+  /* ── ตัวอักษร ─────────────────────────────────────────────────────────── */
+  --c-text:            #ffffff;             /* ตัวอักษรหลัก */
+  --c-text-2:          rgba(255, 255, 255, 0.808);  /* ตัวอักษรทั่วไป */
+  --c-text-3:          rgba(255, 255, 255, 0.671);  /* ตัวอักษรรอง */
+  --c-text-4:          rgba(255, 255, 255, 0.411);  /* ตัวอักษรจาง */
+
+  /* ── สี Accent ────────────────────────────────────────────────────────── */
+  --c-accent:          #00ffff;             /* สีหลัก cyan */
+  --c-accent-bg:       rgba(0,255,255,0.06);    /* พื้นหลัง badge */
+  --c-accent-border:   rgba(0,255,255,0.18);    /* ขอบ badge */
+
+  /* ── Scrollbar ────────────────────────────────────────────────────────── */
+  --c-scrollbar:       rgba(255,255,255,0.10);
+  --c-scrollbar-hover: rgba(255,255,255,0.18);
+}
+
+/* ─── Base ────────────────────────────────────────────────────────────────── */
 * {
   margin: 0;
   padding: 0;
@@ -11,10 +75,20 @@
 }
 
 body {
-  font-family: 'Sarabun', sans-serif;
+  font-family: 'Sarabun', ui-sans-serif, system-ui, sans-serif;
   min-height: 100vh;
+  background-color: var(--c-bg-app);
+  color: var(--c-text);
+  -webkit-font-smoothing: antialiased;
+  transition: background-color 0.2s, color 0.2s;
 }
 
 #root {
   min-height: 100vh;
 }
+
+/* ─── Scrollbar ───────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--c-scrollbar); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--c-scrollbar-hover); }

@@ -1,30 +1,53 @@
+const accentMap = {
+  green:  '#22c55e',
+  orange: '#f97316',
+  blue:   '#0089ff',
+  purple: '#a855f7',
+}
+
 export default function StatCard({ title, value, subtitle, color, icon }) {
-  const colorMap = {
-    blue:   'bg-blue-500/10 text-blue-500 dark:bg-blue-500/20',
-    green:  'bg-green-500/10 text-green-500 dark:bg-green-500/20',
-    orange: 'bg-orange-500/10 text-orange-500 dark:bg-orange-500/20',
-    purple: 'bg-purple-500/10 text-purple-500 dark:bg-purple-500/20',
-  }
+  const accent = accentMap[color] || accentMap.blue
 
   return (
-    <div className="
-      bg-white dark:bg-slate-800
-      rounded-xl p-5
-      border border-slate-200 dark:border-slate-700
-      flex items-center gap-4
-    ">
-      <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${colorMap[color] || colorMap.blue}`}>
-        {icon}
-      </div>
-      <div className="min-w-0">
-        <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wide truncate">
+    <div
+      className="rounded p-5 flex flex-col gap-4 relative overflow-hidden"
+      style={{
+        background: 'var(--c-bg-card)',
+        border:     '1px solid var(--c-border)',
+        transition: 'background 0.2s',
+      }}
+    >
+      {/* Glow behind icon */}
+      <div
+        className="absolute top-0 right-0 w-32 h-32 pointer-events-none"
+        style={{ background: `radial-gradient(circle at 80% 20%, ${accent}18 0%, transparent 65%)` }}
+      />
+
+      {/* Icon + label */}
+      <div className="flex items-center justify-between relative z-10">
+        <span className="font-mono text-[11px] uppercase tracking-widest"
+          style={{ color: 'var(--c-accent)' }}>
           {title}
-        </p>
-        <p className="text-3xl font-bold text-slate-800 dark:text-white mt-0.5 leading-none">
-          {value ?? '—'}
+        </span>
+        <div
+          className="w-8 h-8 rounded flex items-center justify-center flex-shrink-0"
+          style={{
+            background: `${accent}18`,
+            color:      accent,
+            border:     `1px solid ${accent}30`,
+          }}
+        >
+          {icon && <span className="w-4 h-4 [&>svg]:w-4 [&>svg]:h-4">{icon}</span>}
+        </div>
+      </div>
+
+      {/* Value */}
+      <div className="relative z-10">
+        <p className="font-mono text-4xl leading-none" style={{ color: 'var(--c-text)' }}>
+          {value ?? <span style={{ color: 'var(--c-text-4)' }}>—</span>}
         </p>
         {subtitle && (
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">{subtitle}</p>
+          <p className="text-xs mt-1.5" style={{ color: 'var(--c-text-3)' }}>{subtitle}</p>
         )}
       </div>
     </div>

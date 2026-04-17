@@ -16,10 +16,13 @@ const queryClient = new QueryClient({
 
 function PlaceholderPage({ title }) {
   return (
-    <div className="p-6 flex items-center justify-center h-full">
-      <div className="text-center text-slate-400 dark:text-slate-500">
-        <p className="text-lg font-medium">{title}</p>
-        <p className="text-sm mt-1">Coming soon</p>
+    <div className="p-8 flex items-center justify-center h-full">
+      <div className="text-center">
+        <p className="font-mono text-xs uppercase tracking-widest mb-3"
+          style={{ color: 'var(--c-accent)' }}>
+          Coming Soon
+        </p>
+        <p className="text-xl font-light" style={{ color: 'var(--c-text-2)' }}>{title}</p>
       </div>
     </div>
   )
@@ -27,14 +30,15 @@ function PlaceholderPage({ title }) {
 
 function Layout() {
   return (
-    <div className="flex min-h-screen bg-slate-50 dark:bg-slate-950">
+    <div className="flex min-h-screen" style={{ background: 'var(--c-bg-app)', color: 'var(--c-text)' }}>
       <Sidebar />
       <main className="flex-1 min-w-0 overflow-auto">
         <Routes>
-          <Route path="/live" element={<LiveCam />} />
-          <Route path="/"    element={<Dashboard />} />
-          <Route path="/history" element={<PlaceholderPage title="ประวัติลงเวลา" />} />
-          <Route path="/reports" element={<PlaceholderPage title="รายงาน" />} />
+          <Route path="/"          element={<LiveCam />} />
+          <Route path="/live"      element={<LiveCam />} />
+          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/history"   element={<PlaceholderPage title="ประวัติลงเวลา" />} />
+          <Route path="/reports"   element={<PlaceholderPage title="รายงาน" />} />
         </Routes>
       </main>
     </div>

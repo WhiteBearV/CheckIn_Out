@@ -14,9 +14,17 @@ load_dotenv()
 # ║  ระบบหลัก + ArcFace                        ║
 # ╚═══════════════════════════════════════════╝
 ENCODINGS_FILE        = "encodings.pkl"
+SNAPSHOT_SAVE_ROOT    = "PicSAVE"          # โฟลเดอร์บันทึกรูป check-in/out
 FACE_TOLERANCE        = 0.35      # cosine similarity ขั้นต่ำ (ArcFace ใช้ 0.3-0.4)
 DET_SIZE              = (320, 320)  # ขนาดภาพสำหรับ detection (320=เร็ว, 640=แม่น)
+FACE_CROP_PAD         = 15        # pixel padding รอบใบหน้าตอนตัด crop
 PANEL_WIDTH           = 250
+SCREEN_FALLBACK_W     = 1920      # fallback ถ้า xrandr อ่านไม่ได้
+SCREEN_FALLBACK_H     = 1080
+WINDOWED_W            = 1280      # ขนาดหน้าต่างตอน windowed mode (กด F)
+WINDOWED_H            = 720
+MAIN_WINDOW_W         = 1280      # ขนาดเริ่มต้น main window (multi-cam display)
+MAIN_WINDOW_H         = 760
 
 # ╔═══════════════════════════════════════════╗
 # ║  โหมดทดสอบ                                 ║
@@ -62,20 +70,8 @@ CAMERAS = [
     {
         "id":    "cam1",
         "name":  "CAM_MAIN",
-        "url":   os.environ.get("CAM1", ""),   # ตั้งค่าใน .env  CAM1_URL=rtsp://...
+        "url":   os.environ.get("CAM1", ""),   # ตั้งค่าใน .env  CAM1=rtsp://...
         "flip":  False,
-    },
-    {
-        "id":    "cam2",
-        "name":  "CAM_WEBCAM",
-        "index": int(os.environ.get("CAM2", "1")),
-        "flip":  True,
-    },
-    {
-        "id":    "cam3",
-        "name":  "CAM_PHONE",
-        "index": int(os.environ.get("CAM3", "0")),
-        "flip":  True,
     },
 ]
 
@@ -92,11 +88,17 @@ if _cam_json_path.exists():
 del _cjson, _cpath, _cam_json_path
 
 # ╔═══════════════════════════════════════════╗
+# ║  Server Ports                             ║
+# ╚═══════════════════════════════════════════╝
+STREAM_PORT           = int(os.environ.get("STREAM_PORT", 8001))   # MJPEG + state API
+API_PORT              = int(os.environ.get("API_PORT",    8000))   # FastAPI attendance
+
+# ╔═══════════════════════════════════════════╗
 # ║  Performance                              ║
 # ╚═══════════════════════════════════════════╝
 DETECT_EVERY_N_FRAMES = 2 #MAX Skip frames between detections
 FULLSCREEN            = True
-CV_WINDOW             = True   # True = แสดงหน้าต่าง OpenCV, False = ซ่อน (web-only mode)
+CV_WINDOW             = False   # True = แสดงหน้าต่าง OpenCV, False = ซ่อน (web-only mode)
 ABSENCE_TIMEOUT_SEC   = 15     # วินาที — ไม่เจอใบหน้านานกว่านี้ → reset liveness ต้องสแกนใหม่ (production ใช้ 1800)
 # IP camera ส่งภาพตรง (ไม่กลับซ้าย-ขวา) → ตั้ง False ถ้าใช้ CAMERA_URL
 CAMERA_FLIP           = False
@@ -133,6 +135,7 @@ TEXTURE_ENABLED       = True
 TEXTURE_LBP_MIN       = 3.5
 TEXTURE_LAP_MIN       = 15.0
 TEXTURE_CHROMA_MIN    = 6.0
+TEXTURE_FACE_SIZE     = 64        # resize ก่อนวิเคราะห์ (64 เพียงพอ ลด compute ~44%)
 
 # ╔═══════════════════════════════════════════╗
 # ║  Anti-Spoofing: ด่าน 4 — Screen Border    ║
@@ -165,6 +168,8 @@ CHALLENGE_TIMEOUT     = 8.0      # เพิ่มจาก 6 → 8 เพรา
 CHALLENGE_HOLD_FRAMES = 2
 CHALLENGE_NEAR_FACE   = True
 CHALLENGE_PROXIMITY   = 1.5
+HAND_DETECTION_CONF   = 0.6      # MediaPipe Hands min_detection_confidence
+HAND_TRACKING_CONF    = 0.5      # MediaPipe Hands min_tracking_confidence
 
 # ╔═══════════════════════════════════════════╗
 # ║  Anti-Spoofing: ด่าน 6 — MiniFASNet       ║
@@ -183,6 +188,7 @@ FAS_DETECTOR_BACKEND  = "skip"
 SHOW_LANDMARKS        = False
 SHOW_FPS              = True       # แสดง FPS มุมล่างซ้าย (False = ซ่อน)
 NO_FACE_RESET_SEC     = 5
+SCREEN_DEBUG_EMA_ALPHA = 0.20     # EMA smoothing สำหรับ screen debug HUD (TEST_MODE)
 
 # ╔═══════════════════════════════════════════╗
 # ║  UI: Face Guide Overlay (วงรี)             ║
@@ -262,6 +268,36 @@ class Color:
     FACE_PH       = _hex("#3C3C3C")
     OVAL_DEFAULT  = (210, 210, 210)
 
+
+# ╔═══════════════════════════════════════════╗
+# ║  UI: Camera Management Window             ║
+# ╚═══════════════════════════════════════════╝
+WINDOW_TITLE          = "Face Attendance System"
+CAM_TAB_BAR_H         = 44       # ความสูง tab bar
+CAM_ADD_BTN_W         = 44       # ความกว้างปุ่ม "+"
+CAM_DEL_BTN_W         = 28       # ความกว้างปุ่ม "×" ในแต่ละ tab
+CAM_ADD_FORM_W        = 490      # ขนาด dialog เพิ่มกล้อง
+CAM_ADD_FORM_H        = 310
+CAM_DEL_CONFIRM_W     = 400      # ขนาด dialog ยืนยันลบ
+CAM_DEL_CONFIRM_H     = 165
+
+# ╔═══════════════════════════════════════════╗
+# ║  Keyboard (X11 keycodes)                  ║
+# ╚═══════════════════════════════════════════╝
+KEY_DOWN     = frozenset([9, 65289, 2621440, 65364])   # Tab / ↓
+KEY_UP       = frozenset([65362, 2490368])              # ↑
+KEY_ENTER    = frozenset([13])
+KEY_BS       = frozenset([8, 65288])                    # Backspace
+KEY_CAPSLOCK = 65509                                    # CapsLock (X11)
+KEY_IGNORE   = frozenset([                              # modifier keys
+    65505, 65506,   # Shift L/R
+    65507, 65508,   # Ctrl L/R
+    65513, 65514,   # Alt L/R
+    65515, 65516,   # Super L/R
+])
+KEY_FS       = frozenset([ord('f'), ord('F'),
+                          ord('d'), ord('D'),
+                          3604, 3650])                  # fullscreen toggle (รวมภาษาไทย)
 
 # ╔══════════════════════════════════════════════════════╗
 # ║  Profile Loader — สลับการตั้งค่าได้ง่ายผ่าน argument  ║

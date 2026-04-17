@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ── Local API (api.py) ──────────────────────────────────────────────────────
-LOCAL_API_URL = "http://localhost:8000"
+LOCAL_API_URL = os.environ.get("LOCAL_API_URL", "http://localhost:8000")
 TIMEOUT       = 5  # วินาที
 
 # ── External API (อ่านจาก .env — ห้ามใส่ key ตรงนี้) ───────────────────────

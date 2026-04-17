@@ -1,0 +1,403 @@
+================================================================
+  Face Attendance System — Work Review Report
+================================================================
+  ผู้พัฒนา : นักศึกษาฝึกงาน
+  ระยะเวลา : 18 มีนาคม — 16 เมษายน 2569 (ประมาณ 4 สัปดาห์)
+  Repository: FaceReg
+================================================================
+
+
+1. ภาพรวมโปรเจกต์
+------------------
+ระบบ Face Attendance — บันทึกเวลาเข้า-ออกงานด้วยการจดจำใบหน้า
+ทำงานบน Raspberry Pi 5 และ Linux PC แบบ Real-time
+ไม่ต้องใช้บัตร ไม่ต้องแตะอุปกรณ์
+
+
+2. สิ่งที่พัฒนาตลอด 4 สัปดาห์
+---------------------------------
+
+Version 1–4 (v3 เริ่ม commit) — Foundation
+  - ระบบจดจำใบหน้าเบื้องต้นด้วย OpenCV face detection
+  - ฐานข้อมูล SQLite บันทึกการลงเวลา
+  - UI พื้นฐานด้วย OpenCV overlay
+
+Version 5 — ArcFace (อัพเกรดความแม่นยำครั้งใหญ่)
+  - เปลี่ยนจาก face detection พื้นฐาน → InsightFace + ArcFace 512d
+  - Face embedding เป็น 512-dimensional vector
+  - ความแม่นยำในการจดจำเพิ่มขึ้นมากกว่า 90%
+
+Version 6 — Database Migration
+  - ย้ายฐานข้อมูล (migrate schema)
+  - แก้ GPU bug กับ ONNX Runtime
+
+Version 7 — Anti-Spoofing + Multi-Platform
+  - เพิ่มระบบ Anti-Spoofing 6 ด่าน (ป้องกันการโกงด้วยรูปถ่าย/วีดีโอ)
+  - รองรับ IP Camera (RTSP)
+  - สร้าง Profile System สลับกล้องได้ด้วย argument
+  - สร้าง Windows Version ควบคู่กัน
+  - เพิ่มการตรวจจับจากภาพหน้าจอมือถือด้วย FFT + Canny
+
+Version 8 — Anti-Spoofing Hardening
+  - เพิ่มกลไก Absence Re-Verification
+  - เสริมความแข็งแกร่งให้ FAS (MiniFASNet) model
+  
+
+Version 9 — Security & External API
+  - External Personnel API — ดึงข้อมูลพนักงาน (ชื่อ/ตำแหน่ง/หน่วยงาน)
+    จาก API ภายนอก แทนการเก็บใน database เอง
+  - ลบตาราง employees ออก → ดึง snapshot จาก API ตอนบันทึก
+  - Security Hardening — Admin API Key, HTTPS-ready
+  - FastAPI backend (api.py) พร้อม CRUD endpoints
+
+Version 10 — Raspberry Pi 5 + Multi-Camera + Web UI
+  - Pi5 Snapshot Edition — Lightweight mode สำหรับ Raspberry Pi 5
+  - Multi-camera Support — รัน thread แยกต่อกล้อง, display loop รวม
+  - Web Dashboard (React + FastAPI) แสดง Attendance วันนี้ real-time
+  - Stream Server (stream_server.py) — MJPEG streaming ผ่าน browser
+
+Camera Management System (งานล่าสุด)
+  - GUI Camera Manager ใน OpenCV window — เพิ่ม/ลบกล้องได้โดยตรงผ่านหน้าจอ
+  - cameras.json เป็น config กลาง
+  - URL กล้องเก็บใน .env ไม่โชว์ plaintext
+  - Tab bar update ทันทีไม่ต้อง restart
+
+
+3. ปัญหาหนักที่เจอ (Major Challenges)
+---------------------------------------
+
+[ Problem 1 ] OpenCV ไม่รองรับภาษาไทย
+ระดับความหนัก: สูง
+
+  cv2.putText() ใช้ Hershey font เท่านั้น — ไม่รองรับ Unicode
+  ทำให้ข้อความภาษาไทยทุกตัวแสดงเป็น ??? บนหน้าจอ
+
+  วิธีแก้:
+    เปลี่ยนข้อความ UI ทั้งหมดเป็นภาษาอังกฤษ หรือใช้ Pillow
+    render บน frame แยก
+
+  บทเรียน:
+    OpenCV ไม่ใช่ framework สำหรับ UI สมบูรณ์
+    ต้องเลือก encoding ก่อน design
+
+
+[ Problem 2 ] Anti-Spoofing False Positive บน Wide-Angle Camera
+ระดับความหนัก: สูง
+
+  ด่าน Screen Border Detection ที่ออกแบบมาตรวจกรอบหน้าจอมือถือ
+  ทำให้กล้อง fisheye wide-angle เกิด false positive —
+  ระบบปฏิเสธคนจริงที่ยืนอยู่ใกล้ขอบกรอบ
+
+  วิธีแก้:
+    ปิดด่านนี้ใน config (SCREEN_BORDER_ENABLED = False)
+    และปรับ threshold ต่อ profile กล้อง
+
+  บทเรียน:
+    Anti-spoofing ต้องปรับ threshold ตาม environment
+    ไม่มีค่าที่ใช้ได้กับทุกกล้อง
+
+
+[ Problem 3 ] GPU / ONNX Runtime Conflict บน Raspberry Pi 5
+ระดับความหนัก: สูง
+
+  Pi 5 ไม่มี CUDA — ONNX Runtime พยายามโหลด GPU provider ล้มเหลว
+  ทำให้ระบบ crash หรือช้ามาก ต้อง force CPU execution แต่
+  InsightFace (buffalo_l) หนักเกินสำหรับ CPU inference
+
+  วิธีแก้:
+    สร้าง Pi5 Snapshot Edition — ใช้ buffalo_s (model เล็กกว่า)
+    และจำกัด thread count ให้เหมาะกับ ARM CPU
+
+  บทเรียน:
+    Model ที่ดีบน workstation ไม่ได้ดีบน edge device เสมอ
+    ต้องมี profile แยก
+
+
+[ Problem 4 ] External API Integration — Personnel Snapshot
+ระดับความหนัก: ปานกลาง–สูง
+
+  ระบบเดิมเก็บข้อมูลพนักงาน (ชื่อ/ตำแหน่ง) ใน database ตัวเอง
+  ซึ่งอาจซ้ำซ้อนและ out-of-sync กับระบบ HR กลาง
+  ต้องย้ายมาดึง real-time แต่ถ้า API ดับระหว่าง check-in จะเกิดปัญหา
+
+  วิธีแก้:
+    ดึงข้อมูลพนักงาน ณ เวลาที่ลงเวลา แล้ว snapshot เก็บลงใน
+    attendance log โดยตรง (denormalize) — ทำให้ record สมบูรณ์
+    แม้ API จะดับภายหลัง
+
+  บทเรียน:
+    ในระบบ Audit Log ให้ denormalize ข้อมูล ณ เวลาที่เกิด event
+    อย่า reference FK ที่อาจเปลี่ยนได้
+
+
+[ Problem 5 ] Multi-Camera Thread Synchronization
+ระดับความหนัก: ปานกลาง
+
+  เมื่อรันหลายกล้องพร้อมกัน แต่ละ thread อ่านกล้องของตัวเอง
+  แต่ต้องนำ frame มาแสดงผลในหน้าต่างเดียวกัน
+  ทำให้เกิด race condition และ panel cache desync
+
+  วิธีแก้:
+    แยก thread อ่านกล้อง (producer) ออกจาก display loop (consumer)
+    ผ่าน frame buffer, lock panel cache ต่อกล้อง
+
+  บทเรียน:
+    GUI ต้องรันใน thread เดียว (main thread) เสมอ
+    ห้ามให้ worker thread แตะ UI โดยตรง
+
+
+[ Problem 6 ] CapsLock ไม่ทำงานใน OpenCV บน Linux
+ระดับความหนัก: ปานกลาง
+
+  cv2.waitKeyEx() บน Linux คืน raw keycode โดยไม่ apply state ของ
+  CapsLock — กดตัวพิมพ์ใหญ่ได้แค่ Shift แต่ CapsLock ไม่มีผล
+  ทำให้พิมพ์ชื่อกล้อง เช่น CAM_MAIN ไม่ได้
+
+  วิธีแก้:
+    Track state CapsLock เองใน dict (_caps = {"lock": False})
+    รับ keycode 65509 แล้ว toggle — convert a-z → A-Z
+    เมื่อ CapsLock เปิดอยู่
+
+  บทเรียน:
+    OpenCV ไม่ใช่ input framework
+    ต้อง implement keyboard state machine เอง
+
+
+4. Flow การทำงานของโปรแกรม
+-----------------------------
+
+  ─── Startup ──────────────────────────────────────────────────
+
+  [1] python main.py (หรือ python main.py <profile>)
+       │
+       ├─ โหลด config.py / profile ที่ระบุ
+       ├─ _ensure_nvidia_libs() → ตั้ง LD_LIBRARY_PATH ให้ ONNX Runtime ใช้ GPU
+       ├─ โหลด encodings.pkl (face embeddings ที่ encode ไว้แล้ว)
+       ├─ โหลด cameras.json → รายการกล้องทั้งหมด
+       ├─ resolve $ENV_VAR ใน URL → ดึงค่าจริงจาก .env
+       └─ สร้าง thread 1 ต่อ 1 กล้อง → เริ่ม run_camera()
+
+  ─── Per-Camera Thread Loop (run_camera) ──────────────────────
+
+  [2] ThreadedCamera.read() → อ่าน frame จากกล้อง (USB / RTSP)
+       │
+       ├─ ตรวจว่าอยู่ใน Active Window (ช่วงเวลาที่กำหนดใน config)
+       │   ├─ ถ้าไม่ใช่ช่วงเวลา → แสดง idle screen รอ
+       │   └─ ถ้าใช่ → ดำเนินการต่อ
+       │
+       ├─ InsightFace detect & embed
+       │   ├─ ตรวจจับใบหน้าทุกหน้าในเฟรม
+       │   ├─ สร้าง 512-dimensional ArcFace embedding
+       │   └─ identify_face() → cosine similarity กับ encodings.pkl
+       │       ├─ similarity >= FACE_TOLERANCE → ระบุตัวตนได้ (per_id)
+       │       └─ similarity < threshold → "Unknown"
+       │
+       ├─ SessionManager.get_or_create(per_id)
+       │   ├─ ครั้งแรกที่เจอ per_id → สร้าง PersonInfo + ดึงข้อมูลจาก Personnel API
+       │   └─ เจอซ้ำ → อัปเดต last_detected timestamp
+       │
+       └─ LivenessEngine.check() → Anti-Spoofing Pipeline (ต่อด้านล่าง)
+
+  ─── Anti-Spoofing Pipeline (6 ด่าน) ──────────────────────────
+
+  [3] ด่าน 1: Landmark Depth
+       จมูกต้องยื่นออกจากระนาบหน้าตามสัดส่วน 3D
+       (หน้าจริง > 0.18, รูปถ่ายแบน < 0.18)
+
+       ด่าน 2: Micro-Motion
+       ติดตาม center point ของใบหน้า — ต้องขยับเล็กน้อยภายใน N เฟรม
+       (ป้องกันรูปนิ่ง)
+
+       ด่าน 2.5: Blink Detection
+       ตรวจ Eye Aspect Ratio (EAR) จาก 68-point landmark
+       ต้องกระพริบตาอย่างน้อย BLINK_MIN ครั้ง
+
+       ด่าน 3: Texture Analysis
+       LBP (Local Binary Pattern) + Laplacian + Chroma
+       ผิวหนังจริงมี texture ต่างจากหน้าจอ
+
+       ด่าน 4: Screen Border Detection
+       FFT + Canny ตรวจกรอบหน้าจอ/ขอบมือถือ
+       (ปิดอยู่สำหรับกล้อง wide-angle)
+
+       ด่าน 5: Finger Challenge
+       MediaPipe Hands สุ่มให้ชูนิ้ว 2 ชุด (เช่น "Show 3 fingers")
+       ต้องทำได้ถูกต้องและถือค้างไว้ CHALLENGE_HOLD เฟรม
+
+       ด่าน 6: MiniFASNet (FAS)
+       Deep learning model ตรวจ spoof โดยตรง
+       ต้องได้ real_count >= FAS_REAL_FRAMES ติดต่อกัน
+
+  ─── Check-In / Check-Out ──────────────────────────────────────
+
+  [4] ผ่านครบทุกด่าน → lv.confirmed = True
+       │
+       ├─ SessionManager.try_checkin()
+       │   ├─ POST /attendance (status=IN) ไปที่ api.py
+       │   ├─ Snapshot ข้อมูลพนักงาน (ชื่อ/ตำแหน่ง/หน่วยงาน) ลงใน record
+       │   └─ person.checked_in = True
+       │
+       ├─ หากเจอใบหน้าซ้ำหลัง check-in → confirm_presence() อัปเดต last_seen
+       │
+       ├─ Absence Timeout: ถ้าไม่เจอใบหน้านาน > ABSENCE_TIMEOUT_SEC
+       │   → reset liveness → ต้องสแกนใหม่ (re-verify)
+       │
+       └─ ถึง CHECKOUT_TIME → do_checkout() → POST /attendance (status=OUT)
+
+  ─── Display & UI ──────────────────────────────────────────────
+
+  [5] Worker thread push frame → _disp_slot (single-slot buffer)
+       │
+       ├─ Main thread อ่าน frame จาก buffer → cv2.imshow()
+       ├─ วาด face box, liveness progress, oval guide, panel ขวา
+       ├─ Tab bar บน — สลับกล้องได้ด้วยการคลิก
+       ├─ ปุ่ม + (เพิ่มกล้อง) / × (ลบกล้อง) — บันทึกลง cameras.json
+       └─ stream_server push frame → MJPEG stream (port 8001)
+          ให้ Web Dashboard และ browser ดูได้ผ่าน network
+
+  ─── Web Layer ─────────────────────────────────────────────────
+
+  [6] api.py (port 8000) — FastAPI
+       GET  /attendance/today  → รายการลงเวลาวันนี้ (ใช้โดย Dashboard)
+       POST /attendance        → บันทึก IN/OUT (ใช้โดย session_manager)
+       PUT  /attendance/{id}   → แก้ไข record (Admin only)
+       DELETE /attendance/{id} → ลบ record (Admin only)
+
+      stream_server.py (port 8001) — MJPEG + Admin
+       GET  /stream/{cam_id}   → MJPEG stream ของกล้องนั้น
+       GET  /admin             → หน้า Camera Management SPA
+       CRUD /cameras/config    → จัดการ cameras.json ผ่าน browser
+
+
+5. ขั้นตอนการทดสอบระบบ
+-------------------------
+
+  ─── Setup ก่อนทดสอบ ──────────────────────────────────────────
+
+  [ ] 1. encode_faces_arcface.py
+         วางรูปพนักงานใน known_faces/<per_id>/*.jpg
+         รัน: python encode_faces_arcface.py
+         ผลลัพธ์: encodings.pkl
+
+  [ ] 2. ตรวจสอบ .env มีค่าครบ
+         CAM1=rtsp://...    (URL กล้อง IP)
+         ADMIN_API_KEY=...  (สำหรับ PUT/DELETE endpoint)
+         PERSONNEL_API_URL=...
+
+  [ ] 3. ตรวจสอบ cameras.json ถูกต้อง
+         id, name, url ($CAM1 หรือ index), flip
+
+  ─── ทดสอบ Face Recognition ────────────────────────────────────
+
+  [ ] 4. รัน: python main.py
+         ยืนให้กล้องเห็นใบหน้า — ต้องแสดง bounding box สีเขียว
+         และชื่อ/per_id ถูกต้องด้านบน
+
+  [ ] 5. ทดสอบกับใบหน้าที่ไม่ได้ลงทะเบียน
+         ต้องแสดง "Unknown" — ไม่บันทึก attendance
+
+  [ ] 6. ทดสอบระยะ/มุม
+         เดินเข้า-ออก, หันหน้าเอียง, ใส่แว่น
+         ระบบต้องจดจำได้ stable ไม่กระพือ
+
+  ─── ทดสอบ Anti-Spoofing ───────────────────────────────────────
+
+  [ ] 7. ทดสอบด้วยรูปถ่าย (กระดาษ / จอมือถือ)
+         ระบบต้องปฏิเสธ — liveness bar ต้องไม่เต็ม
+
+  [ ] 8. ทดสอบ Finger Challenge
+         ระบบสุ่มจำนวนนิ้ว — ชูถูกต้องแล้วเปลี่ยนชุด
+         ต้องผ่านครบ CHALLENGE_COUNT รอบ
+
+  [ ] 9. ทดสอบ Absence Reset
+         check-in แล้วออกไปนอกกล้อง > ABSENCE_TIMEOUT_SEC วินาที
+         กลับมาต้องสแกนใหม่ — log แสดง [RE-VERIFY]
+
+  ─── ทดสอบ Database / API ──────────────────────────────────────
+
+  [ ] 10. เปิด: http://localhost:8000/attendance/today
+          หลัง check-in ต้องเห็น record ใหม่พร้อมชื่อ/หน่วยงาน
+
+  [ ] 11. ตรวจสอบ duplicate prevention
+          ยืนหน้ากล้องนานๆ — บันทึก IN แค่ครั้งเดียวต่อวัน
+
+  [ ] 12. ทดสอบ OUT
+          ถึงเวลา CHECKOUT_TIME → log แสดง [CHECKOUT]
+          /attendance/today ต้องมีทั้ง IN และ OUT
+
+  ─── ทดสอบ Multi-Camera ────────────────────────────────────────
+
+  [ ] 13. เปิดกล้อง 2 ตัวพร้อมกัน
+          คลิก tab สลับกล้อง — frame ต้องเปลี่ยนถูกต้อง
+
+  [ ] 14. ทดสอบเพิ่มกล้องผ่าน GUI (ปุ่ม +)
+          กรอกชื่อ + USB index หรือ URL
+          tab ใหม่ต้องปรากฏทันที, cameras.json ต้องอัปเดต
+
+  [ ] 15. ทดสอบลบกล้อง (ปุ่ม ×)
+          กล้องสุดท้ายต้องลบไม่ได้
+          หลังลบ tab ต้องหายทันที
+
+  ─── ทดสอบ Web Stream ──────────────────────────────────────────
+
+  [ ] 16. เปิด: http://localhost:8001/stream/cam1
+          ต้องเห็น video stream ใน browser
+
+  [ ] 17. เปิด: http://localhost:8001/admin
+          ต้องจัดการกล้องได้ผ่าน browser (เพิ่ม/แก้ไข/ลบ)
+
+  ─── ทดสอบบน Raspberry Pi 5 ───────────────────────────────────
+
+  [ ] 18. รัน: python main.py pi5
+          CPU usage ต้องไม่เกิน 80% ต่อเนื่อง
+          inference latency < 500ms ต่อ frame
+
+  [ ] 19. ทดสอบ RTSP IP Camera
+          ตัดการเชื่อมต่อ network แล้วต่อใหม่
+          ThreadedCamera ต้อง reconnect อัตโนมัติ
+
+
+6. สถาปัตยกรรมสุดท้าย (Current Architecture)
+----------------------------------------------
+
+  +----------------------------------------------------------+
+  |                       main.py                            |
+  |  Thread/cam-1 --+                                        |
+  |  Thread/cam-2 --+--> Frame Buffer --> Display Loop       |
+  |  Thread/cam-N --+          |              |              |
+  |                        OpenCV UI     Camera Mgmt GUI     |
+  +----------------------------+-----------------------------|
+                               |
+             +-----------------+-----------------+
+             |         api.py  (port 8000)        |
+             |    FastAPI Attendance CRUD          |
+             +-----------------+-----------------+
+                               |
+             +-----------------+-----------------+
+             |  stream_server.py  (port 8001)     |
+             |  MJPEG Stream + Admin UI            |
+             +-------------------------------------+
+
+  Component          Technology
+  -----------------  -----------------------------------------
+  Face Recognition   InsightFace (buffalo_l/s), ArcFace 512d
+  Anti-Spoofing      MediaPipe Hands + MiniFASNet +
+                     Landmark Depth + LBP Texture
+  Camera             ThreadedCamera (USB index / RTSP)
+  Database           PostgreSQL via db.py
+  Backend API        FastAPI (uvicorn)
+  Web Dashboard      React + Vite + Tailwind CSS
+  Config             cameras.json + .env (URL secrets)
+
+
+5. สิ่งที่ต่อยอดได้ในอนาคต
+-----------------------------
+  1. ONNX model quantization — INT8 สำหรับ Pi 5 เพิ่มความเร็ว 2-3x
+  2. WebSocket แทน polling ใน Dashboard — Real-time ไม่ต้อง refresh
+  3. Multi-face tracking — ใช้ deep SORT ติดตามหลายคนพร้อมกัน
+  4. Offline-first — Queue attendance event ถ้า API ดับ แล้วส่งทีหลัง
+
+================================================================
+  Report นี้ครอบคลุมงานพัฒนาตั้งแต่ Version 1 ถึงงานล่าสุด
+  (Camera Management GUI) รวมระยะเวลาประมาณ 4 สัปดาห์
+================================================================

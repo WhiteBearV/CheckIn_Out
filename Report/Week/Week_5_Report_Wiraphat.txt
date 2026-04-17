@@ -1,0 +1,57 @@
+นายวีรภัทร สาลีผล  6610301006                                        2026-04-17
+
+รายงานการฝึกงาน
+
+ประจำสัปดาห์ที่ 5  16 เมษายน 2569 ถึง 17 เมษายน 2569
+(หมายเหตุ: วันที่ 13–15 เมษายน 2569 เป็นวันหยุดเทศกาลสงกรานต์)
+
+        วันที่ 16 เมษายน 2569 เข้าร่วมการประชุมสภากาแฟในช่วงเช้า เพื่อฟังการรายงานความคืบหน้าของงานที่ปฏิบัติในช่วงที่ผ่านมา จากนั้นเดินทางไปประจำกองการศึกษา วิจัย และพัฒนา และลงมือพัฒนาโปรแกรมระบบบันทึกเวลาเข้างาน–ออกงานด้วยการจดจำใบหน้าต่อ โดยที่ในวันนี้ดำเนินการพัฒนาระบบจัดการกล้องแบบ In-App ผ่านหน้าต่าง OpenCV โดยไม่จำเป็นต้องแก้ไขไฟล์ config.py หรือรีสตาร์ทโปรแกรม ผู้ใช้งานสามารถกดปุ่ม "+" บน Tab Bar เพื่อเปิดฟอร์มเพิ่มกล้องใหม่ และกดปุ่ม "×" บน Tab ของกล้องแต่ละตัวเพื่อลบออกจากระบบได้ทันที
+
+        โดยระบบได้ออกแบบให้ไฟล์ cameras.json ทำหน้าที่เป็น Single Source of Truth สำหรับการกำหนดค่ากล้องทั้งหมด หากมีไฟล์นี้อยู่ ระบบจะโหลดค่าจากไฟล์นี้แทนค่าที่กำหนดใน config.py โดยอัตโนมัติตั้งแต่เริ่มต้น นอกจากนี้ยังมีการผสานการทำงานกับไฟล์ .env สำหรับ IP Camera โดย URL ของกล้อง เช่น rtsp://... จะถูกบันทึกในรูปแบบอ้างอิงตัวแปร ($VAR_NAME) แทนการจัดเก็บ URL ตรงๆ เพื่อความปลอดภัย รวมถึงมีการเพิ่มการติดตาม CapsLock State ด้วยตนเองผ่าน keycode 65509 เนื่องจาก OpenCV บนระบบปฏิบัติการ Linux ไม่มี API สำหรับอ่านสถานะ Caps Lock โดยตรง
+
+        นอกจากนี้ได้เพิ่มฟังก์ชัน _do_refresh_cameras() ที่ผูกกับปุ่ม R บนแป้นพิมพ์ เพื่อแก้ปัญหาที่หลังจากเพิ่มกล้องใหม่แล้ว Tab ขึ้นมาแสดงแต่กล้องยังอยู่ในสถานะ Offline เนื่องจากยังไม่มี Thread รันอยู่ ฟังก์ชันดังกล่าวจะตรวจสอบว่ามีกล้องตัวใดที่ยังไม่มี Thread ที่ทำงานอยู่ แล้ว Spawn Daemon Thread ใหม่เฉพาะกล้องที่ขาดหายไปโดยไม่กระทบการทำงานของกล้องที่รันอยู่แล้ว
+
+        ช่วงบ่ายได้ดำเนินการออกแบบหน้า Frontend ใหม่ทั้งหมดสำหรับหน้า LiveCam ให้เป็นแบบ Command Center ในรูปแบบ Dark UI ประกอบด้วยสองส่วนหลัก ได้แก่ ส่วนซ้ายเป็น Camera Grid แสดง Video Feed ของกล้องทุกตัวพร้อมสถานะ Online/Offline และส่วนขวาเป็น Panel แสดงรายชื่อบุคคลที่ระบบตรวจจับได้ขณะนั้น และส่วนด้านล่างเป็นสถิติรายวัน ได้แก่ StatCard 4 ใบ, HourlyChart แสดง Check-in รายชั่วโมงในรูปแบบ SVG Bar Chart, DeptChart แสดงสัดส่วน Check-in แยกตามหน่วยงาน, TodayCard รายชื่อผู้ที่ Check-in วันนี้ และ AttendanceTable ตารางบันทึกการเข้างานครบถ้วน พร้อมทั้งปรับ vite.config.js เพื่อเพิ่ม Proxy Rule สำหรับ Endpoint ต่างๆ ได้แก่ /cameras, /stream, /state, /snap ไปยัง stream_server.py ที่ Port 8001 และ /attendance ไปยัง api.py ที่ Port 8000 รวมถึงเพิ่ม ErrorBoundary Component ใน main.jsx เพื่อให้แสดงข้อความ Error ที่อ่านได้แทนหน้าขาวว่างเปล่า และได้แก้ไข Bug ที่ fetchCameras() ส่งคืน Object รูปแบบ {"cameras": [...]} แทนที่จะเป็น Array ตรงๆ ทำให้ cameras.forEach() เกิด TypeError
+
+        ช่วงบ่ายได้รายงานความคืบหน้าของงานให้ท่านผู้อำนวยการกองทราบ
+
+        วันที่ 17 เมษายน 2569 เข้าร่วมการประชุมสภากาแฟในช่วงเช้า เพื่อฟังการรายงานความคืบหน้าของงานที่ปฏิบัติในช่วงที่ผ่านมา จากนั้นเดินทางไปประจำกองการศึกษา วิจัย และพัฒนา และลงมือพัฒนาโปรแกรมระบบบันทึกเวลาเข้างาน–ออกงานด้วยการจดจำใบหน้าต่อ โดยที่ในวันนี้ดำเนินการพัฒนาระบบควบคุมการเริ่มและหยุดทำงานของโปรแกรมผ่านหน้าเว็บ เพื่อให้ผู้ใช้งานสามารถกดปุ่ม Start, Stop และ Clear Cache จากหน้าเว็บได้โดยตรง โดยไม่จำเป็นต้องพิมพ์คำสั่งที่ Terminal
+
+        ขั้นแรกได้ติดตั้ง Package concurrently และปรับแก้ package.json เพื่อให้คำสั่ง npm run dev สามารถเปิดทั้ง stream_server.py และ Vite Development Server พร้อมกันในคำสั่งเดียว ในระหว่างดำเนินการพบปัญหา npm install ทำการอัปเกรด Vite จากเวอร์ชัน 5.4.10 เป็น 8.0.8 โดยอัตโนมัติ ซึ่งทำให้เกิดความขัดแย้งกับ @vitejs/plugin-react เวอร์ชัน 4.7.0 ที่รองรับเฉพาะ Vite เวอร์ชัน 4 ถึง 7 เท่านั้น จึงแก้ไขโดยกำหนดเวอร์ชัน Vite ตายตัวที่ "5.4.10" ใน package.json แล้วรัน npm install --legacy-peer-deps ใหม่
+
+        หลังจากนั้นในระหว่างการ Debug พบปัญหาซ้อนกันหลายชั้นเมื่อกดปุ่ม Start แล้วระบบไม่ตอบสนอง โดยพบปัญหาแรกคือเมื่อใช้วิธี Spawn Subprocess จาก /system/start แล้ว main.py subprocess เรียกใช้ stream_server.push_frame() ซึ่งเขียนข้อมูลลง In-Memory Buffer ของ Subprocess ตัวเอง ไม่ใช่ Buffer ของ Parent Process ที่เว็บ Frontend กำลังอ่านอยู่ ทำให้หน้าเว็บแสดงผลเป็น Stream ว่างเสมอ จึงเปลี่ยนแนวทางเป็นการ Import main.py แบบ In-Process เพื่อใช้ Buffer ร่วมกัน แต่กลับพบปัญหาใหม่คือ _start_fn ยังคงเป็น None หลัง Import เสร็จ เนื่องจากเมื่อรัน python stream_server.py โดยตรง Module จะลงทะเบียนใน sys.modules ภายใต้ชื่อ '__main__' ไม่ใช่ 'stream_server' ทำให้เมื่อ main.py ทำ import stream_server Python ไม่พบใน Cache และสร้าง Instance ใหม่ขึ้นมา ส่งผลให้ register_lifecycle() ไปเซ็ต _start_fn ใน Instance ที่ผิด จึงแก้ไขโดยเพิ่ม sys.modules['stream_server'] = sys.modules['__main__'] ก่อน Import
+
+        ต่อมาพบปัญหาเพิ่มเติมคือ npm run dev รันจาก Directory front_end/ ทำให้ Working Directory ไม่ถูกต้อง เมื่อ main.py พยายามค้นหาไฟล์ encodings.pkl ด้วย Path แบบ Relative จึงหาไม่พบและเกิด FileNotFoundError แก้ไขโดยเพิ่ม os.chdir(_ROOT) ก่อน Import และพบปัญหาความขัดแย้งของ CUDA Library ที่ mediapipe โหลด cuBLAS เวอร์ชันหนึ่งมาก่อน แล้ว ONNX Runtime พยายามโหลด cuBLAS อีกเวอร์ชันจาก Virtual Environment ทำให้เกิด Symbol Conflict และโปรแกรม Abort พร้อม Error ว่า "Invalid handle. Cannot load symbol cublasLtCreate"
+
+        เพื่อแก้ไขปัญหา CUDA ได้ตรวจสอบ Branch deawVersion ที่เพื่อนร่วมทีมพัฒนาไว้ และพบแนวทางการแก้ปัญหาการแชร์ Frame ข้าม Process ที่เรียบง่ายกว่า โดยให้ main.py Subprocess เขียน Frame เป็น JPEG ลงไฟล์ live_frame_{cam_id}.jpg ทุก 67 มิลลิวินาที แทนการ Push ลง In-Memory Buffer จากนั้น stream_server.py จะอ่านไฟล์นั้นและ Serve เป็น MJPEG Stream ซึ่งไม่มีปัญหาการแชร์ Buffer ข้าม Process เลย จึงนำแนวทางนี้มาปรับใช้กับโปรเจกต์โดยเพิ่มฟังก์ชัน _write_live_frame(), _write_live_state(), _write_live_snap() และ _write_live_snapfull() ใน main.py และเพิ่มตัวแปรสภาพแวดล้อม FACE_HEADLESS=1 สำหรับระบุโหมด Headless รวมถึง FACE_ALWAYS_ACTIVE=1 เพื่อข้ามการตรวจสอบ Active Windows Scheduler และปรับแก้ stream_server.py ให้ Endpoint ทั้งหมดรองรับการอ่านจากไฟล์ก่อน แล้ว Fallback มายัง In-Memory Buffer
+
+        สาเหตุสุดท้ายของ CUDA Crash แม้ใช้วิธี Subprocess แล้วก็ตาม พบว่าเกิดจากฟังก์ชัน _ensure_nvidia_libs() ที่ถูก Define ไว้ใน main.py ตั้งแต่แรก แต่ไม่เคยถูกเรียกใช้ใน __main__ Block ฟังก์ชันนี้มีหน้าที่ตั้งค่า LD_LIBRARY_PATH ให้ชี้ไปยัง NVIDIA Libraries ของ Virtual Environment ก่อน แล้ว Re-Execute Script ใหม่ผ่าน os.execv() เพื่อให้ทั้ง mediapipe และ ONNX Runtime โหลด cuBLAS จาก Virtual Environment เดียวกัน จึงแก้ไขโดยเพิ่มการเรียก _ensure_nvidia_libs() เป็นบรรทัดแรกใน __main__ Block พร้อมทั้งเพิ่มการตรวจสอบ FACE_HEADLESS ใน __main__ เพื่อข้ามการเรียก stream_server.start() เมื่อรันในโหมด Headless ป้องกันปัญหา Port 8001 ชนกัน
+
+ปัญหาและอุปสรรค์ที่พบ
+
+  - หลังเพิ่มกล้องใหม่ผ่าน GUI แล้ว Tab แสดงขึ้นมาแต่กล้องยังอยู่ในสถานะ Offline เนื่องจากยังไม่มี Thread รันอยู่ ต้องรีสตาร์ทโปรแกรมก่อน
+  - OpenCV บน Linux ไม่มี API สำหรับอ่านสถานะ CapsLock ทำให้ผู้ใช้ไม่สามารถพิมพ์ตัวพิมพ์ใหญ่ในฟอร์มเพิ่มกล้องได้
+  - หน้าเว็บแสดงเป็นหน้าขาวว่างเปล่าเมื่อเกิด Error ทำให้ไม่สามารถ Debug ได้
+  - fetchCameras() ส่งคืน Object รูปแบบ {"cameras": [...]} แทนที่จะเป็น Array โดยตรง ทำให้ cameras.forEach() เกิด TypeError
+  - npm install อัปเกรด Vite จากเวอร์ชัน 5 เป็น 8 โดยอัตโนมัติ ทำให้เกิดความขัดแย้งกับ Plugin ที่รองรับเฉพาะเวอร์ชัน 4 ถึง 7
+  - เมื่อ Spawn main.py เป็น Subprocess แล้ว Frame Buffer อยู่คนละ Process ทำให้หน้าเว็บรับ Stream ไม่ได้
+  - การ Import main.py แบบ In-Process ทำให้เกิด Python Module Naming Conflict ระหว่าง __main__ และ stream_server ทำให้ _start_fn ยังคงเป็น None
+  - npm run dev รันจาก Directory front_end/ ทำให้ Working Directory ผิด ไม่พบไฟล์ encodings.pkl
+  - CUDA Library Conflict ระหว่าง mediapipe และ ONNX Runtime (cublasLtCreate) ทำให้โปรแกรม Crash ทั้งในโหมด In-Process และ Subprocess
+
+แนวทางการแก้ปัญหาดังกล่าว แก้ไขได้โดย
+
+  - เพิ่มฟังก์ชัน _do_refresh_cameras() ที่กด R เพื่อตรวจสอบ Thread ที่ยังไม่ทำงานและ Spawn Thread ใหม่เฉพาะกล้องที่ขาดหายไปโดยไม่ Restart ทั้งระบบ
+  - ติดตาม CapsLock State ด้วยตนเองโดยใช้ Dictionary แยกต่างหากและ Toggle เมื่อรับ keycode 65509 จาก waitKeyEx()
+  - เพิ่ม ErrorBoundary Class Component ใน main.jsx เพื่อ Catch React Render Errors และแสดงข้อความ Error ที่อ่านได้แทนหน้าขาว
+  - แก้ไข fetchCameras() ให้ตรวจสอบรูปแบบ Response และดึง Property cameras ออกมาเมื่อ Response เป็น Object
+  - กำหนดเวอร์ชัน Vite ตายตัวที่ "5.4.10" ใน package.json และรัน npm install --legacy-peer-deps
+  - นำ File-based Frame Sharing Approach จาก deawVersion มาปรับใช้ โดยให้ main.py เขียน Frame เป็น JPEG ลงไฟล์ live_frame_{cam_id}.jpg แทนการ Push ลง In-Memory Buffer
+  - เพิ่ม sys.modules['stream_server'] = sys.modules['__main__'] ก่อน Import เพื่อแก้ Module Naming Conflict
+  - เพิ่ม os.chdir(_ROOT) ก่อน Import และเพิ่มการตรวจสอบ FACE_HEADLESS ใน __main__ เพื่อข้าม stream_server.start()
+  - เรียก _ensure_nvidia_libs() เป็นบรรทัดแรกใน __main__ Block เพื่อ Re-Execute Script ด้วย LD_LIBRARY_PATH ที่ถูกต้อง ให้ทั้ง mediapipe และ ONNX Runtime ใช้ cuBLAS จาก Virtual Environment เดียวกัน
+
+
+                              ลงชื่อผู้ควบคุมการฝึกงาน.........................................................
+                                              (.......................................................)
+                                               วันที่.........................................................

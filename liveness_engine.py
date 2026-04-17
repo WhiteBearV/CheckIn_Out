@@ -253,11 +253,9 @@ class BlinkDetector:
 class TextureAnalyzer:
     """ตรวจ micro-texture ผิวหนัง — จอมือถือมี pixel pattern ต่างจากหน้าจริง"""
 
-    FACE_SIZE = 64   # resize ให้คงที่ก่อนวิเคราะห์ (64 เพียงพอ ลด compute ~44%)
-
     def _lbp_variance(self, gray: np.ndarray) -> float:
         """Local Binary Pattern variance"""
-        f = cv2.resize(gray, (self.FACE_SIZE, self.FACE_SIZE)).astype(np.int16)
+        f = cv2.resize(gray, (cfg.TEXTURE_FACE_SIZE, cfg.TEXTURE_FACE_SIZE)).astype(np.int16)
         lbp = np.zeros_like(f, dtype=np.uint8)
         for i, (dy, dx) in enumerate([
             (-1,-1),(-1,0),(-1,1),(0,-1),(0,1),(1,-1),(1,0),(1,1)
@@ -268,12 +266,12 @@ class TextureAnalyzer:
 
     def _laplacian_variance(self, gray: np.ndarray) -> float:
         """High-frequency energy"""
-        face = cv2.resize(gray, (self.FACE_SIZE, self.FACE_SIZE))
+        face = cv2.resize(gray, (cfg.TEXTURE_FACE_SIZE, cfg.TEXTURE_FACE_SIZE))
         return float(np.var(cv2.Laplacian(face, cv2.CV_64F)))
 
     def _chroma_std(self, bgr: np.ndarray) -> float:
         """Color chrominance variation"""
-        face = cv2.resize(bgr, (self.FACE_SIZE, self.FACE_SIZE))
+        face = cv2.resize(bgr, (cfg.TEXTURE_FACE_SIZE, cfg.TEXTURE_FACE_SIZE))
         ycrcb = cv2.cvtColor(face, cv2.COLOR_BGR2YCrCb)
         cr = float(np.std(ycrcb[:, :, 1]))
         cb = float(np.std(ycrcb[:, :, 2]))

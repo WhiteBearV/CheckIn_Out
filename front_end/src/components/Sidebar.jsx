@@ -3,21 +3,21 @@ import { useTheme } from '../context/ThemeContext'
 
 const navItems = [
   {
-    to: '/live',
+    to: '/',
     label: 'Live Cam',
     icon: (
-      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
           d="M15 10l4.553-2.069A1 1 0 0121 8.876V15.124a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z" />
       </svg>
     ),
   },
   {
-    to: '/',
+    to: '/dashboard',
     label: 'Dashboard',
     icon: (
-      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
           d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
       </svg>
     ),
@@ -26,8 +26,8 @@ const navItems = [
     to: '/history',
     label: 'ประวัติลงเวลา',
     icon: (
-      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
           d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
       </svg>
     ),
@@ -36,8 +36,8 @@ const navItems = [
     to: '/reports',
     label: 'รายงาน',
     icon: (
-      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
           d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
       </svg>
     ),
@@ -48,72 +48,88 @@ export default function Sidebar() {
   const { theme, toggleTheme } = useTheme()
 
   return (
-    <aside className="
-      w-64 min-h-screen flex flex-col
-      bg-white dark:bg-slate-900
-      border-r border-slate-200 dark:border-slate-700
-    ">
-      {/* Logo */}
-      <div className="h-16 flex items-center gap-3 px-6 border-b border-slate-200 dark:border-slate-700">
-        <div className="w-8 h-8 rounded-lg bg-blue-500 flex items-center justify-center flex-shrink-0">
-          {/* Person icon */}
-          <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
-            <path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z" />
-          </svg>
-        </div>
-        <span className="font-semibold text-slate-800 dark:text-white text-sm tracking-wide">
+    <aside
+      className="w-56 min-h-screen flex flex-col"
+      style={{
+        background:   'var(--c-bg-card)',
+        borderRight:  '1px solid var(--c-border)',
+        transition:   'background 0.2s',
+      }}
+    >
+      {/* ── Logo ─────────────────────────────────────────── */}
+      <div
+        className="h-14 flex items-center gap-2.5 px-5"
+        style={{ borderBottom: '1px solid var(--c-border)' }}
+      >
+        <div className="w-2 h-2 rounded-full" style={{ background: 'var(--c-accent)' }} />
+        <span className="font-mono text-sm tracking-tight" style={{ color: 'var(--c-text)' }}>
           Face Attendance
         </span>
       </div>
 
-      {/* Navigation */}
-      <nav className="flex-1 px-3 py-4 space-y-1">
+      {/* ── Navigation ───────────────────────────────────── */}
+      <nav className="flex-1 px-3 py-4 space-y-0.5">
+        <p
+          className="font-mono text-[10px] uppercase tracking-widest px-2 pb-2"
+          style={{ color: 'var(--c-text-4)' }}
+        >
+          Navigation
+        </p>
+
         {navItems.map(item => (
           <NavLink
             key={item.to}
             to={item.to}
             end={item.to === '/' || item.to === '/live'}
-            className={({ isActive }) => `
-              flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors
-              ${isActive
-                ? 'bg-blue-500 text-white'
-                : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
-              }
-            `}
+            style={({ isActive }) => ({
+              display:        'flex',
+              alignItems:     'center',
+              gap:            10,
+              padding:        '8px 8px',
+              borderRadius:   6,
+              fontSize:       14,
+              textDecoration: 'none',
+              transition:     'background 0.15s, color 0.15s',
+              background:     isActive ? 'var(--c-accent-bg)' : 'transparent',
+              color:          isActive ? 'var(--c-accent)' : 'var(--c-text-2)',
+            })}
           >
-            {item.icon}
-            {item.label}
+            {({ isActive }) => (
+              <>
+                <span style={{ color: isActive ? 'var(--c-accent)' : 'var(--c-text-3)' }}>
+                  {item.icon}
+                </span>
+                <span className="font-sans">{item.label}</span>
+              </>
+            )}
           </NavLink>
         ))}
       </nav>
 
-      {/* Theme Toggle */}
-      <div className="p-4 border-t border-slate-200 dark:border-slate-700">
+      {/* ── Theme toggle ─────────────────────────────────── */}
+      <div className="p-3" style={{ borderTop: '1px solid var(--c-border)' }}>
         <button
           onClick={toggleTheme}
-          className="
-            w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium
-            text-slate-600 dark:text-slate-400
-            hover:bg-slate-100 dark:hover:bg-slate-800
-            hover:text-slate-900 dark:hover:text-white
-            transition-colors
-          "
+          className="w-full flex items-center gap-2.5 px-2 py-2 rounded text-sm transition-colors"
+          style={{ color: 'var(--c-text-3)' }}
+          onMouseEnter={e => e.currentTarget.style.background = 'var(--c-bg-hover)'}
+          onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
         >
           {theme === 'dark' ? (
             <>
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
                   d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364-6.364l-.707.707M6.343 17.657l-.707.707M17.657 17.657l-.707-.707M6.343 6.343l-.707-.707M12 8a4 4 0 100 8 4 4 0 000-8z" />
               </svg>
-              เปลี่ยนเป็น Light
+              <span className="font-mono text-xs">Light Mode</span>
             </>
           ) : (
             <>
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
                   d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
               </svg>
-              เปลี่ยนเป็น Dark
+              <span className="font-mono text-xs">Dark Mode</span>
             </>
           )}
         </button>

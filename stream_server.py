@@ -34,7 +34,11 @@ Legacy single-cam endpoints (→ cam1, backward compat):
 
 import asyncio
 import json
+import os
+import subprocess
+import sys
 import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -102,7 +106,8 @@ _lock        = threading.Lock()
 _cam_frames: dict[str, bytes | None]         = {}   # cam_id → latest JPEG
 _cam_counts: dict[str, int]                  = {}   # cam_id → frame counter
 _cam_states: dict[str, dict]                 = {}   # cam_id → latest state
-_cam_snaps:  dict[str, dict[str, bytes]]     = {}   # cam_id → {name: jpeg}
+_cam_snaps:      dict[str, dict[str, bytes]] = {}   # cam_id → {name: face-crop jpeg}
+_cam_snaps_full: dict[str, dict[str, bytes]] = {}   # cam_id → {name: full-frame jpeg}
 
 # ─── OpenCV window flag ───────────────────────────────────────────────────────
 import config as _cfg
@@ -111,6 +116,18 @@ del _cfg
 
 _DEFAULT_CAM  = "cam1"
 _active_cam   = _DEFAULT_CAM   # กล้องที่ legacy endpoints (/stream, /state, /snap) ชี้อยู่
+
+# ─── Lifecycle callbacks (registered by main.py) ─────────────────────────────
+# main.py เรียก register_lifecycle() เพื่อให้ stream_server รู้จัก start/stop fn
+_start_fn = None   # callable() → start camera threads
+_stop_fn  = None   # callable() → stop camera threads
+_api_proc = None   # subprocess สำหรับ api.py
+
+def register_lifecycle(start_fn, stop_fn):
+    """เรียกจาก main.py เพื่อลงทะเบียน start/stop callback"""
+    global _start_fn, _stop_fn
+    _start_fn = start_fn
+    _stop_fn  = stop_fn
 
 
 # ─── Public API (เรียกจาก main.py) ───────────────────────────────────────────
@@ -141,6 +158,18 @@ def push_snapshot(cam_id: str, name: str, crop, quality: int = 80):
             if cam_id not in _cam_snaps:
                 _cam_snaps[cam_id] = {}
             _cam_snaps[cam_id][name] = buf.tobytes()
+
+
+def push_snapshot_full(cam_id: str, name: str, frame, quality: int = 75):
+    """Push full camera frame สำหรับ /snapfull/{cam_id}/{name} (ใช้แสดงใน Dashboard)"""
+    if frame is None or frame.size == 0:
+        return
+    ok, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
+    if ok:
+        with _lock:
+            if cam_id not in _cam_snaps_full:
+                _cam_snaps_full[cam_id] = {}
+            _cam_snaps_full[cam_id][name] = buf.tobytes()
 
 
 def get_cv_window() -> bool:
@@ -193,10 +222,11 @@ async def _mjpeg_gen(cam_id: str):
 
 @app.get('/cameras')
 async def cameras_list():
-    """List camera IDs ที่ push frame มาแล้ว"""
+    """List camera IDs (in-memory buffer หรือ live_frame files)"""
     with _lock:
-        ids = list(_cam_frames.keys())
-    return {"cameras": ids, "active": _active_cam}
+        ids = set(_cam_frames.keys())
+    ids.update(_file_active_cams())
+    return {"cameras": sorted(ids), "active": _active_cam}
 
 
 @app.post('/cameras/{cam_id}/activate')
@@ -637,13 +667,20 @@ loadCameras()
 @app.get('/stream/{cam_id}')
 async def stream_cam(cam_id: str):
     return StreamingResponse(
-        _mjpeg_gen(cam_id),
+        _hybrid_mjpeg_gen(cam_id),
         media_type='multipart/x-mixed-replace; boundary=frame',
     )
 
 
 @app.get('/snapshot/{cam_id}')
 async def snapshot_cam(cam_id: str):
+    # file-based (headless subprocess mode)
+    f = _frame_path(cam_id)
+    if f.exists():
+        try:
+            return Response(content=f.read_bytes(), media_type='image/jpeg')
+        except Exception:
+            pass
     with _lock:
         jpeg = _cam_frames.get(cam_id)
     if jpeg is None:
@@ -653,6 +690,14 @@ async def snapshot_cam(cam_id: str):
 
 @app.get('/state/{cam_id}')
 async def state_cam(cam_id: str):
+    # file-based (headless subprocess mode)
+    sf = _state_path(cam_id)
+    if sf.exists():
+        try:
+            import json as _j
+            return _j.loads(sf.read_text(encoding='utf-8'))
+        except Exception:
+            pass
     with _lock:
         s = dict(_cam_states.get(cam_id, {}))
     return s
@@ -660,11 +705,200 @@ async def state_cam(cam_id: str):
 
 @app.get('/snap/{cam_id}/{name}')
 async def snap_person_cam(cam_id: str, name: str):
+    f = _snap_path(cam_id, name)
+    if f.exists():
+        return Response(content=f.read_bytes(), media_type='image/jpeg',
+                        headers={'Cache-Control': 'no-store'})
     with _lock:
         jpeg = _cam_snaps.get(cam_id, {}).get(name)
     if jpeg is None:
         return Response(status_code=404)
-    return Response(content=jpeg, media_type='image/jpeg')
+    return Response(content=jpeg, media_type='image/jpeg',
+                    headers={'Cache-Control': 'no-store'})
+
+
+@app.get('/snapfull/{cam_id}/{name}')
+async def snapfull_person_cam(cam_id: str, name: str):
+    f = _snapfull_path(cam_id, name)
+    if f.exists():
+        return Response(content=f.read_bytes(), media_type='image/jpeg',
+                        headers={'Cache-Control': 'no-store'})
+    with _lock:
+        jpeg = _cam_snaps_full.get(cam_id, {}).get(name)
+    if jpeg is None:
+        return Response(status_code=404)
+    return Response(content=jpeg, media_type='image/jpeg',
+                    headers={'Cache-Control': 'no-store'})
+
+
+# ─── Cache & System control ───────────────────────────────────────────────────
+
+@app.post('/cache/clear')
+async def cache_clear():
+    """ล้าง snapshot buffer ทั้งหมด (face crop + full frame)"""
+    with _lock:
+        _cam_snaps.clear()
+        _cam_snaps_full.clear()
+    return {'cleared': True}
+
+
+_ROOT      = Path(__file__).parent
+_procs: dict[str, subprocess.Popen] = {}   # 'main' | 'api' → Popen
+
+# ─── File-based paths (headless subprocess mode, จาก deawVersion) ─────────────
+def _frame_path(cam_id: str) -> Path:
+    return _ROOT / f'live_frame_{cam_id}.jpg'
+
+def _state_path(cam_id: str) -> Path:
+    return _ROOT / f'live_state_{cam_id}.json'
+
+def _snap_path(cam_id: str, name: str) -> Path:
+    import re
+    safe = re.sub(r'[^\w\-.]', '_', name)
+    return _ROOT / f'live_snap_{cam_id}_{safe}.jpg'
+
+def _snapfull_path(cam_id: str, name: str) -> Path:
+    import re
+    safe = re.sub(r'[^\w\-.]', '_', name)
+    return _ROOT / f'live_snapfull_{cam_id}_{safe}.jpg'
+
+def _file_fresh(path: Path, max_age: float = 5.0) -> bool:
+    try:
+        return (time.time() - path.stat().st_mtime) < max_age
+    except Exception:
+        return False
+
+def _file_active_cams() -> list:
+    """กล้องที่มี live_frame file อายุ < 5 วิ (headless mode)"""
+    result = []
+    for f in _ROOT.glob('live_frame_*.jpg'):
+        if _file_fresh(f):
+            result.append(f.stem.replace('live_frame_', ''))
+    return result
+
+
+async def _hybrid_mjpeg_gen(cam_id: str):
+    """Hybrid MJPEG: file-based (headless) หรือ in-memory (direct mode)"""
+    frame_file  = _frame_path(cam_id)
+    prev_mtime  = -1.0
+    prev_count  = -1
+    while True:
+        # ── file-based (headless subprocess) ─────────────────────────────────
+        try:
+            if frame_file.exists():
+                mtime = frame_file.stat().st_mtime
+                if mtime != prev_mtime:
+                    prev_mtime = mtime
+                    jpeg = frame_file.read_bytes()
+                    yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'
+                           + jpeg + b'\r\n')
+                    continue
+        except Exception:
+            pass
+        # ── in-memory buffer (python main.py direct mode) ─────────────────────
+        with _lock:
+            jpeg  = _cam_frames.get(cam_id)
+            count = _cam_counts.get(cam_id, 0)
+        if jpeg and count != prev_count:
+            prev_count = count
+            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'
+                   + jpeg + b'\r\n')
+            continue
+        await asyncio.sleep(0.05)
+
+
+def _proc_alive(key: str) -> bool:
+    p = _procs.get(key)
+    return p is not None and p.poll() is None
+
+def _face_state_fresh() -> bool:
+    now = time.time()
+    with _lock:
+        return any((now - s.get('ts', 0)) < 5 for s in _cam_states.values())
+
+def _face_running() -> bool:
+    return (_proc_alive('main') or _face_state_fresh()
+            or bool(_file_active_cams()))
+
+
+@app.get('/system/status')
+async def system_status():
+    return {'face': _face_running(), 'api': _proc_alive('api')}
+
+
+@app.post('/system/start')
+async def system_start():
+    """Start face recognition (subprocess FACE_HEADLESS) + api.py"""
+    result = {}
+
+    # ── face recognition ──────────────────────────────────────────────────────
+    if _start_fn is not None:
+        # python main.py รันอยู่แล้ว → restart workers
+        try:
+            import asyncio
+            await asyncio.to_thread(_start_fn)
+            result['face'] = 'restarted'
+        except Exception as e:
+            result['face'] = f'error: {e}'
+    elif _face_running():
+        result['face'] = 'already_running'
+    else:
+        # standalone: spawn main.py subprocess แบบ deawVersion
+        try:
+            env = {**os.environ,
+                   'FACE_HEADLESS':      '1',
+                   'FACE_ALWAYS_ACTIVE': '1',
+                   'FACE_CAMERA_CHILD':  '1'}
+            _procs['main'] = subprocess.Popen(
+                [sys.executable, str(_ROOT / 'main.py')],
+                cwd=str(_ROOT),
+                env=env,
+            )
+            result['face'] = 'started'
+        except Exception as e:
+            result['face'] = f'error: {e}'
+
+    # ── api.py subprocess ─────────────────────────────────────────────────────
+    if not _proc_alive('api'):
+        try:
+            _procs['api'] = subprocess.Popen(
+                [sys.executable, '-m', 'uvicorn', 'api:app',
+                 '--host', '0.0.0.0', '--port', '8000', '--reload'],
+                cwd=str(_ROOT),
+            )
+            result['api'] = 'started'
+        except Exception as e:
+            result['api'] = f'error: {e}'
+    else:
+        result['api'] = 'already_running'
+
+    return result
+
+
+@app.post('/system/stop')
+async def system_stop():
+    """Stop face recognition + api.py"""
+    result = {}
+
+    # หยุด face recognition
+    if _stop_fn:
+        try:
+            _stop_fn()
+            result['face'] = 'stopped'
+        except Exception as e:
+            result['face'] = f'error: {e}'
+    if _proc_alive('main'):
+        _procs['main'].terminate()
+        result['face'] = 'terminated'
+
+    # หยุด api
+    if _proc_alive('api'):
+        _procs['api'].terminate()
+        result['api'] = 'terminated'
+    else:
+        result['api'] = 'not_running'
+
+    return result
 
 
 # ─── Legacy single-cam endpoints (→ cam1) ────────────────────────────────────
@@ -733,3 +967,15 @@ def start(port: int = 8001):
     print(f'[STREAM] Camera list     → http://localhost:{port}/cameras')
     print(f'[STREAM] Legacy stream   → http://localhost:{port}/stream  (→ active cam)')
     print(f'[STREAM] Camera admin    → http://localhost:{port}/admin')
+
+
+# ─── Standalone mode ─────────────────────────────────────────────────────────
+# รัน: python stream_server.py
+# จากนั้นเปิด browser แล้วกด START เพื่อสั่งให้ spawn main.py + api.py
+if __name__ == '__main__':
+    import uvicorn as _uv
+    port = int(os.environ.get('STREAM_PORT', 8001))
+    print(f'[STREAM] Standalone mode  http://localhost:{port}')
+    print(f'[STREAM] Admin page    →  http://localhost:{port}/admin')
+    print('[STREAM] กดปุ่ม START ในหน้าเว็บเพื่อเปิดระบบ')
+    _uv.run(app, host='0.0.0.0', port=port, log_level='info')
