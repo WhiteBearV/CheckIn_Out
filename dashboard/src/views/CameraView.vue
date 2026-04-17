@@ -3,19 +3,20 @@
 
     <!-- ════ FULLSCREEN WRAPPER ════════════════════════════════════════ -->
     <div
-      ref="fullscreenWrapper"
       :class="isFullscreen
-        ? 'flex flex-row bg-[#0a0a0a] overflow-hidden'
+        ? 'fixed inset-0 z-50 flex flex-row bg-[#0a0a0a] overflow-hidden'
         : 'grid grid-cols-1 lg:grid-cols-3 gap-4'"
-      style="min-height: 520px"
+      :style="isFullscreen ? undefined : 'min-height: 520px'"
     >
 
       <!-- ── กล้อง (ซ้าย): ทุกกล้องใน box เดียว ─────────────────────── -->
+      <!-- min-height ป้องกัน height collapse ระหว่าง right panel v-if/v-else switch -->
       <div
         class="bg-black flex flex-col overflow-hidden"
         :class="isFullscreen
           ? 'flex-1 border-r border-gui-border'
           : 'lg:col-span-2 rounded-xl border border-gui-border'"
+        :style="isFullscreen ? undefined : 'min-height: 440px'"
       >
 
         <!-- Header: สถานะรวมทุกกล้อง -->
@@ -48,100 +49,122 @@
           </span>
         </div>
 
-        <!-- Feed Area: กล้องเรียงซ้าย-ขวา ทุกตัวเป็น Face Recognition -->
-        <div class="flex-1 flex min-h-0 divide-x divide-gui-border/50 overflow-hidden">
+        <!-- ══════════════════════════════════════════════════════════════
+             Feed Area — CSS absolute layout (img ทุกตัวอยู่ใน DOM เสมอ)
+             ไม่ใช้ v-if/v-else เพื่อป้องกัน MJPEG ขาด connection
+             ════════════════════════════════════════════════════════════ -->
+        <div class="flex-1 relative overflow-hidden" style="min-height: 320px">
+          <div class="absolute inset-0">
 
-          <div
-            v-for="cam in cameras"
-            :key="cam.id"
-            class="flex-1 relative min-h-0 overflow-hidden bg-[#0d0d0d]"
-          >
-
-            <!-- Label + mini status (top-left overlay) -->
             <div
-              class="absolute top-2 left-2 z-20 flex items-center gap-1.5
-                     bg-black/60 px-2 py-0.5 rounded-full backdrop-blur-sm"
+              v-for="(cam, camIdx) in cameras"
+              :key="cam.id"
+              class="absolute overflow-hidden bg-[#0d0d0d] transition-[top,bottom,left,right,width,height] duration-300 ease-in-out"
+              :class="isThumbnail(cam.id) ? 'cursor-pointer group' : (!focusedCamId ? 'cursor-pointer group' : '')"
+              :style="cameraStyle(cam.id)"
+              @click="onCameraClick(cam.id)"
+              :title="isThumbnail(cam.id) ? `คลิกเพื่อขยาย ${cam.name}` : (!focusedCamId ? `คลิกเพื่อขยาย ${cam.name}` : '')"
             >
-              <span
-                class="w-1.5 h-1.5 rounded-full shrink-0"
-                :class="{
-                  'bg-gui-in animate-pulse': isLive(cam.id),
-                  'bg-gui-out animate-pulse': getCamState(cam.id).isStarting,
-                  'bg-gui-dim': !isLive(cam.id) && !getCamState(cam.id).isStarting,
-                }"
+
+              <!-- ─ เส้นคั่นระหว่างกล้อง (normal mode) ─ -->
+              <div v-if="camIdx > 0 && !focusedCamId"
+                   class="absolute left-0 inset-y-0 w-px bg-gui-border/50 z-30 pointer-events-none" />
+
+              <!-- ─ Label + mini status (top-left) ─ -->
+              <div class="absolute top-2 left-2 z-20 flex items-center gap-1.5
+                           bg-black/60 px-2 py-0.5 rounded-full backdrop-blur-sm pointer-events-none">
+                <span class="w-1.5 h-1.5 rounded-full shrink-0"
+                  :class="{
+                    'bg-gui-in animate-pulse':  isLive(cam.id),
+                    'bg-gui-out animate-pulse':  getCamState(cam.id).isStarting,
+                    'bg-gui-dim':               !isLive(cam.id) && !getCamState(cam.id).isStarting,
+                  }" />
+                <span class="text-[10px] font-medium"
+                  :class="isThumbnail(cam.id) ? 'text-white/70' : 'text-gui-dim'">{{ cam.name }}</span>
+              </div>
+
+              <!-- ─ Top-right: ✕ (focused) | ⛶เต็มจอ (normal) | (ไม่มีบน thumbnail) ─ -->
+              <button v-if="focusedCamId && cam.id === focusedCamId"
+                @click.stop="focusedCamId = null"
+                class="absolute top-2 right-2 z-20 flex items-center gap-1
+                       bg-black/60 px-2 py-0.5 rounded-full backdrop-blur-sm
+                       text-[10px] text-gui-dim hover:text-gui-text hover:bg-black/80 transition-colors"
+                title="ย่อกลับโหมดปกติ"
+              >✕ <span class="hidden sm:inline">ย่อลง</span></button>
+
+              <RouterLink v-else-if="!focusedCamId"
+                :to="{ name: 'camera-detail', params: { camId: cam.id } }"
+                class="absolute top-2 right-2 z-20 flex items-center gap-1
+                       bg-black/60 px-2 py-0.5 rounded-full backdrop-blur-sm
+                       text-[10px] text-gui-dim hover:text-gui-text hover:bg-black/80 transition-colors"
+                title="ดูหน้าเต็มของกล้องนี้ (หน้าใหม่)"
+                @click.stop
+              >⛶ <span class="hidden sm:inline">เต็มจอ</span></RouterLink>
+
+              <!-- ─ Hover highlight ─ -->
+              <div class="absolute inset-0 bg-gui-in/0 group-hover:bg-gui-in/8 transition-colors pointer-events-none z-10" />
+              <div v-if="isThumbnail(cam.id)"
+                   class="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-20">
+                <span class="bg-black/70 text-white text-[9px] px-2 py-0.5 rounded-full">ขยาย ⛶</span>
+              </div>
+
+              <!-- ─ LIVE stream (v-if บน img เท่านั้น, ไม่กระทบ sibling img) ─ -->
+              <img
+                :key="`stream-${cam.id}-${getCamState(cam.id).streamStartTs}`"
+                v-if="isLive(cam.id) && hasRecentFrame(cam.id)"
+                :src="streamUrlFor(cam.id)"
+                alt="Face Recognition Stream"
+                class="w-full h-full object-contain"
+                @error="() => onStreamError(cam.id)"
               />
-              <span class="text-[10px] font-medium text-gui-dim">{{ cam.name }}</span>
-            </div>
 
-            <!-- ดูหน้าเต็ม (top-right overlay) -->
-            <RouterLink
-              :to="{ name: 'camera-detail', params: { camId: cam.id } }"
-              class="absolute top-2 right-2 z-20 flex items-center gap-1
-                     bg-black/60 px-2 py-0.5 rounded-full backdrop-blur-sm
-                     text-[10px] text-gui-dim hover:text-gui-text
-                     hover:bg-black/80 transition-colors"
-              title="ดูหน้าเต็มของกล้องนี้"
-            >
-              ⛶ <span class="hidden sm:inline">เต็มจอ</span>
-            </RouterLink>
+              <!-- ─ OFFLINE / STARTING ─ -->
+              <div v-else class="absolute inset-0 flex flex-col items-center justify-center z-10">
 
-            <!-- LIVE: face recognition stream -->
-            <img
-              v-if="isLive(cam.id) && hasRecentFrame(cam.id)"
-              :src="streamUrlFor(cam.id)"
-              alt="Face Recognition Stream"
-              class="w-full h-full object-contain"
-              @error="() => onStreamError(cam.id)"
-            />
-
-            <!-- OFFLINE / STARTING -->
-            <div v-else class="absolute inset-0 flex flex-col items-center justify-center">
-
-              <svg
-                class="absolute inset-0 w-full h-full pointer-events-none"
-                viewBox="0 0 160 90"
-                preserveAspectRatio="xMidYMid meet"
-              >
-                <defs>
-                  <mask :id="`oval-mask-${cam.id}`">
-                    <rect width="160" height="90" fill="white"/>
-                    <ellipse cx="80" cy="42.3" rx="26.1" ry="30.6" fill="black"/>
-                  </mask>
-                </defs>
-                <rect width="160" height="90" fill="rgba(0,0,0,0.62)" :mask="`url(#oval-mask-${cam.id})`"/>
-                <ellipse cx="80" cy="42.3" rx="26.1" ry="30.6" fill="none" :stroke="ovalColorFor(cam.id)" stroke-width="0.5"/>
-                <ellipse cx="80" cy="42.3" rx="25.4" ry="29.9" fill="none" :stroke="ovalInnerColorFor(cam.id)" stroke-width="0.2"/>
-              </svg>
-
-              <!-- Offline: ปุ่มเปิดของกล้องนั้น -->
-              <div v-if="!getCamState(cam.id).isStarting" class="relative z-20 flex flex-col items-center gap-2">
-                <button
-                  @click="startFace(cam.id)"
-                  class="px-5 py-2 rounded-lg text-xs font-semibold transition-colors
-                         bg-gui-in/20 text-gui-in border border-gui-in/40 hover:bg-gui-in/30"
+                <!-- Oval guide (ซ่อนบน thumbnail) -->
+                <svg v-if="!isThumbnail(cam.id)"
+                  class="absolute inset-0 w-full h-full pointer-events-none"
+                  viewBox="0 0 160 90" preserveAspectRatio="xMidYMid meet"
                 >
-                  ▶ เปิด
-                </button>
-              </div>
+                  <defs>
+                    <mask :id="`oval-mask-${cam.id}`">
+                      <rect width="160" height="90" fill="white"/>
+                      <ellipse cx="80" cy="42.3" rx="26.1" ry="30.6" fill="black"/>
+                    </mask>
+                  </defs>
+                  <rect width="160" height="90" fill="rgba(0,0,0,0.62)" :mask="`url(#oval-mask-${cam.id})`"/>
+                  <ellipse cx="80" cy="42.3" rx="26.1" ry="30.6" fill="none" :stroke="ovalColorFor(cam.id)" stroke-width="0.5"/>
+                  <ellipse cx="80" cy="42.3" rx="25.4" ry="29.9" fill="none" :stroke="ovalInnerColorFor(cam.id)" stroke-width="0.2"/>
+                </svg>
 
-              <div v-else class="relative z-20 flex items-center gap-2 text-gui-out text-xs">
-                <div class="w-4 h-4 border-2 border-gui-out border-t-transparent rounded-full animate-spin"/>
-                กำลังเริ่มต้น...
-              </div>
+                <!-- Thumbnail offline: แสดงแค่ข้อความ -->
+                <div v-if="isThumbnail(cam.id)" class="relative z-20 text-[9px] text-gui-dim/70">
+                  {{ getCamState(cam.id).isStarting ? 'กำลังเริ่ม...' : 'ออฟไลน์' }}
+                </div>
 
-              <div
-                v-if="isLive(cam.id) && !hasRecentFrame(cam.id)"
-                class="absolute top-4 left-1/2 -translate-x-1/2 z-20
-                       bg-gui-out/15 border border-gui-out/40 text-gui-out
-                       text-xs px-3 py-1.5 rounded-lg"
-              >
-                ⚠ Frame หาย
+                <!-- Normal/focused offline: ปุ่มเปิด -->
+                <template v-else>
+                  <div v-if="!getCamState(cam.id).isStarting" class="relative z-20 flex flex-col items-center gap-2">
+                    <button @click.stop="startFace(cam.id)"
+                      class="px-5 py-2 rounded-lg text-xs font-semibold transition-colors
+                             bg-gui-in/20 text-gui-in border border-gui-in/40 hover:bg-gui-in/30"
+                    >▶ เปิด</button>
+                  </div>
+                  <div v-else class="relative z-20 flex items-center gap-2 text-gui-out text-xs">
+                    <div class="w-4 h-4 border-2 border-gui-out border-t-transparent rounded-full animate-spin"/>
+                    กำลังเริ่มต้น...
+                  </div>
+                  <div v-if="isLive(cam.id) && !hasRecentFrame(cam.id)"
+                    class="absolute top-4 left-1/2 -translate-x-1/2 z-20
+                           bg-gui-out/15 border border-gui-out/40 text-gui-out text-xs px-3 py-1.5 rounded-lg"
+                  >⚠ Frame หาย</div>
+                </template>
+
               </div>
 
             </div>
 
           </div>
-
         </div>
         <!-- /Feed Area -->
 
@@ -517,6 +540,46 @@ function getCamState(camId) {
   }
 }
 
+// ── Focus Mode (CSS absolute layout — img ไม่ถูก unmount เมื่อสลับ) ────────
+const THUMB_H      = 140          // ความสูง thumbnail strip (px)
+const focusedCamId = ref(null)
+
+// คำนวณ style ของแต่ละกล้องตาม focusedCamId (ไม่มี DOM remove/add)
+function cameraStyle(camId) {
+  const n   = cameras.value.length
+  const idx = cameras.value.findIndex(c => c.id === camId)
+  if (n === 0) return ''
+
+  if (focusedCamId.value) {
+    const others = cameras.value.filter(c => c.id !== focusedCamId.value)
+    if (camId === focusedCamId.value) {
+      const hasThumb = others.length > 0
+      return `top:0;left:0;right:0;bottom:${hasThumb ? THUMB_H : 0}px`
+    } else {
+      const tIdx = others.findIndex(c => c.id === camId)
+      const tN   = others.length
+      return `bottom:0;height:${THUMB_H}px;left:${((tIdx / tN) * 100).toFixed(3)}%;width:${(100 / tN).toFixed(3)}%`
+    }
+  }
+  // Normal: แบ่งเท่ากัน
+  return `top:0;bottom:0;left:${((idx / n) * 100).toFixed(3)}%;width:${(100 / n).toFixed(3)}%`
+}
+
+// กล้องนี้เป็น thumbnail หรือเปล่า
+function isThumbnail(camId) {
+  return !!focusedCamId.value && camId !== focusedCamId.value
+}
+
+// คลิกที่กล้อง
+function onCameraClick(camId) {
+  if (isThumbnail(camId)) {
+    focusedCamId.value = camId   // สลับ focused
+  } else if (!focusedCamId.value) {
+    focusedCamId.value = camId   // เข้า focus mode
+  }
+  // คลิกที่ focused cam → ไม่ทำอะไร (ใช้ปุ่ม ✕ เพื่อออก)
+}
+
 // ── Per-Camera Helpers ───────────────────────────────────────────────
 const isLive          = (camId) => getCamState(camId).faceStatus.running ?? false
 const hasRecentFrame  = (camId) => {
@@ -598,18 +661,18 @@ async function fetchAllStatuses() {
 
 let pollTimer = null
 
-// ── Fullscreen ───────────────────────────────────────────────────────
-const fullscreenWrapper = ref(null)
-const isFullscreen      = ref(false)
+// ── Fullscreen (CSS pseudo-fullscreen — ไม่ใช้ native browser API) ──────
+// ใช้ fixed inset-0 z-50 แทน requestFullscreen เพื่อหลีกเลี่ยง MJPEG หลุด connection
+const isFullscreen = ref(false)
 
 function toggleFullscreen() {
-  if (!document.fullscreenElement) fullscreenWrapper.value?.requestFullscreen()
-  else document.exitFullscreen()
+  isFullscreen.value = !isFullscreen.value
 }
 
-function onFullscreenChange() {
-  isFullscreen.value = !!document.fullscreenElement
-}
+watch(isFullscreen, (val) => {
+  // ล็อก scroll เมื่อ fullscreen, คืนเมื่อย่อ
+  document.body.style.overflow = val ? 'hidden' : ''
+})
 
 function onKeyDown(e) {
   if ((e.key === 'f' || e.key === 'F') && !e.ctrlKey && !e.metaKey && !e.altKey) {
@@ -626,13 +689,12 @@ onMounted(async () => {
   fetchAllStatuses()
   pollTimer = setInterval(fetchAllStatuses, POLL_MS)
   window.addEventListener('keydown', onKeyDown)
-  document.addEventListener('fullscreenchange', onFullscreenChange)
 })
 
 onUnmounted(() => {
   clearInterval(pollTimer)
   window.removeEventListener('keydown', onKeyDown)
-  document.removeEventListener('fullscreenchange', onFullscreenChange)
+  document.body.style.overflow = '' // cleanup เผื่อ unmount ขณะ fullscreen
 })
 
 // ── Attendance Data ──────────────────────────────────────────────────

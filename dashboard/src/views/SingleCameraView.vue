@@ -64,13 +64,12 @@
       </div>
     </div>
 
-    <!-- ════ FULLSCREEN WRAPPER ═══════════════════════════════════════ -->
+    <!-- ════ FULLSCREEN WRAPPER ════════════════════════════════════════ -->
     <div
-      ref="fullscreenWrapper"
       :class="isFullscreen
-        ? 'flex flex-row bg-[#0a0a0a] overflow-hidden'
+        ? 'fixed inset-0 z-50 flex flex-row bg-[#0a0a0a] overflow-hidden'
         : 'grid grid-cols-1 lg:grid-cols-3 gap-4'"
-      style="min-height: 520px"
+      :style="isFullscreen ? undefined : 'min-height: 520px'"
     >
 
       <!-- ── กล้อง (ซ้าย) ─────────────────────────────────────────── -->
@@ -79,6 +78,7 @@
         :class="isFullscreen
           ? 'flex-1 border-r border-gui-border'
           : 'lg:col-span-2 rounded-xl border border-gui-border'"
+        :style="isFullscreen ? undefined : 'min-height: 440px'"
       >
 
         <!-- Header -->
@@ -123,6 +123,7 @@
 
           <!-- LIVE stream -->
           <img
+            :key="`stream-${camId}-${camState.streamStartTs}`"
             v-if="camLive && camHasFrame"
             :src="streamUrl"
             alt="Face Recognition Stream"
@@ -293,7 +294,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute }    from 'vue-router'
 import LiveDetection   from '@/components/LiveDetection.vue'
 
@@ -378,18 +379,16 @@ async function fetchStatus() {
 
 let pollTimer = null
 
-// ── Fullscreen ────────────────────────────────────────────────────────
-const fullscreenWrapper = ref(null)
-const isFullscreen      = ref(false)
+// ── Fullscreen (CSS pseudo-fullscreen — ไม่ใช้ native browser API) ──────
+const isFullscreen = ref(false)
 
 function toggleFullscreen() {
-  if (!document.fullscreenElement) fullscreenWrapper.value?.requestFullscreen()
-  else document.exitFullscreen()
+  isFullscreen.value = !isFullscreen.value
 }
 
-function onFullscreenChange() {
-  isFullscreen.value = !!document.fullscreenElement
-}
+watch(isFullscreen, (val) => {
+  document.body.style.overflow = val ? 'hidden' : ''
+})
 
 function onKeyDown(e) {
   if ((e.key === 'f' || e.key === 'F') && !e.ctrlKey && !e.metaKey && !e.altKey) {
@@ -406,13 +405,12 @@ onMounted(async () => {
   fetchStatus()
   pollTimer = setInterval(fetchStatus, 2_000)
   window.addEventListener('keydown', onKeyDown)
-  document.addEventListener('fullscreenchange', onFullscreenChange)
 })
 
 onUnmounted(() => {
   clearInterval(pollTimer)
   window.removeEventListener('keydown', onKeyDown)
-  document.removeEventListener('fullscreenchange', onFullscreenChange)
+  document.body.style.overflow = ''
 })
 
 // ── Date ──────────────────────────────────────────────────────────────
