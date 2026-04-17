@@ -1,21 +1,38 @@
-/* ── Tailwind directives (ต้องมี 3 บรรทัดนี้) ────────────────────── */
+/* ── Tailwind directives ─────────────────────────────────────────── */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ── Theme: Light (default) ──────────────────────────────────────── */
+:root {
+  --gui-bg:     246 248 250;   /* #f6f8fa */
+  --gui-panel:  255 255 255;   /* #ffffff */
+  --gui-border: 208 215 222;   /* #d0d7de */
+  --gui-text:   31  35  40;    /* #1f2328 */
+  --gui-dim:    99  108 118;   /* #636c76 */
+}
+
+/* ── Theme: Dark ─────────────────────────────────────────────────── */
+html.dark {
+  --gui-bg:     13  17  23;    /* #0d1117 */
+  --gui-panel:  22  27  34;    /* #161b22 */
+  --gui-border: 48  54  61;    /* #30363d */
+  --gui-text:   230 237 243;   /* #e6edf3 */
+  --gui-dim:    125 133 144;   /* #7d8590 */
+}
 
 /* ── Base styles ─────────────────────────────────────────────────── */
 body {
   @apply bg-gui-bg text-gui-text font-sans;
   min-height: 100vh;
-  /* ป้องกัน scrollbar layout shift */
   overflow-y: scroll;
 }
 
-/* ── Custom scrollbar (dark theme) ──────────────────────────────── */
+/* ── Custom scrollbar ────────────────────────────────────────────── */
 ::-webkit-scrollbar        { width: 5px; height: 5px; }
-::-webkit-scrollbar-track  { background: #161b22; }
-::-webkit-scrollbar-thumb  { background: #30363d; border-radius: 9999px; }
-::-webkit-scrollbar-thumb:hover { background: #484f58; }
+::-webkit-scrollbar-track  { background: rgb(var(--gui-panel)); }
+::-webkit-scrollbar-thumb  { background: rgb(var(--gui-border)); border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background: rgb(var(--gui-dim)); }
 
-/* ── Utility: tabular numbers (ตัวเลขไม่กระโดด) ─────────────────── */
+/* ── Utility ─────────────────────────────────────────────────────── */
 .tabular-nums { font-variant-numeric: tabular-nums; }

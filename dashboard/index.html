@@ -4,6 +4,14 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Face Attendance Dashboard</title>
+    <!-- Apply theme before Vue mounts to prevent flash -->
+    <script>
+      ;(function() {
+        var t = localStorage.getItem('face-dashboard-theme') || 'auto'
+        var dark = t === 'dark' || (t === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+        document.documentElement.classList.toggle('dark', dark)
+      })()
+    </script>
     <!--
       Google Fonts: Sarabun
       รองรับภาษาไทยได้ดี ถ้าไม่มี internet ให้ลบบรรทัดนี้ออก

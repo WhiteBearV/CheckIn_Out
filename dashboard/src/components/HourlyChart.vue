@@ -1,26 +1,9 @@
 <template>
-  <!--
-    HourlyChart.vue — Bar Chart การลงเวลาตามชั่วโมง
-    ──────────────────────────────────────────────────
-    ใช้ Chart.js โดยตรง (ไม่ผ่าน wrapper เพื่อควบคุมได้เต็มที่)
-
-    Props:
-      hourly — Array<{ hour: 0-23, in: number, out: number }>  (จาก useAttendance)
-
-    การแก้ไข:
-      - เปลี่ยนสี: แก้ COLOR_IN / COLOR_OUT
-      - เปลี่ยนความสูง: แก้ style height ของ <div> ครอบ canvas
-      - เปลี่ยน chart type: แก้ type: 'bar' เป็น 'line'
-  -->
   <div class="bg-gui-panel border border-gui-border rounded-xl p-4">
-
-    <!-- Header -->
     <h2 class="font-semibold text-sm mb-4 flex items-center gap-2">
       <span class="text-gui-out text-base">▊</span>
       การลงเวลาตามชั่วโมง
     </h2>
-
-    <!-- Canvas container — แก้ height ที่นี่เพื่อเปลี่ยนความสูง chart -->
     <div class="relative" style="height: 180px">
       <canvas ref="chartEl" />
     </div>
@@ -31,53 +14,69 @@
 import { ref, watch, onMounted, onUnmounted } from 'vue'
 import {
   Chart,
-  BarController, BarElement,
+  LineController, LineElement, PointElement,
   CategoryScale, LinearScale,
-  Tooltip, Legend,
+  Tooltip, Legend, Filler,
 } from 'chart.js'
+import { useTheme } from '@/composables/useTheme.js'
 
-// Register เฉพาะ components ที่ใช้ (ลด bundle size)
-Chart.register(BarController, BarElement, CategoryScale, LinearScale, Tooltip, Legend)
+Chart.register(LineController, LineElement, PointElement, CategoryScale, LinearScale, Tooltip, Legend, Filler)
 
-// ── Props ──────────────────────────────────────────────────────────
 const props = defineProps({
   hourly: { type: Array, required: true },
 })
 
-// ── สี chart ── แก้ได้ที่นี่ ─────────────────────────────────────
-const COLOR_IN       = 'rgba(0,   220,   0, 0.75)'
-const COLOR_IN_EDGE  = 'rgba(0,   220,   0, 1   )'
-const COLOR_OUT      = 'rgba(255, 215,   0, 0.75)'
-const COLOR_OUT_EDGE = 'rgba(255, 215,   0, 1   )'
+const { theme } = useTheme()
 
-// ── Chart instance ─────────────────────────────────────────────────
+// อ่านสีจาก CSS variable ที่ตอบสนองต่อ theme
+function getCssVar(name) {
+  return `rgb(${getComputedStyle(document.documentElement).getPropertyValue(name).trim()})`
+}
+
+const COLOR_IN       = 'rgba(0,   220,   0, 1)'
+const COLOR_IN_FILL  = 'rgba(0,   220,   0, 0.12)'
+const COLOR_OUT      = 'rgba(255, 215,   0, 1)'
+const COLOR_OUT_FILL = 'rgba(255, 215,   0, 0.08)'
+
 const chartEl = ref(null)
 let chart = null
 
 function buildChart() {
   if (chart) chart.destroy()
 
+  const colorPanel  = getCssVar('--gui-panel')
+  const colorBorder = getCssVar('--gui-border')
+  const colorText   = getCssVar('--gui-text')
+  const colorDim    = getCssVar('--gui-dim')
+
   chart = new Chart(chartEl.value, {
-    type: 'bar',
+    type: 'line',
     data: {
-      // label แกน X: ชั่วโมง "0:00" ถึง "23:00"
       labels: props.hourly.map(h => `${h.hour}:00`),
       datasets: [
         {
-          label: 'Check-In',
-          data:  props.hourly.map(h => h.in),
-          backgroundColor: COLOR_IN,
-          borderColor:     COLOR_IN_EDGE,
-          borderWidth: 1,
-          borderRadius: 3,
+          label:                'Check-In',
+          data:                 props.hourly.map(h => h.in),
+          borderColor:          COLOR_IN,
+          backgroundColor:      COLOR_IN_FILL,
+          borderWidth:          2,
+          pointRadius:          3,
+          pointHoverRadius:     5,
+          pointBackgroundColor: COLOR_IN,
+          tension:              0.4,
+          fill:                 true,
         },
         {
-          label: 'Check-Out',
-          data:  props.hourly.map(h => h.out),
-          backgroundColor: COLOR_OUT,
-          borderColor:     COLOR_OUT_EDGE,
-          borderWidth: 1,
-          borderRadius: 3,
+          label:                'Check-Out',
+          data:                 props.hourly.map(h => h.out),
+          borderColor:          COLOR_OUT,
+          backgroundColor:      COLOR_OUT_FILL,
+          borderWidth:          2,
+          pointRadius:          3,
+          pointHoverRadius:     5,
+          pointBackgroundColor: COLOR_OUT,
+          tension:              0.4,
+          fill:                 true,
         },
       ],
     },
@@ -88,44 +87,47 @@ function buildChart() {
 
       plugins: {
         legend: {
-          labels: { color: '#7d8590', font: { size: 11 }, boxWidth: 12 },
+          labels: { color: colorDim, font: { size: 11 }, boxWidth: 12 },
         },
         tooltip: {
-          backgroundColor: '#161b22',
-          borderColor:     '#30363d',
+          backgroundColor: colorPanel,
+          borderColor:     colorBorder,
           borderWidth:     1,
-          titleColor:      '#e6edf3',
-          bodyColor:       '#7d8590',
+          titleColor:      colorText,
+          bodyColor:       colorDim,
         },
       },
 
       scales: {
         x: {
-          ticks: { color: '#7d8590', font: { size: 10 }, maxRotation: 0 },
-          grid:  { color: 'rgba(48,54,61,0.3)' },
+          ticks: { color: colorDim, font: { size: 10 }, maxRotation: 0 },
+          grid:  { color: `${colorBorder.replace('rgb', 'rgba').replace(')', ', 0.4)')}` },
         },
         y: {
           beginAtZero: true,
-          ticks: { color: '#7d8590', font: { size: 10 }, stepSize: 1 },
-          grid:  { color: 'rgba(48,54,61,0.5)' },
+          ticks: { color: colorDim, font: { size: 10 }, stepSize: 1 },
+          grid:  { color: `${colorBorder.replace('rgb', 'rgba').replace(')', ', 0.6)')}` },
         },
       },
     },
   })
 }
 
-// อัพเดตข้อมูลโดยไม่สร้าง chart ใหม่ (ประหยัด CPU)
-function updateChart() {
+function updateData() {
   if (!chart) return
   chart.data.datasets[0].data = props.hourly.map(h => h.in)
   chart.data.datasets[1].data = props.hourly.map(h => h.out)
-  chart.update('none')  // 'none' = ไม่มี animation เวลา update
+  chart.update('none')
 }
 
-// ── Lifecycle ──────────────────────────────────────────────────────
-onMounted  (buildChart)
+onMounted(buildChart)
 onUnmounted(() => chart?.destroy())
 
-// watch hourly แล้ว update chart ทันที
-watch(() => props.hourly, updateChart, { deep: true })
+// rebuild เมื่อ theme เปลี่ยน (สีต้องอ่านใหม่หลัง CSS variable อัพเดต)
+watch(theme, () => {
+  // รอ 1 tick ให้ CSS variable อัพเดตก่อน
+  setTimeout(buildChart, 50)
+})
+
+watch(() => props.hourly, updateData, { deep: true })
 </script>

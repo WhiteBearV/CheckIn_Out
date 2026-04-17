@@ -17,6 +17,7 @@ Endpoints:
 """
 
 import os
+import json as _json
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
@@ -419,24 +420,55 @@ def _parse_cam_source(raw: str, default):
 
 _RTSP_CAM2 = "rtsp://admin:@dmin123456@192.168.1.13:554/unicast/c1/s0/live"
 
-CAMERAS_CONFIG = [
+# ── Default cameras (ใช้เมื่อ cameras_config.json ยังไม่มี) ──────────────────
+_DEFAULT_CAMERAS_CONFIG = [
     {
         "id":     "cam1",
         "name":   "กล้อง 1 (Laptop)",
         "source": _parse_cam_source(os.environ.get("CAMERA1_URL", ""), 0),
+        "flip":   False,
     },
     {
         "id":     "cam2",
         "name":   "กล้อง 2 (IP Camera)",
         "source": _parse_cam_source(os.environ.get("CAMERA2_URL", ""), _RTSP_CAM2),
+        "flip":   False,
     },
-    # เพิ่มกล้องตัวที่ 3: uncomment แล้วแก้ตามต้องการ
-    # {
-    #     "id":     "cam3",
-    #     "name":   "กล้อง 3",
-    #     "source": _parse_cam_source(os.environ.get("CAMERA3_URL", ""), 2),
-    # },
 ]
+
+_CAMERAS_CONFIG_PATH = _ROOT / "cameras_config.json"
+
+def _load_cameras_config() -> list:
+    """โหลด cameras config จาก JSON file (ถ้ามี) หรือ fallback ไป default"""
+    if _CAMERAS_CONFIG_PATH.exists():
+        try:
+            data = _json.loads(_CAMERAS_CONFIG_PATH.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                # normalize: แปลง source string→int ถ้าเป็นตัวเลข
+                for c in data:
+                    src = c.get("source", "")
+                    if isinstance(src, str) and src.isdigit():
+                        c["source"] = int(src)
+                    if "flip" not in c:
+                        c["flip"] = False
+                return data
+        except Exception:
+            pass
+    return [dict(c) for c in _DEFAULT_CAMERAS_CONFIG]
+
+def _save_cameras_config(cfg: list):
+    """บันทึก cameras config ลง JSON file"""
+    # serialize: int source → string เพื่อ JSON compat
+    serializable = []
+    for c in cfg:
+        entry = dict(c)
+        serializable.append(entry)
+    _CAMERAS_CONFIG_PATH.write_text(
+        _json.dumps(serializable, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+CAMERAS_CONFIG: list = _load_cameras_config()
 _CAMERAS: dict = {c["id"]: c for c in CAMERAS_CONFIG}
 
 
@@ -448,9 +480,133 @@ def list_cameras():
             "id":          c["id"],
             "name":        c["name"],
             "source_type": "rtsp" if isinstance(c["source"], str) else "usb",
+            "source":      str(c["source"]),
+            "flip":        c.get("flip", False),
         }
         for c in CAMERAS_CONFIG
     ]
+
+
+class CameraCreateBody(BaseModel):
+    name:        str
+    source_type: str   # "usb" | "rtsp"
+    source:      str   # port number (str of int) for usb, URL for rtsp
+    flip:        bool = False
+
+
+@app.post("/cameras")
+def add_camera(body: CameraCreateBody):
+    """เพิ่มกล้องใหม่ — บันทึกลง cameras_config.json"""
+    # แปลง source
+    if body.source_type == "usb":
+        source = int(body.source) if body.source.isdigit() else 0
+    else:
+        source = body.source.strip()
+
+    # สร้าง unique id
+    existing_ids = {c["id"] for c in CAMERAS_CONFIG}
+    base = "cam"
+    n = len(CAMERAS_CONFIG) + 1
+    while f"{base}{n}" in existing_ids:
+        n += 1
+    new_id = f"{base}{n}"
+
+    new_cam = {
+        "id":     new_id,
+        "name":   body.name.strip(),
+        "source": source,
+        "flip":   body.flip,
+    }
+
+    CAMERAS_CONFIG.append(new_cam)
+    _CAMERAS[new_id] = new_cam
+    _save_cameras_config(CAMERAS_CONFIG)
+
+    return {
+        "ok":   True,
+        "id":   new_id,
+        "name": new_cam["name"],
+    }
+
+
+class CameraFlipBody(BaseModel):
+    flip: bool
+
+
+@app.patch("/cameras/{cam_id}/flip")
+def update_camera_flip(cam_id: str, body: CameraFlipBody):
+    """
+    อัพเดต flip ของกล้องที่ระบุ — บันทึกลง cameras_config.json
+    ถ้า face process กำลังรัน → restart อัตโนมัติเพื่อให้ CAMERA_FLIP มีผล
+    (flip ทำที่ main.py ก่อนวาด overlay จึงไม่กระทบ bounding box / label)
+    """
+    if cam_id not in _CAMERAS:
+        raise HTTPException(status_code=404, detail=f"Camera '{cam_id}' not found")
+
+    _CAMERAS[cam_id]["flip"] = body.flip
+    for c in CAMERAS_CONFIG:
+        if c["id"] == cam_id:
+            c["flip"] = body.flip
+            break
+    _save_cameras_config(CAMERAS_CONFIG)
+
+    # restart process ถ้ากำลังรันอยู่
+    restarted = False
+    proc = _face_processes.get(cam_id)
+    if proc is not None and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            proc.kill()
+        _face_processes.pop(cam_id, None)
+
+        # start ใหม่พร้อม flip setting ใหม่
+        cam = _CAMERAS[cam_id]
+        try:
+            env = os.environ.copy()
+            env["FACE_HEADLESS"]        = "1"
+            env["FACE_ALWAYS_ACTIVE"]   = "1"
+            env["FACE_CAMERA_CHILD"]    = "1"
+            env["CAMERA_URL"]           = str(cam["source"])
+            env["CAMERA_FLIP"]          = "1" if body.flip else "0"
+            env["FACE_LIVE_FRAME_PATH"] = str(_live_frame_path_for(cam_id))
+            env["FACE_LIVE_STATE_PATH"] = str(_live_state_path_for(cam_id))
+            new_proc = _subprocess.Popen(
+                [_sys.executable, str(_ROOT / "main.py")],
+                cwd=str(_ROOT),
+                env=env,
+            )
+            _face_processes[cam_id] = new_proc
+            restarted = True
+        except Exception:
+            pass
+
+    return {"ok": True, "cam_id": cam_id, "flip": body.flip, "restarted": restarted}
+
+
+@app.delete("/cameras/{cam_id}")
+def delete_camera(cam_id: str):
+    """ลบกล้องออก — หยุด process ถ้ากำลังรัน แล้วบันทึกลง cameras_config.json"""
+    if cam_id not in _CAMERAS:
+        raise HTTPException(status_code=404, detail=f"Camera '{cam_id}' not found")
+
+    # หยุด face process ถ้ากำลังทำงาน
+    proc = _face_processes.get(cam_id)
+    if proc is not None and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            proc.kill()
+    _face_processes.pop(cam_id, None)
+
+    # ลบออกจาก config
+    CAMERAS_CONFIG[:] = [c for c in CAMERAS_CONFIG if c["id"] != cam_id]
+    _CAMERAS.pop(cam_id, None)
+    _save_cameras_config(CAMERAS_CONFIG)
+
+    return {"ok": True, "deleted": cam_id}
 
 
 @app.get("/cameras/{cam_id}/stream")
@@ -961,6 +1117,7 @@ def cameras_face_start(cam_id: str):
         env["FACE_ALWAYS_ACTIVE"]   = "1"
         env["FACE_CAMERA_CHILD"]    = "1"   # ป้องกัน multi-camera recursive spawn
         env["CAMERA_URL"]           = str(cam["source"])
+        env["CAMERA_FLIP"]          = "1" if cam.get("flip", False) else "0"
         env["FACE_LIVE_FRAME_PATH"] = str(_live_frame_path_for(cam_id))
         env["FACE_LIVE_STATE_PATH"] = str(_live_state_path_for(cam_id))
 

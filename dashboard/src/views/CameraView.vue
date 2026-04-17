@@ -205,8 +205,18 @@
           </button>
 
           <button
-            @click="toggleFullscreen"
+            @click="showCameraManager = true"
             class="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs
+                   border border-gui-border text-gui-dim hover:text-gui-text
+                   hover:border-gui-in/40 transition-colors"
+            title="จัดการกล้อง"
+          >
+            ⚙ จัดการกล้อง
+          </button>
+
+          <button
+            @click="toggleFullscreen"
+            class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs
                    border border-gui-border text-gui-dim hover:text-gui-text
                    hover:border-gui-in/40 transition-colors"
             title="ขยายหน้าจอ (F)"
@@ -411,6 +421,15 @@
       </div>
     </div>
 
+    <!-- ══ Camera Manager Modal ══════════════════════════════════════ -->
+    <CameraManagerModal
+      v-if="showCameraManager"
+      :cameras="cameras"
+      :api-base="API_BASE"
+      @close="showCameraManager = false"
+      @changed="onCamerasChanged"
+    />
+
     <!-- ══ Confirm Dialog ════════════════════════════════════════════ -->
     <Teleport to="body">
       <div v-if="showConfirm" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
@@ -488,12 +507,13 @@
 
 <script setup>
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
-import LiveDetection  from '@/components/LiveDetection.vue'
-import StatCard       from '@/components/StatCard.vue'
-import PersonCard     from '@/components/PersonCard.vue'
-import AttendanceFeed from '@/components/AttendanceFeed.vue'
-import HourlyChart    from '@/components/HourlyChart.vue'
-import OrgBreakdown   from '@/components/OrgBreakdown.vue'
+import LiveDetection       from '@/components/LiveDetection.vue'
+import StatCard            from '@/components/StatCard.vue'
+import PersonCard          from '@/components/PersonCard.vue'
+import AttendanceFeed      from '@/components/AttendanceFeed.vue'
+import HourlyChart         from '@/components/HourlyChart.vue'
+import OrgBreakdown        from '@/components/OrgBreakdown.vue'
+import CameraManagerModal  from '@/components/CameraManagerModal.vue'
 import { useAttendance }  from '@/composables/useAttendance.js'
 import { useLiveSession } from '@/composables/useLiveSession.js'
 
@@ -514,6 +534,17 @@ async function loadCameras() {
       cameras.value.forEach(cam => initCamState(cam))
     }
   } catch { /* ignore */ }
+}
+
+// ── Camera Manager Modal ─────────────────────────────────────────────
+const showCameraManager = ref(false)
+
+async function onCamerasChanged() {
+  // รีโหลดรายการกล้องหลังเพิ่ม/ลบ — reset focusedCamId ถ้ากล้องนั้นถูกลบ
+  await loadCameras()
+  if (focusedCamId.value && !cameras.value.find(c => c.id === focusedCamId.value)) {
+    focusedCamId.value = null
+  }
 }
 
 // ── Per-Camera State ─────────────────────────────────────────────────

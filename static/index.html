@@ -4,6 +4,14 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Face Attendance Dashboard</title>
+    <!-- Apply theme before Vue mounts to prevent flash -->
+    <script>
+      ;(function() {
+        var t = localStorage.getItem('face-dashboard-theme') || 'auto'
+        var dark = t === 'dark' || (t === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+        document.documentElement.classList.toggle('dark', dark)
+      })()
+    </script>
     <!--
       Google Fonts: Sarabun
       รองรับภาษาไทยได้ดี ถ้าไม่มี internet ให้ลบบรรทัดนี้ออก
@@ -13,8 +21,8 @@
       href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <script type="module" crossorigin src="/assets/index-CcPXbuCG.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-PzEruM6b.css">
+    <script type="module" crossorigin src="/assets/index-A3WSYt-z.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-DMdoHN7i.css">
   </head>
   <body>
     <!-- Vue 3 mount point — ห้ามลบ div นี้ -->

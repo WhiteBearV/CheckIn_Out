@@ -69,7 +69,7 @@ DETECT_EVERY_N_FRAMES = 2 #MAX Skip frames between detections
 FULLSCREEN            = True
 ABSENCE_TIMEOUT_SEC   = 15     # วินาที — ไม่เจอใบหน้านานกว่านี้ → reset liveness ต้องสแกนใหม่ (production ใช้ 1800)
 # IP camera ส่งภาพตรง (ไม่กลับซ้าย-ขวา) → ตั้ง False ถ้าใช้ CAMERA_URL
-CAMERA_FLIP           = False
+CAMERA_FLIP           = os.environ.get("CAMERA_FLIP", "").lower() in ("1", "true", "yes")
 
 # ╔═══════════════════════════════════════════╗
 # ║  Anti-Spoofing: ด่าน 1 — Landmark Depth   ║

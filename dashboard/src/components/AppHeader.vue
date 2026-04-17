@@ -1,12 +1,4 @@
 <template>
-  <!--
-    AppHeader.vue — แถบหัวสุด (Global)
-    ─────────────────────────────────────
-    แสดง: ไอคอน + ชื่อระบบ | วันที่ | เวลา real-time
-    ใช้ร่วมกันทุกหน้า — ไม่ผูกกับข้อมูล attendance
-
-    นาฬิกาอัพเดตทุก 1 วินาทีด้วย setInterval
-  -->
   <header class="bg-gui-panel border-b border-gui-border px-5 py-3
                  flex items-center justify-between gap-4 shrink-0">
 
@@ -22,8 +14,24 @@
       </div>
     </div>
 
-    <!-- ── ขวา: วันที่ + เวลา ── -->
+    <!-- ── ขวา: Theme picker + วันที่ + เวลา ── -->
     <div class="flex items-center gap-4 md:gap-6 text-sm">
+
+      <!-- Theme picker -->
+      <div class="flex items-center gap-1 bg-gui-bg rounded-lg p-0.5 border border-gui-border/60">
+        <button
+          v-for="opt in themeOptions"
+          :key="opt.value"
+          @click="setTheme(opt.value)"
+          :title="opt.label"
+          :class="theme === opt.value
+            ? 'bg-gui-panel text-gui-text shadow-sm'
+            : 'text-gui-dim hover:text-gui-text'"
+          class="px-2 py-1 rounded-md text-xs transition-colors"
+        >
+          {{ opt.icon }}
+        </button>
+      </div>
 
       <!-- วันที่ (ซ่อนบนจอเล็ก) -->
       <div class="hidden sm:block text-right">
@@ -45,6 +53,15 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useTheme } from '@/composables/useTheme.js'
+
+const { theme, setTheme } = useTheme()
+
+const themeOptions = [
+  { value: 'light', icon: '☀', label: 'ธีมสว่าง'    },
+  { value: 'dark',  icon: '🌙', label: 'ธีมมืด'      },
+  { value: 'auto',  icon: '💻', label: 'ตามระบบ (Auto)' },
+]
 
 // ── นาฬิกา real-time ──────────────────────────────────────────────
 const now = ref(new Date())
