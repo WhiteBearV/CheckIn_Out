@@ -1,5 +1,153 @@
 ════════════════════════════════════════════════════════════════════════
   รายงานการปฏิบัติงานฝึกประสบการณ์วิชาชีพ
+  วันที่  : พฤหัสบดีที่ 17 เมษายน 2569
+  สัปดาห์ : สัปดาห์ที่ 5
+════════════════════════════════════════════════════════════════════════
+
+■ งานที่ดำเนินการในวันนี้
+────────────────────────────────────────────────────────────────────────
+
+1. เพิ่มระบบจัดการกล้องผ่าน Web Dashboard (Camera Management)
+   ─────────────────────────────────────────────────────────────────
+   พัฒนาฟีเจอร์ให้ผู้ใช้สามารถเพิ่มและลบกล้องได้จากหน้า Dashboard
+   โดยไม่ต้องแก้ไขโค้ดหรือรีสตาร์ท Server
+
+   - สร้าง CameraManagerModal.vue — Modal จัดการกล้องประกอบด้วย
+       • รายการกล้องที่มีอยู่ แสดง id, ประเภท, toggle Flip และปุ่มลบ
+       • ฟอร์มเพิ่มกล้องใหม่: ชื่อ, ประเภท (IP Camera / Webcam),
+         URL หรือ Port number, toggle Flip ซ้าย-ขวา
+   - เพิ่มปุ่ม "⚙ จัดการกล้อง" ในแถบ Controls ของ CameraView.vue
+   - เมื่อเพิ่ม/ลบกล้อง → reload รายการกล้องอัตโนมัติ
+     และ reset focusedCamId ถ้ากล้องที่ focus ถูกลบออก
+
+2. เพิ่ม API Endpoints สำหรับจัดการกล้อง (api.py)
+   ─────────────────────────────────────────────────────────────────
+   - เพิ่ม cameras_config.json สำหรับเก็บ config กล้องแบบ persistent
+     ระบบโหลดจากไฟล์นี้เมื่อ start server (fallback ไป default
+     ถ้าไฟล์ไม่มีหรือ parse error)
+   - เพิ่ม field flip ใน camera config
+   - อัปเดต GET /cameras ให้คืน source และ flip ด้วย
+   - เพิ่ม POST /cameras — สร้างกล้องใหม่ บันทึกลง JSON
+     (สร้าง id อัตโนมัติ เช่น cam3, cam4)
+   - เพิ่ม DELETE /cameras/{cam_id} — หยุด process และลบกล้อง
+   - เพิ่ม PATCH /cameras/{cam_id}/flip — อัปเดต flip real-time
+     พร้อม restart face process อัตโนมัติถ้ากำลังรันอยู่
+
+3. ระบบ Flip ภาพกล้อง
+   ─────────────────────────────────────────────────────────────────
+   - แก้ให้ config.py อ่าน CAMERA_FLIP จาก environment variable
+     (รองรับ "1", "true", "yes")
+   - ส่ง env var CAMERA_FLIP ไปให้ main.py ตอน start face process
+     เพื่อให้ flip frame ก่อนวาด overlay (bounding box, label)
+     ทำให้ overlay ยังอยู่ถูกตำแหน่งหลัง flip
+   - เมื่อ toggle flip บน Dashboard → PATCH API → restart process
+     อัตโนมัติพร้อมค่า CAMERA_FLIP ใหม่
+
+4. เปลี่ยน HourlyChart จาก Bar Chart เป็น Line Chart
+   ─────────────────────────────────────────────────────────────────
+   - เปลี่ยน Chart.js type จาก 'bar' เป็น 'line'
+   - ลงทะเบียน LineController, LineElement, PointElement, Filler
+   - เพิ่ม fill: true + gradient สีโปร่งใสใต้เส้นกราฟ
+   - tension: 0.4 ทำให้เส้นโค้งมน
+   - pointRadius: 3, pointHoverRadius: 5 แสดงจุดข้อมูลชัดเจน
+
+5. เพิ่มระบบ Theme (Light / Dark / อัตโนมัติตามเวลา)
+   ─────────────────────────────────────────────────────────────────
+   ออกแบบและพัฒนาระบบ theme ที่เปลี่ยนสีทั้ง Dashboard ได้แบบ
+   real-time โดยไม่ต้อง reload หน้า
+
+   - ปรับ tailwind.config.js ให้สี gui-bg/panel/border/text/dim
+     ใช้ CSS variable แทน hardcode (darkMode: 'class')
+   - กำหนด CSS variable ใน style.css:
+       :root       → Light theme (#f6f8fa background)
+       html.dark   → Dark theme (#0d1117 background เหมือนเดิม)
+   - สร้าง useTheme.js composable จัดการ theme state
+     บันทึกใน localStorage และ apply ทันทีโดยไม่ต้อง reload
+   - เพิ่ม inline script ใน index.html apply theme ก่อน Vue mount
+     ป้องกัน flash of wrong theme
+   - เพิ่มปุ่ม ☀ / 🌙 / 💻 ใน AppHeader สำหรับเลือก theme
+   - Mode "ตามระบบ" ใช้เวลาจริงเป็นเกณฑ์:
+       06:00–17:59 → Light theme (กลางวัน)
+       18:00–05:59 → Dark theme  (กลางคืน)
+     มี setInterval ทุก 60 วินาที สลับ theme อัตโนมัติเมื่อถึงเวลา
+   - แก้ HourlyChart.vue ให้อ่านสีจาก CSS variable และ rebuild
+     chart เมื่อ theme เปลี่ยน
+
+■ สรุปไฟล์ที่สร้าง / แก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  [ใหม่]  dashboard/src/components/CameraManagerModal.vue
+    → Modal จัดการกล้อง: รายการกล้อง + toggle Flip + ลบ + ฟอร์มเพิ่ม
+
+  [ใหม่]  cameras_config.json
+    → เก็บ config กล้องแบบ persistent (id, name, source, flip)
+    → อ่านตอน server start, เขียนเมื่อเพิ่ม/ลบ/แก้ไขกล้อง
+
+  [ใหม่]  dashboard/src/composables/useTheme.js
+    → จัดการ theme state (light/dark/auto) + localStorage + auto loop
+
+  [แก้ไข] api.py
+    → _load_cameras_config() / _save_cameras_config() — JSON persistence
+    → เพิ่ม flip field ใน camera config
+    → POST /cameras — สร้างกล้องใหม่
+    → DELETE /cameras/{cam_id} — ลบกล้อง + หยุด process
+    → PATCH /cameras/{cam_id}/flip — toggle flip + restart process
+    → GET /cameras คืน source และ flip
+    → ส่ง CAMERA_FLIP env var ใน face/start
+
+  [แก้ไข] config.py
+    → CAMERA_FLIP อ่านจาก env var แทน hardcode
+
+  [แก้ไข] dashboard/src/views/CameraView.vue
+    → เพิ่มปุ่ม "⚙ จัดการกล้อง" + CameraManagerModal
+    → onCamerasChanged() reload รายการกล้องหลังเพิ่ม/ลบ
+
+  [แก้ไข] dashboard/src/components/HourlyChart.vue
+    → เปลี่ยนจาก Bar Chart เป็น Line Chart
+    → อ่านสีจาก CSS variable + rebuild เมื่อ theme เปลี่ยน
+
+  [แก้ไข] dashboard/src/components/AppHeader.vue
+    → เพิ่มปุ่ม theme picker (☀ / 🌙 / 💻)
+
+  [แก้ไข] dashboard/tailwind.config.js
+    → darkMode: 'class' + สีใช้ CSS variable
+
+  [แก้ไข] dashboard/src/style.css
+    → CSS variable light/dark theme
+
+  [แก้ไข] dashboard/index.html
+    → inline script apply theme ก่อน Vue mount
+
+■ เทคโนโลยีที่ใช้
+────────────────────────────────────────────────────────────────────────
+
+  - Python / FastAPI      — REST API: CRUD กล้อง + JSON persistence
+  - Vue 3 (Composition API, <script setup>)  — Frontend framework
+  - TailwindCSS (darkMode: class)  — CSS variable theming
+  - Chart.js              — Line Chart พร้อม dynamic theme colors
+  - localStorage          — จำค่า theme ระหว่าง session
+  - setInterval           — auto-switch theme ตามเวลา 06:00 / 18:00
+
+■ ปัญหาที่พบและแนวทางแก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  ปัญหา : Flip ภาพด้วย CSS scaleX(-1) บน <img> ทำให้ bounding box
+           และ label ที่ main.py วาดบนเฟรมถูก mirror ตามไปด้วย
+  วิเคราะห์: main.py วาด overlay หลัง CAMERA_FLIP → overlay อยู่ใน
+              พิกัดที่ถูกต้องบนเฟรมที่ flip แล้ว ถ้า CSS flip ซ้ำ
+              overlay จะถูก mirror สองครั้งแสดงผิดตำแหน่ง
+  แก้ไข : ให้ main.py จัดการ flip ผ่าน CAMERA_FLIP env var ก่อนวาด
+           overlay และ restart process เมื่อเปลี่ยน flip setting
+           โดยไม่ใช้ CSS flip บน <img>
+
+  ปัญหา : Vue watch() ที่ module level ไม่ trigger DOM manipulation
+           ทำให้ theme ไม่เปลี่ยนแม้กดปุ่ม
+  วิเคราะห์: watch() นอก component setup() อาจไม่ reliable ใน Vue 3
+  แก้ไข : เปลี่ยนเป็น setTheme() function ที่เรียก applyTheme()
+           ตรงๆ ทันทีเมื่อผู้ใช้กดปุ่ม
+
+════════════════════════════════════════════════════════════════════════
+  รายงานการปฏิบัติงานฝึกประสบการณ์วิชาชีพ
   วันที่  : พุธที่ 16 เมษายน 2568
   สัปดาห์ : สัปดาห์ที่ 5
 ════════════════════════════════════════════════════════════════════════
