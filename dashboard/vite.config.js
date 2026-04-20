@@ -39,4 +39,7 @@ export default defineConfig({
     outDir: '../static',
     emptyOutDir: true,
   },
+
+  // base path ต้องตรงกับที่ FastAPI mount ไว้ (/dashboard/)
+  base: '/dashboard/',
 })

@@ -1,0 +1,162 @@
+════════════════════════════════════════════════════════════════════════
+  รายงานการปฏิบัติงานฝึกประสบการณ์วิชาชีพ
+  วันที่  : อาทิตย์ที่ 20 เมษายน 2568
+  สัปดาห์ : สัปดาห์ที่ 6
+════════════════════════════════════════════════════════════════════════
+
+■ งานที่ดำเนินการในวันนี้
+────────────────────────────────────────────────────────────────────────
+
+1. วิเคราะห์สาเหตุที่ Web Dashboard ไม่สามารถสั่งรัน main.py บน Docker ได้
+   ─────────────────────────────────────────────────────────────────
+   ทำการวิเคราะห์ระบบ Docker ที่มีอยู่ (Dockerfile, docker-compose.yml,
+   requirements.api.txt) เพื่อหาสาเหตุที่ปุ่ม Start Face Recognition
+   บน Dashboard ไม่สามารถเริ่ม main.py ได้ พบสาเหตุทั้งหมด 4 ประการ:
+
+   สาเหตุที่ 1 — ขาด ML Dependencies
+     Dockerfile ติดตั้งเฉพาะ requirements.api.txt ซึ่งมีแค่
+     FastAPI, uvicorn, opencv-headless เท่านั้น ไม่มี insightface,
+     onnxruntime-gpu, mediapipe, deepface ที่ main.py ต้องการ
+     → main.py crash ทันทีตอน import
+
+   สาเหตุที่ 2 — ไม่มี GPU access ใน Docker
+     docker-compose.yml ไม่ได้กำหนด NVIDIA runtime หรือ deploy
+     resources สำหรับ GPU ทำให้ onnxruntime-gpu ไม่พบ GPU
+
+   สาเหตุที่ 3 — กล้อง USB ไม่ได้ mount เข้า Container
+     ไม่มีการ map /dev/video0 หรือ device กล้องใดๆ เข้า container
+     ทำให้ main.py เปิดกล้อง USB ไม่ได้
+
+   สาเหตุที่ 4 — ไม่มีไฟล์ Model
+     ไม่ได้ mount โฟลเดอร์ InsightFace models (~/.insightface/)
+     และ DeepFace models (~/.deepface/) เข้า container
+
+2. แก้ไข Docker Configuration ให้รัน main.py ได้
+   ─────────────────────────────────────────────────────────────────
+   แก้ไขไฟล์ Docker ทั้งหมดให้รองรับการรัน main.py ภายใน container
+
+   - สร้าง docker/requirements.main.txt
+       • insightface, onnxruntime-gpu — Face recognition
+       • mediapipe — Hand/liveness detection
+       • deepface, tensorflow-cpu — MiniFASNet anti-spoofing
+       • albumentations — Image augmentation สำหรับ deepface
+
+   - แก้ไข docker/requirements.api.txt
+       • เปลี่ยนจาก opencv-python-headless
+         เป็น opencv-contrib-python-headless (superset รองรับ
+         algorithm เพิ่มเติมที่ liveness_engine ใช้)
+
+   - แก้ไข docker/Dockerfile
+       • เพิ่ม libgomp1 ใน system packages (ต้องการโดย onnxruntime)
+       • เพิ่มการติดตั้ง requirements.main.txt แยก layer
+
+   - แก้ไข docker/docker-compose.yml
+       • เพิ่ม deploy.resources.reservations.devices สำหรับ NVIDIA GPU
+       • เพิ่ม devices: /dev/video0 สำหรับกล้อง USB
+       • เพิ่ม volumes mount สำหรับ InsightFace models
+         (~/.insightface:/root/.insightface)
+       • เพิ่ม volumes mount สำหรับ DeepFace models
+         (~/.deepface:/root/.deepface)
+
+3. แก้ปัญหาระหว่าง Docker Build (หลายรอบ)
+   ─────────────────────────────────────────────────────────────────
+   รัน docker compose build และพบ error ต่อเนื่อง 4 รอบ:
+
+   รอบที่ 1 — tensorflow==2.16.2 ไม่มี wheel สำหรับ image นี้
+     แก้ไข: เปลี่ยนเป็น tensorflow-cpu (ไม่มี version pin)
+     เหตุผล: liveness_engine.py บังคับ tensorflow รันบน CPU อยู่แล้ว
+              จึงใช้ tensorflow-cpu แทนได้โดยไม่กระทบการทำงาน
+
+   รอบที่ 2 — apt-get connect ไม่ได้ (deb.debian.org timeout)
+     แก้ไข: เพิ่ม network: host ใน build section ของ docker-compose.yml
+     เหตุผล: Docker bridge network ไม่สามารถเชื่อมต่ออินเตอร์เน็ตได้
+              การใช้ host network ทำให้ apt-get และ pip ใช้ network
+              ของเครื่อง host ได้โดยตรง
+
+   รอบที่ 3 — ReadTimeoutError: nvidia_cudnn_cu12 (706 MB) โหลดไม่ทัน
+     แก้ไข: แยก torch+torchvision เป็น Docker layer ของตัวเอง
+              พร้อมเพิ่ม --timeout 600 (10 นาที)
+     เหตุผล: cudnn wheel ขนาดใหญ่มาก connection หลุดกลางทาง
+              การแยก layer ทำให้ Docker cache ช่วยได้เมื่อ retry
+
+   รอบที่ 4 — ReadTimeoutError เดิมอีกรอบ แม้เพิ่ม timeout แล้ว
+     แก้ไข: ลบ torch+torchvision ออกจาก requirements ทั้งหมด
+              (ไม่ติดตั้งใน Docker)
+     เหตุผล: torch ใน liveness_engine.py ถูก import ภายใต้ try/except
+              เพื่อ patch cuda.is_available เท่านั้น ถ้า import ไม่ได้
+              code ยังทำงานต่อได้ deepface จะใช้ tensorflow-cpu แทน
+              ประหยัด image size ได้ ~3 GB
+
+■ สรุปไฟล์ที่สร้าง / แก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  [ใหม่]  docker/requirements.main.txt
+    → ML dependencies สำหรับ main.py
+      insightface, onnxruntime-gpu, mediapipe, deepface,
+      tensorflow-cpu, albumentations
+
+  [แก้ไข] docker/requirements.api.txt
+    → เปลี่ยน opencv-python-headless → opencv-contrib-python-headless
+
+  [แก้ไข] docker/Dockerfile
+    → เพิ่ม libgomp1 ใน apt-get install
+    → เพิ่ม RUN pip install requirements.main.txt พร้อม --timeout 300
+    → ลบการติดตั้ง torch/torchvision ออก
+
+  [แก้ไข] docker/docker-compose.yml
+    → เพิ่ม build.network: host (แก้ apt-get network ไม่ได้)
+    → เพิ่ม deploy.resources.reservations (NVIDIA GPU)
+    → เพิ่ม devices: /dev/video0 (USB camera)
+    → เพิ่ม volumes: ~/.insightface, ~/.deepface (model files)
+
+■ เทคโนโลยีที่ใช้
+────────────────────────────────────────────────────────────────────────
+
+  - Docker / Docker Compose  — Container build และ service config
+  - NVIDIA Container Toolkit — GPU passthrough ใน Docker
+  - Python / pip             — Package management ใน Docker build
+  - FastAPI (api.py)         — spawn main.py ผ่าน subprocess.Popen
+                               พร้อม env vars (FACE_HEADLESS, CAMERA_URL ฯลฯ)
+
+■ ปัญหาที่พบและแนวทางแก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  ปัญหา : tensorflow==2.16.2 ไม่มี distribution สำหรับ python:3.12-slim
+  แก้ไข : เปลี่ยนเป็น tensorflow-cpu (ไม่ pin version)
+           เหมาะสมกว่าเพราะ liveness_engine.py บังคับ TF รัน CPU อยู่แล้ว
+           เพื่อป้องกัน CUDA conflict กับ onnxruntime-gpu
+
+  ปัญหา : apt-get เชื่อมต่อ deb.debian.org ไม่ได้ใน Docker build
+  แก้ไข : เพิ่ม network: host ใน build section ของ docker-compose.yml
+           ทำให้ container ระหว่าง build ใช้ network ของ host โดยตรง
+
+  ปัญหา : pip download nvidia_cudnn_cu12 (706 MB) timeout ซ้ำหลายรอบ
+           แม้จะเพิ่ม --timeout 600 และแยก layer แล้วก็ยังล้มเหลว
+  แก้ไข : ตัดสินใจไม่ติดตั้ง torch ใน Docker เลย เพราะ torch ถูกใช้
+           เฉพาะ patch CUDA ก่อน deepface load ซึ่งอยู่ใน try/except
+           ไม่จำเป็นต่อการทำงานจริง
+
+■ งานค้างที่จะดำเนินการต่อในวันพรุ่งนี้ [TODO]
+────────────────────────────────────────────────────────────────────────
+
+  ⚠ docker compose build ยังไม่เสร็จสมบูรณ์
+     รอดูผลการ build รอบล่าสุด (หลังลบ torch ออกแล้ว)
+
+  □ 1. ตรวจสอบผล build รอบล่าสุด
+         - ถ้าสำเร็จ → รัน docker compose up และทดสอบ
+           กด Start บน Dashboard ว่า main.py รันได้หรือไม่
+         - ถ้ายังมี error → วิเคราะห์ error ใหม่และแก้ไขต่อ
+
+  □ 2. ทดสอบ Functional ของ Docker
+         - ทดสอบ main.py รันใน container ได้จริง
+         - ทดสอบ GPU ถูกใช้งาน (onnxruntime-gpu)
+         - ทดสอบ face recognition ทำงานได้ปกติ
+         - ทดสอบ MJPEG stream แสดงบน Dashboard
+
+  □ 3. ถ้า build สำเร็จแต่ main.py ยังรันไม่ได้
+         อาจต้องตรวจสอบเพิ่มเติม:
+         - NVIDIA Container Toolkit ติดตั้งถูกต้องบน host
+         - model files มีอยู่ที่ ~/.insightface/ และ ~/.deepface/
+         - encodings.pkl มีอยู่และ format ถูกต้อง
+
+════════════════════════════════════════════════════════════════════════

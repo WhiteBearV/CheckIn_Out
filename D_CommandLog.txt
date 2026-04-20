@@ -1,0 +1,104 @@
+═════��══════════════════════════════════════════════════════════════════
+  Command Log — Face Attendance System
+  อัปเดตล่าสุด : 20 เมษายน 2569
+════════════════════════════════════════════════════════════════════════
+
+■ Docker (วิธีหลัก — รันผ่าน Container)
+────────────────────────────────────────────────────────────────────────
+
+  เริ่มระบบ (ครั้งแรก / หลัง rebuild):
+    docker compose -f docker/docker-compose.yml up -d --build
+
+  เริ่มระบบ (ปกติ ไม่ rebuild image):
+    docker compose -f docker/docker-compose.yml up -d
+
+  หยุดระบบ:
+    docker compose -f docker/docker-compose.yml down
+
+  ดู log realtime:
+    docker compose -f docker/docker-compose.yml logs -f
+
+  ดู log เฉพาะ service:
+    docker compose -f docker/docker-compose.yml logs -f api
+    docker compose -f docker/docker-compose.yml logs -f db
+
+  ตรวจสถานะ container:
+    docker compose -f docker/docker-compose.yml ps
+
+  เปิด URL หลังรัน:
+    http://localhost:8000/dashboard/    ← Web Dashboard
+    http://localhost:8000/docs          ← API Docs (Swagger)
+
+
+■ Dashboard (Vue — build สำหรับ production)
+────────────────────────────────────────────────────────────────────────
+
+  ติดตั้ง dependency (ครั้งแรก):
+    cd dashboard && npm install
+
+  Build เพื่อ deploy (output → static/):
+    cd dashboard && npm run build
+
+  Dev server (ทดสอบ frontend แยก):
+    cd dashboard && npm run dev
+    → เปิด http://localhost:5173
+
+
+■ Face Recognition (main.py — รันบนเครื่อง host โดยตรง)
+────────────────────────────────────────────────────────────────────────
+
+  รันด้วย profile เริ่มต้น:
+    python main.py
+
+  รันด้วย profile กล้องหลัก:
+    python main.py cam_main
+
+  รันด้วย profile ทดสอบ:
+    python main.py test
+
+  รันด้วย env var:
+    FACE_PROFILE=cam_usb python main.py
+
+  สร้าง/อัปเดต face encodings:
+    python encode_faces_arcface.py
+
+
+■ FastAPI (รัน local ไม่ใช้ Docker)
+────────────────────────────────────────────────────────────────────────
+
+  รัน API server:
+    uvicorn api:app --host 0.0.0.0 --port 8000
+
+  รัน dev mode (auto-reload):
+    uvicorn api:app --host 0.0.0.0 --port 8000 --reload
+
+
+■ Database (PostgreSQL)
+────────────────────────────────────────────────────────────────────────
+
+  เชื่อมต่อ DB ใน Docker container:
+    docker exec -it face_db psql -U face_user -d face_attendance
+
+  เชื่อมต่อ DB local:
+    psql -U face_user -h localhost -d face_attendance
+
+  รัน migration script:
+    psql -U face_user -h localhost -d face_attendance -f migrate_v9.sql
+
+  Export ข้อมูล:
+    PGPASSWORD=1234 pg_dump -U face_user -h localhost face_attendance > backup.dump
+
+  Import ข้อมูล:
+    PGPASSWORD=1234 psql -U face_user -h localhost face_attendance < backup.dump
+
+
+■ Venv (Python virtual environment)
+────────────────────────────────────────────────────────────────────────
+
+  เปิดใช้:
+    source venv/bin/activate
+
+  ติดตั้ง dependencies ทั้งหมด:
+    pip install -r requirements.txt
+
+════════════════════════════════════════════════════════════════════════
