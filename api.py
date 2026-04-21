@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, date
@@ -63,6 +64,15 @@ if _static_dir.exists():
 _picsave_dir = _ROOT / "PicSAVE"
 if _picsave_dir.exists():
     app.mount("/snapshots", StaticFiles(directory=_picsave_dir), name="snapshots")
+
+@app.get("/", include_in_schema=False)
+def root():
+    return RedirectResponse(url="/dashboard/")
+
+@app.get("/api/session/live", include_in_schema=False)
+def session_live_compat():
+    """Alias: /api/session/live → /session/live (compat กับ useLiveSession.js build เก่า)"""
+    return session_live()
 
 _ADMIN_KEY = os.environ.get("ADMIN_API_KEY", "")
 
@@ -847,9 +857,11 @@ def session_live():
     merged: dict[str, dict] = {}
     any_active = False
     latest_ts: float | None = None
+    found_cam_files = False
 
     # ── อ่าน per-camera state files (live_state_cam1.json, live_state_cam2.json ฯลฯ) ──
     for path in sorted(_ROOT.glob("live_state_*.json")):
+        found_cam_files = True
         try:
             data = _json.loads(path.read_text(encoding="utf-8"))
         except Exception:
@@ -864,25 +876,26 @@ def session_live():
             if pid and pid not in merged:
                 merged[pid] = p
 
-    # ── Fallback: legacy live_state.json ────────────────────────────────────
-    if not merged:
-        if not _LIVE_STATE_PATH.exists():
-            return {"active": False, "ts": None, "stale": True, "persons": []}
-        try:
-            data = _json.loads(_LIVE_STATE_PATH.read_text(encoding="utf-8"))
-        except Exception:
-            return {"active": False, "ts": None, "stale": True, "persons": []}
-        stale = (data.get("ts") is None) or (_time.time() - data["ts"] > 5)
-        data["stale"] = stale
-        return data
+    # ── ถ้ามี per-camera files → ใช้ผลที่รวมมาแล้ว (แม้ไม่มีคนในกล้อง) ──
+    if found_cam_files:
+        stale = not any_active
+        return {
+            "active":  any_active,
+            "ts":      latest_ts,
+            "stale":   stale,
+            "persons": list(merged.values()),
+        }
 
-    stale = not any_active
-    return {
-        "active":  any_active,
-        "ts":      latest_ts,
-        "stale":   stale,
-        "persons": list(merged.values()),
-    }
+    # ── Fallback: legacy live_state.json (เมื่อไม่มี per-camera files) ──────
+    if not _LIVE_STATE_PATH.exists():
+        return {"active": False, "ts": None, "stale": True, "persons": []}
+    try:
+        data = _json.loads(_LIVE_STATE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {"active": False, "ts": None, "stale": True, "persons": []}
+    stale = (data.get("ts") is None) or (_time.time() - data["ts"] > 5)
+    data["stale"] = stale
+    return data
 
 
 # ╔═══════════════════════════════════════════════════════════════════════════╗

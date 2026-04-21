@@ -331,6 +331,11 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN",
     if _ALWAYS_ACTIVE:
         print("[ALWAYS_ACTIVE] ข้าม Active Windows — รันตลอดจนกว่าจะหยุดเอง")
 
+    # ─── Dashboard Child Mode ───
+    # เมื่อ spawn จาก api.py (FACE_CAMERA_CHILD=1) ให้ทำ face recognition ตลอดเวลา
+    # ไม่สนใจ ACTIVE_WINDOWS — Dashboard ควบคุม start/stop เอง
+    _DASHBOARD_CHILD = os.environ.get("FACE_CAMERA_CHILD", "").lower() in ("1", "true", "yes")
+
     # ─── หน้าต่าง ───
     win_name = "Face Attendance System"
     if not _HEADLESS:
@@ -440,7 +445,17 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN",
                 break
 
         # ─── Active Window Check ───
-        if _ALWAYS_ACTIVE:
+        if _DASHBOARD_CHILD:
+            # spawn จาก api.py → face recognition ตลอดเวลา ไม่สนใจ ACTIVE_WINDOWS
+            if now.date() != _current_date:
+                _current_date = now.date()
+                session       = SessionManager()
+                last_faces    = []
+                last_face_ts  = now_ts
+                checkout_done = False
+                print(f"[DAILY RESET] วันใหม่ {now.strftime('%Y-%m-%d')}")
+            _active = True
+        elif _ALWAYS_ACTIVE:
             # ── Always Active: ใช้ ACTIVE_WINDOWS แบ่ง face mode / CCTV mode ──
             _in_face_window = _in_active_window(now.time(), cfg.ACTIVE_WINDOWS)
 

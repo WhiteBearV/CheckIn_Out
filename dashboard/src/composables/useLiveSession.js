@@ -14,7 +14,7 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 
 const POLL_MS = 2_000   // polling interval (2 วินาที)
-const API_URL = '/api/session/live'
+const API_URL = '/session/live'
 
 export function useLiveSession() {
 
