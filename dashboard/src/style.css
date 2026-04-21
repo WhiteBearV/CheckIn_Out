@@ -10,6 +10,12 @@
   --gui-border: 208 215 222;   /* #d0d7de */
   --gui-text:   31  35  40;    /* #1f2328 */
   --gui-dim:    99  108 118;   /* #636c76 */
+
+  /* สีฟังก์ชัน light mode — เข้มขึ้นเพื่อให้อ่านได้บน background สว่าง */
+  --gui-in:     22  163 74;    /* #16a34a เขียวเข้ม (contrast 4.5:1 บนขาว) */
+  --gui-fail:   220 38  38;    /* #dc2626 แดงเข้ม */
+  --gui-out:    180 83  9;     /* #b45309 เหลืองอำพัน */
+  --gui-warn:   194 65  12;    /* #c2410c ส้มเข้ม */
 }
 
 /* ── Theme: Dark ─────────────────────────────────────────────────── */
@@ -19,6 +25,12 @@ html.dark {
   --gui-border: 48  54  61;    /* #30363d */
   --gui-text:   230 237 243;   /* #e6edf3 */
   --gui-dim:    125 133 144;   /* #7d8590 */
+
+  /* สีฟังก์ชัน dark mode — สีสดเดิม อ่านได้ดีบน background มืด */
+  --gui-in:     0   220 0;     /* #00dc00 */
+  --gui-fail:   255 51  51;    /* #ff3333 */
+  --gui-out:    255 215 0;     /* #ffd700 */
+  --gui-warn:   255 102 0;     /* #ff6600 */
 }
 
 /* ── Base styles ─────────────────────────────────────────────────── */
@@ -36,3 +48,45 @@ body {
 
 /* ── Utility ─────────────────────────────────────────────────────── */
 .tabular-nums { font-variant-numeric: tabular-nums; }
+
+/* ── Camera start/stop buttons ───────────────────────────────────── */
+/* Light mode: solid background + white text → อ่านได้ชัดเจน        */
+/* Dark mode:  semi-transparent + colored text → ดูเข้ากับ theme     */
+
+.btn-cam-start {
+  background-color: rgb(var(--gui-in));
+  color: white;
+  border: 1px solid rgb(var(--gui-in) / 0.8);
+  font-weight: 600;
+}
+.btn-cam-start:hover:not(:disabled) { opacity: 0.85; }
+
+.btn-cam-stop {
+  background-color: rgb(var(--gui-fail));
+  color: white;
+  border: 1px solid rgb(var(--gui-fail) / 0.8);
+  font-weight: 600;
+}
+.btn-cam-stop:hover:not(:disabled) { opacity: 0.85; }
+
+html.dark .btn-cam-start {
+  background-color: rgb(var(--gui-in) / 0.15);
+  color: rgb(var(--gui-in));
+  border: 1px solid rgb(var(--gui-in) / 0.35);
+  font-weight: 500;
+}
+html.dark .btn-cam-start:hover:not(:disabled) {
+  background-color: rgb(var(--gui-in) / 0.25);
+  opacity: 1;
+}
+
+html.dark .btn-cam-stop {
+  background-color: rgb(var(--gui-fail) / 0.15);
+  color: rgb(var(--gui-fail));
+  border: 1px solid rgb(var(--gui-fail) / 0.35);
+  font-weight: 500;
+}
+html.dark .btn-cam-stop:hover:not(:disabled) {
+  background-color: rgb(var(--gui-fail) / 0.25);
+  opacity: 1;
+}

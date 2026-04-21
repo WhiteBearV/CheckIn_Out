@@ -140,13 +140,14 @@ _LIVE_FRAME_PATH = (
     or os.path.join(os.path.dirname(__file__), "live_frame.jpg")
 )
 _LIVE_FRAME_INTERVAL = 1.0 / 15   # ~15fps
+_LIVE_FRAME_JPEG_Q   = int(os.environ.get("FACE_STREAM_JPEG_QUALITY", 70))
 
 def _write_live_frame(frame_bgr, path=None):
     """เขียน frame พร้อม overlay ทั้งหมดเป็น JPEG สำหรับ Dashboard stream"""
     p = path or _LIVE_FRAME_PATH
     tmp = p + ".tmp"
     try:
-        ok, buf = cv2.imencode('.jpg', frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 70])
+        ok, buf = cv2.imencode('.jpg', frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, _LIVE_FRAME_JPEG_Q])
         if ok:
             with open(tmp, 'wb') as _fh:
                 _fh.write(buf.tobytes())

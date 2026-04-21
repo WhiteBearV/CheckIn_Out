@@ -146,8 +146,7 @@
                 <template v-else>
                   <div v-if="!getCamState(cam.id).isStarting" class="relative z-20 flex flex-col items-center gap-2">
                     <button @click.stop="startFace(cam.id)"
-                      class="px-5 py-2 rounded-lg text-xs font-semibold transition-colors
-                             bg-gui-in/20 text-gui-in border border-gui-in/40 hover:bg-gui-in/30"
+                      class="btn-cam-start px-5 py-2 rounded-lg text-xs transition-colors"
                     >▶ เปิด</button>
                   </div>
                   <div v-else class="relative z-20 flex items-center gap-2 text-gui-out text-xs">
@@ -176,11 +175,9 @@
             <button
               @click="toggleFace(cam.id)"
               :disabled="getCamState(cam.id).isStarting"
-              class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
+              class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs
                      transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              :class="isLive(cam.id)
-                ? 'bg-gui-fail/15 text-gui-fail border border-gui-fail/30 hover:bg-gui-fail/25'
-                : 'bg-gui-in/15  text-gui-in  border border-gui-in/30  hover:bg-gui-in/25'"
+              :class="isLive(cam.id) ? 'btn-cam-stop' : 'btn-cam-start'"
             >
               <span>{{ isLive(cam.id) ? '⏹' : '▶' }}</span>
               <span class="hidden sm:inline">{{ cam.name }}</span>
@@ -195,11 +192,9 @@
             v-if="cameras.length > 1"
             @click="anyLive ? stopAll() : startAll()"
             :disabled="anyStarting"
-            class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
-                   border transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            :class="anyLive
-              ? 'bg-gui-fail/10 text-gui-fail/80 border-gui-fail/20 hover:bg-gui-fail/20'
-              : 'bg-gui-in/10   text-gui-in/80  border-gui-in/20   hover:bg-gui-in/20'"
+            class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs
+                   transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            :class="anyLive ? 'btn-cam-stop' : 'btn-cam-start'"
           >
             {{ anyLive ? '⏹ หยุดทั้งหมด' : '▶ เปิดทั้งหมด' }}
           </button>

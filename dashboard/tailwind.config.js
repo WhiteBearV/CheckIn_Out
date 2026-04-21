@@ -20,11 +20,11 @@ export default {
         'gui-text':   'rgb(var(--gui-text)   / <alpha-value>)',
         'gui-dim':    'rgb(var(--gui-dim)    / <alpha-value>)',
 
-        // ── สีฟังก์ชัน (คงที่ทุก theme) ─────────────────────────────
-        'gui-in':   '#00dc00',
-        'gui-out':  '#ffd700',
-        'gui-fail': '#ff3333',
-        'gui-warn': '#ff6600',
+        // ── สีฟังก์ชัน (ปรับตาม theme เพื่อ contrast ที่ดีทั้ง light/dark) ──
+        'gui-in':   'rgb(var(--gui-in)   / <alpha-value>)',
+        'gui-out':  'rgb(var(--gui-out)  / <alpha-value>)',
+        'gui-fail': 'rgb(var(--gui-fail) / <alpha-value>)',
+        'gui-warn': 'rgb(var(--gui-warn) / <alpha-value>)',
       },
 
       fontFamily: {

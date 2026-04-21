@@ -53,6 +53,13 @@ app.add_middleware(
 import pathlib
 _ROOT = pathlib.Path(__file__).parent
 
+# ── Frame/State files directory ───────────────────────────────────────────────
+# ปกติเก็บใน _ROOT เดียวกับ api.py
+# บน Docker ตั้ง FACE_FRAMES_DIR=/tmp/frames เพื่อใช้ tmpfs (RAM) แทน disk
+# → กำจัด I/O jitter ที่ทำให้ MJPEG stream กระตุก
+_FRAMES_DIR = pathlib.Path(os.environ.get("FACE_FRAMES_DIR", str(_ROOT)))
+_FRAMES_DIR.mkdir(parents=True, exist_ok=True)
+
 # ── Dashboard static files (Vue build output) ────────────────────────────────
 _static_dir = _ROOT / "static"
 if _static_dir.exists():
@@ -836,7 +843,7 @@ def person_face(per_id: str):
 import json as _json
 import time as _time
 
-_LIVE_STATE_PATH = _ROOT / "live_state.json"   # legacy path (main.py รันตรง)
+_LIVE_STATE_PATH = _FRAMES_DIR / "live_state.json"   # legacy path (main.py รันตรง)
 
 @app.get("/session/live")
 def session_live():
@@ -860,7 +867,9 @@ def session_live():
     found_cam_files = False
 
     # ── อ่าน per-camera state files (live_state_cam1.json, live_state_cam2.json ฯลฯ) ──
-    for path in sorted(_ROOT.glob("live_state_*.json")):
+    # ค้นหาทั้งใน _FRAMES_DIR (tmpfs) และ _ROOT (legacy)
+    _state_paths = sorted({*_FRAMES_DIR.glob("live_state_*.json"), *_ROOT.glob("live_state_*.json")})
+    for path in _state_paths:
         found_cam_files = True
         try:
             data = _json.loads(path.read_text(encoding="utf-8"))
@@ -905,7 +914,7 @@ def session_live():
 import sys as _sys
 import subprocess as _subprocess
 
-_LIVE_FRAME_PATH  = _ROOT / "live_frame.jpg"
+_LIVE_FRAME_PATH  = _FRAMES_DIR / "live_frame.jpg"
 _face_process: "_subprocess.Popen | None" = None
 
 
@@ -1002,17 +1011,20 @@ def camera_face_stream():
     """
     def generate():
         import time
+        last_mtime = 0.0
         while True:
-            if _LIVE_FRAME_PATH.exists():
-                try:
+            try:
+                mtime = _LIVE_FRAME_PATH.stat().st_mtime
+                if mtime != last_mtime:
+                    last_mtime = mtime
                     frame_bytes = _LIVE_FRAME_PATH.read_bytes()
                     yield (
                         b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'
                         + frame_bytes + b'\r\n'
                     )
-                except Exception:
-                    pass
-            time.sleep(0.067)
+            except (FileNotFoundError, OSError):
+                pass
+            time.sleep(0.033)  # poll 30fps แต่ส่งเฉพาะเมื่อ main.py เขียน frame ใหม่
 
     return StreamingResponse(
         generate(),
@@ -1042,11 +1054,11 @@ _face_processes: dict[str, "_subprocess.Popen"] = {}
 
 
 def _live_frame_path_for(cam_id: str) -> pathlib.Path:
-    return _ROOT / f"live_frame_{cam_id}.jpg"
+    return _FRAMES_DIR / f"live_frame_{cam_id}.jpg"
 
 
 def _live_state_path_for(cam_id: str) -> pathlib.Path:
-    return _ROOT / f"live_state_{cam_id}.json"
+    return _FRAMES_DIR / f"live_state_{cam_id}.json"
 
 
 @app.get("/cameras/{cam_id}/face-stream")
@@ -1062,18 +1074,21 @@ def cameras_face_stream(cam_id: str):
 
     def generate():
         import time
+        last_mtime = 0.0
         while True:
-            if live_frame.exists():
-                try:
+            try:
+                mtime = live_frame.stat().st_mtime
+                if mtime != last_mtime:
+                    last_mtime = mtime
                     frame_bytes = live_frame.read_bytes()
                     yield (
                         b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'
                         + frame_bytes
                         + b'\r\n'
                     )
-                except Exception:
-                    pass
-            time.sleep(0.067)
+            except (FileNotFoundError, OSError):
+                pass
+            time.sleep(0.033)  # poll 30fps แต่ส่งเฉพาะเมื่อ main.py เขียน frame ใหม่
 
     return StreamingResponse(
         generate(),

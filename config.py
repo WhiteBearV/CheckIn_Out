@@ -15,7 +15,8 @@ load_dotenv()
 # ╚═══════════════════════════════════════════╝
 ENCODINGS_FILE        = "encodings.pkl"
 FACE_TOLERANCE        = 0.35      # cosine similarity ขั้นต่ำ (ArcFace ใช้ 0.3-0.4)
-DET_SIZE              = (320, 320)  # ขนาดภาพสำหรับ detection (320=เร็ว, 640=แม่น)
+_det = int(os.environ.get("FACE_DET_SIZE", 320))
+DET_SIZE              = (_det, _det)  # ปรับผ่าน env: FACE_DET_SIZE=160 (เร็วขึ้น 4x แต่แม่นน้อยลง)
 PANEL_WIDTH           = 250
 
 # ╔═══════════════════════════════════════════╗
@@ -65,7 +66,7 @@ CAMERAS_LIST = [
 # ╔═══════════════════════════════════════════╗
 # ║  Performance                              ║
 # ╚═══════════════════════════════════════════╝
-DETECT_EVERY_N_FRAMES = 2 #MAX Skip frames between detections
+DETECT_EVERY_N_FRAMES = int(os.environ.get("FACE_DETECT_EVERY_N", 2))  # ปรับผ่าน env: FACE_DETECT_EVERY_N=5
 FULLSCREEN            = True
 ABSENCE_TIMEOUT_SEC   = 15     # วินาที — ไม่เจอใบหน้านานกว่านี้ → reset liveness ต้องสแกนใหม่ (production ใช้ 1800)
 # IP camera ส่งภาพตรง (ไม่กลับซ้าย-ขวา) → ตั้ง False ถ้าใช้ CAMERA_URL
@@ -139,9 +140,9 @@ CHALLENGE_PROXIMITY   = 1.5
 # ╔═══════════════════════════════════════════╗
 # ║  Anti-Spoofing: ด่าน 6 — MiniFASNet       ║
 # ╚═══════════════════════════════════════════╝
-FAS_ENABLED           = True
+FAS_ENABLED           = os.environ.get("FAS_ENABLED", "true").lower() not in ("false", "0", "no")
 FAS_THRESHOLD         = 0.90     # เพิ่มจาก 0.5 → 0.55 (ต้องผ่าน AI confidence สูงขึ้น)
-FAS_CHECK_EVERY       = 5        # ลดจาก 10 → 5 ตรวจบ่อยขึ้น (ชดเชย Screen ที่ปิดไป)
+FAS_CHECK_EVERY       = int(os.environ.get("FAS_CHECK_EVERY", 5))  # ปรับผ่าน env: FAS_CHECK_EVERY=15
 FAS_REQUIRED_REAL     = 3        # จำนวนครั้ง real ที่ต้องผ่าน AI
 FAS_CONFIRM_SEC       = 2.0      # วินาทีที่ต้องผ่านต่อเนื่อง (เหมือน SCREEN_CONFIRM_SEC)
 FAS_SPOOF_CONFIRM_SEC = 4.0      # ต้องตรวจ spoof ต่อเนื่องครบ X วิ ก่อน fail จริง (รองรับ false positive จากมุมหน้า)
