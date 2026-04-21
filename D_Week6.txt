@@ -1,5 +1,171 @@
 ════════════════════════════════════════════════════════════════════════
   รายงานการปฏิบัติงานฝึกประสบการณ์วิชาชีพ
+  วันที่  : อังคารที่ 21 เมษายน 2569
+  สัปดาห์ : สัปดาห์ที่ 6
+════════════════════════════════════════════════════════════════════════
+
+■ งานที่ดำเนินการในวันนี้
+────────────────────────────────────────────────────────────────────────
+
+1. แก้ปัญหา Frame Lag / Stuttering บน Docker Web Dashboard
+   ─────────────────────────────────────────────────────────────────
+   วิเคราะห์และแก้ไขสาเหตุที่ทำให้ MJPEG stream บน Web Dashboard
+   มีการกระตุกและหน่วงเวลาสูงเมื่อ Deploy บน Docker (CPU-only)
+
+   สาเหตุที่ 1 — api.py ส่ง frame ซ้ำ
+     generate() ใน /camera/face-stream และ /cameras/{id}/face-stream
+     ใช้ time.sleep(0.067) ส่ง live_frame.jpg ทุก 67ms โดยไม่ตรวจว่า
+     ไฟล์เปลี่ยนหรือยัง ทำให้ browser ได้รับ frame เดิมซ้ำๆ 10-15 ครั้ง
+     ระหว่างที่ main.py กำลัง process อยู่ → เห็นเป็น "แช่ → กระโดด"
+     แก้ไข: เพิ่ม mtime tracking ด้วย stat().st_mtime ส่งเฉพาะเมื่อ
+             ไฟล์เปลี่ยนจริง เพิ่ม poll rate จาก 15fps → 30fps
+
+   สาเหตุที่ 2 — Disk I/O jitter จาก Docker overlay filesystem
+     live_frame.jpg เขียน/อ่านผ่าน Docker overlay filesystem
+     มี latency ไม่สม่ำเสมอทำให้ stream กระตุกไม่สม่ำเสมอ
+     แก้ไข: เพิ่ม tmpfs mount ที่ /tmp/frames (RAM disk 32MB)
+             เพิ่ม FACE_FRAMES_DIR env var ใน api.py และ docker-compose
+             ให้ frame files ทั้งหมดเขียน/อ่านจาก RAM แทน disk
+
+   สาเหตุที่ 3 — InsightFace บน CPU ช้า
+     ไม่มี GPU → InsightFace detection ใช้เวลา 50-200ms ต่อเฟรม
+     ทำให้ main.py loop ช้าลงเหลือ 1-5fps แทนที่จะเป็น 15fps
+     แก้ไข: เพิ่ม FACE_DET_SIZE=160 (ลดจาก 320 → เร็วขึ้น ~4x)
+             เพิ่ม FACE_DETECT_EVERY_N=5 (detect ทุก 5 frames)
+             เพิ่ม FACE_STREAM_JPEG_QUALITY=50 (ลด I/O ~30%)
+
+   สาเหตุที่ 4 — MiniFASNet (TensorFlow) spike
+     MiniFASNet รัน TensorFlow บน CPU ใช้ 200-800ms ต่อครั้ง
+     ทำให้เกิด spike กระตุกเป็นช่วงๆ ทุก 2-3 วินาที
+     แก้ไข: เพิ่ม FAS_ENABLED env var ใน config.py
+             ตั้ง FAS_ENABLED=false ใน docker-compose เพื่อปิดบน Docker
+
+2. แก้ปัญหา Timezone ไม่ตรง
+   ─────────────────────────────────────────────────────────────────
+   Docker container รันด้วย UTC (เวลาสากล) ทำให้เวลาบันทึก
+   การลงเวลาต่างจากเวลาจริงในไทย 7 ชั่วโมง
+   แก้ไข: เพิ่ม TZ: Asia/Bangkok ใน docker-compose.yml environment
+
+3. เปิดให้เข้าใช้งาน Web Dashboard จากเครื่องอื่นในวง LAN
+   ─────────────────────────────────────────────────────────────────
+   แก้ไข docker-compose.yml เปลี่ยน port mapping จาก 8000:8000
+   เป็น 80:8000 ให้เข้าถึงได้ที่ http://<IP> โดยไม่ต้องใส่หมายเลข port
+   ตรวจสอบ firewall (ufw inactive จึงไม่ต้องเปิด port เพิ่ม)
+   URL สำหรับเครื่องอื่น: http://192.168.1.104/dashboard/
+
+4. แก้ไขสีปุ่ม Start/Stop กล้องสำหรับ Light Theme
+   ─────────────────────────────────────────────────────────────────
+   ปุ่มรัน main.py ใช้สี gui-in (#00dc00 สีเขียวสด) แบบ hardcode
+   ซึ่งมี contrast ต่ำมากบน light background (อัตราส่วน ~1.4:1)
+   ทำให้ตัวอักษรกลมกลืนกับพื้นหลังอ่านไม่ออก
+
+   แก้ไข style.css:
+     - เพิ่ม CSS variables --gui-in, --gui-fail, --gui-out, --gui-warn
+       แยก light/dark mode
+     - Light: ใช้สีเข้ม (#16a34a เขียว, #dc2626 แดง) contrast ≥4.5:1
+     - Dark: ใช้สีสดเดิม (#00dc00, #ff3333) ที่อ่านได้ดีบน background มืด
+     - เพิ่ม .btn-cam-start และ .btn-cam-stop utility classes
+       Light mode: solid background + white text (ชัดเจนสุด)
+       Dark mode: semi-transparent + colored text (ดูเข้ากับ theme)
+
+   แก้ไข tailwind.config.js:
+     - เปลี่ยน gui-in, gui-fail, gui-out, gui-warn จาก hardcode สี
+       เป็น rgb(var(--gui-*) / <alpha-value>) เพื่อรับค่าจาก CSS variable
+
+   แก้ไข CameraView.vue:
+     - เปลี่ยนปุ่ม 3 จุด (overlay เปิด, per-camera toggle, เปิด/หยุดทั้งหมด)
+       ให้ใช้ class .btn-cam-start / .btn-cam-stop แทน inline Tailwind classes
+
+5. Push Docker Image ขึ้น Docker Hub
+   ─────────────────────────────────────────────────────────────────
+   Build และ publish Docker image เพื่อให้เครื่องอื่นสามารถ
+   pull มาใช้งานได้โดยไม่ต้อง build เอง
+
+   - docker tag docker-api photcharap/face-attendance:latest
+   - docker push photcharap/face-attendance:latest
+   - Image พร้อมใช้งานที่ docker.io/photcharap/face-attendance
+
+   ศึกษาและเตรียมขั้นตอน Deploy บนเครื่อง Windows:
+   - ติดตั้ง Docker Desktop + WSL2
+   - แก้ docker-compose.yml ให้ใช้ image จาก Hub แทน build
+   - เปลี่ยน volume path เป็น Windows style (C:/Users/...)
+   - comment devices (USB camera ไม่รองรับบน Windows)
+   - รองรับ IP Camera (RTSP) ได้ปกติ
+
+■ สรุปไฟล์ที่สร้าง / แก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  [แก้ไข] api.py
+    → generate() ใน /camera/face-stream และ /cameras/{id}/face-stream
+      เพิ่ม mtime tracking ส่งเฉพาะเมื่อ live_frame file เปลี่ยนจริง
+    → เพิ่ม _FRAMES_DIR = Path(FACE_FRAMES_DIR env) รองรับ tmpfs
+    → _LIVE_FRAME_PATH, _LIVE_STATE_PATH, _live_frame_path_for(),
+      _live_state_path_for() ทั้งหมดใช้ _FRAMES_DIR แทน _ROOT
+    → session/live glob ค้นหา state files ทั้งใน _FRAMES_DIR และ _ROOT
+
+  [แก้ไข] config.py
+    → DET_SIZE อ่านจาก env FACE_DET_SIZE (default 320)
+    → DETECT_EVERY_N_FRAMES อ่านจาก env FACE_DETECT_EVERY_N (default 2)
+    → FAS_ENABLED อ่านจาก env FAS_ENABLED (default true)
+    → FAS_CHECK_EVERY อ่านจาก env FAS_CHECK_EVERY (default 5)
+
+  [แก้ไข] main.py
+    → _LIVE_FRAME_JPEG_Q อ่านจาก env FACE_STREAM_JPEG_QUALITY (default 70)
+      อ่านครั้งเดียวตอน module load แทนการอ่านทุก frame
+
+  [แก้ไข] docker/docker-compose.yml
+    → ports: 80:8000 (เปลี่ยนจาก 8000:8000)
+    → TZ: Asia/Bangkok (แก้ timezone)
+    → FACE_DETECT_EVERY_N: 5, FACE_DET_SIZE: 160
+    → FACE_STREAM_JPEG_QUALITY: 50
+    → FACE_FRAMES_DIR: /tmp/frames
+    → FAS_ENABLED: "false"
+    → tmpfs: /tmp/frames:size=32m
+
+  [แก้ไข] dashboard/src/style.css
+    → เพิ่ม CSS variables --gui-in, --gui-fail, --gui-out, --gui-warn
+      แยกค่าสำหรับ light mode (สีเข้ม) และ dark mode (สีสด)
+    → เพิ่ม .btn-cam-start และ .btn-cam-stop utility classes
+
+  [แก้ไข] dashboard/tailwind.config.js
+    → gui-in, gui-fail, gui-out, gui-warn เปลี่ยนจากสี hardcode
+      เป็น CSS variable เพื่อรองรับ theme switching
+
+  [แก้ไข] dashboard/src/views/CameraView.vue
+    → ปุ่ม overlay "▶ เปิด", per-camera toggle, เปิด/หยุดทั้งหมด
+      ใช้ .btn-cam-start / .btn-cam-stop แทน inline classes
+
+■ เทคโนโลยีที่ใช้
+────────────────────────────────────────────────────────────────────────
+
+  - Docker / Docker Compose  — tmpfs, port mapping, env vars
+  - Docker Hub               — Push/Pull image สำหรับ deploy หลายเครื่อง
+  - Python / FastAPI         — mtime-based MJPEG streaming
+  - CSS Custom Properties    — Theme-aware color system
+  - TailwindCSS              — CSS variable integration
+
+■ ปัญหาที่พบและแนวทางแก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  ปัญหา : MJPEG stream กระตุกเพราะ api.py ส่ง frame เดิมซ้ำ
+  วิเคราะห์: time.sleep(0.067) ส่งไฟล์ทุก 67ms โดยไม่สนว่าไฟล์เปลี่ยนหรือยัง
+             ระหว่างที่ main.py ยัง process อยู่ browser ได้รับ frame เดิม
+             ซ้ำหลายครั้ง → แช่แล้วกระโดด
+  แก้ไข : ตรวจ st_mtime ก่อนส่ง ส่งเฉพาะเมื่อค่า mtime เปลี่ยน
+
+  ปัญหา : ตัวอักษรปุ่มรัน main.py มองไม่เห็นบน Light Theme
+  วิเคราะห์: gui-in = #00dc00 (lime green) contrast ratio ~1.4:1 บน white
+             ต่ำกว่า WCAG AA (ต้องการ 4.5:1) มากจนอ่านไม่ออก
+  แก้ไข : เปลี่ยนเป็น CSS variable แยก light (#16a34a contrast 4.5:1)
+           และ dark (#00dc00 เดิม) และทำปุ่มเป็น solid background + white text
+
+  ปัญหา : docker tag ล้มเหลวเพราะ username มีช่องว่าง
+  วิเคราะห์: Docker Hub username ต้องไม่มีช่องว่าง ต้องใช้ username
+             ที่ลงทะเบียนจริงบน hub.docker.com
+  แก้ไข : ใช้ username ที่ถูกต้อง: photcharap
+
+════════════════════════════════════════════════════════════════════════
+  รายงานการปฏิบัติงานฝึกประสบการณ์วิชาชีพ
   วันที่  : อาทิตย์ที่ 20 เมษายน 2568
   สัปดาห์ : สัปดาห์ที่ 6
 ════════════════════════════════════════════════════════════════════════
