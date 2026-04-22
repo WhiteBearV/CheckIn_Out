@@ -1,5 +1,151 @@
 ════════════════════════════════════════════════════════════════════════
   รายงานการปฏิบัติงานฝึกประสบการณ์วิชาชีพ
+  วันที่  : พุธที่ 22 เมษายน 2569
+  สัปดาห์ : สัปดาห์ที่ 6
+════════════════════════════════════════════════════════════════════════
+
+■ งานที่ดำเนินการในวันนี้
+────────────────────────────────────────────────────────────────────────
+
+1. เพิ่มฟีเจอร์ลงชื่อออกด้วยตนเอง (Manual Checkout) บน Web Dashboard
+   ─────────────────────────────────────────────────────────────────
+   เดิม Web Dashboard ไม่มีช่องทางให้ผู้ใช้ลงชื่อออกด้วยตนเอง
+   เพิ่ม endpoint และ UI เพื่อให้สามารถลงชื่อออกได้จาก Dashboard
+
+   - เพิ่ม POST /attendance/checkout/{per_id} ใน api.py
+       • ค้นหา record IN ล่าสุดของวันนี้ที่ยังไม่มี OUT
+       • แทรก record OUT ด้วยเวลาปัจจุบัน
+       • คืน {success, per_id, name, out_time} หรือ {success: false, reason}
+
+   - เพิ่มปุ่ม "🚪 ลงชื่อออก" ใน PersonCard.vue
+       • แสดงเฉพาะเมื่อ status=IN และยังไม่มี out_time
+       • กด → เรียก POST /attendance/checkout/{per_id}
+       • สำเร็จ → emit 'checked-out' ขึ้นไปให้ parent (CameraView) refresh ข้อมูล
+       • ล้มเหลว → alert แสดงเหตุผล
+
+2. เพิ่มโหมด CCTV บน Web Dashboard
+   ─────────────────────────────────────────────────────────────────
+   เดิม Web Dashboard แสดงหน้ากล้องเพียงอย่างเดียว ไม่มีโหมด CCTV
+   เพิ่มระบบตรวจสอบเวลาและ route พิเศษเพื่อรองรับโหมด CCTV
+
+   - เพิ่ม GET /system/mode ใน api.py
+       • อ่าน ACTIVE_WINDOWS จาก config.py
+       • คืน {mode: "face"|"cctv", in_window, current_time, active_windows}
+       • ใช้ให้ Dashboard รู้ว่า backend อยู่ในโหมดใด
+
+   - เพิ่ม route /cctv ใน router/index.js
+       • meta.cctv = true → CameraView เข้า fullscreen อัตโนมัติเมื่อโหลด
+       • AppNav อ่าน meta.label = 'โหมด CCTV' แสดง tab โดยอัตโนมัติ
+
+   - เพิ่ม fetchSystemMode() ใน CameraView.vue
+       • เรียก /system/mode ทุก 30 วินาที
+       • เมื่อ mode เปลี่ยนจาก face → cctv: เรียก auto-checkout ทุกคน + refresh
+       • เมื่ออยู่ใน cctv mode: เข้า fullscreen อัตโนมัติ
+       • เมื่อ mode กลับเป็น face: ออกจาก fullscreen อัตโนมัติ
+       • แสดง mode badge บน camera header (🖥 CCTV / 🕐 ช่วงเวลา)
+
+3. แก้ไขให้ Web Dashboard ทำงานตาม GUI (main.py) อย่างถูกต้อง
+   ─────────────────────────────────────────────────────────────────
+   พบว่า Web Dashboard ที่ implement ไว้ไม่ทำงานตามที่ออกแบบไว้
+   เนื่องจาก main.py ที่ spawn จาก api.py ไม่เข้า CCTV mode เลย
+
+   สาเหตุ — Priority bug ใน main.py
+     api.py spawn main.py พร้อม env vars FACE_CAMERA_CHILD=1 และ
+     FACE_ALWAYS_ACTIVE=1 ทั้งคู่ แต่ใน main.py ตรวจ _DASHBOARD_CHILD
+     ก่อน → เข้า block ที่ตั้ง active=True เสมอ → _ALWAYS_ACTIVE
+     ไม่ถูกตรวจเลย → main.py ไม่เคยเข้า CCTV mode
+     แก้ไข: สลับลำดับ if ให้ตรวจ _ALWAYS_ACTIVE ก่อน _DASHBOARD_CHILD
+             _DASHBOARD_CHILD มีไว้ป้องกัน recursive spawn เท่านั้น
+             ยังสามารถ respect ACTIVE_WINDOWS ได้
+
+   สาเหตุ — main.py ไม่เขียน live_state ในโหมด CCTV
+     เมื่อ main.py เข้า CCTV block จะไม่เขียน live_state.json เลย
+     ทำให้ session_live() คิดว่า process ตายหรือ offline
+     แก้ไข: เพิ่มการเขียน live_state (active=False) ใน CCTV block
+             throttle ด้วย _LIVE_WRITE_INTERVAL เช่นเดียวกับโหมดปกติ
+
+   สาเหตุ — session_live() แยกไม่ออกระหว่าง CCTV กับ offline
+     any_active ถูกตั้งเป็น True เมื่อ ts recent โดยไม่สนค่า data.active
+     ทำให้ Dashboard แสดง "กำลังทำงาน" แม้ main.py อยู่ใน CCTV mode
+     แก้ไข: ตั้ง any_active=True เฉพาะเมื่อ ts recent AND data.active=True
+
+   - เพิ่ม POST /attendance/auto-checkout ใน api.py
+       • ค้นหาทุกคนที่มี IN แต่ไม่มี OUT วันนี้ ด้วย DISTINCT ON (per_id)
+       • แทรก OUT record ทั้งหมดพร้อมกัน
+
+   - เพิ่ม background scheduler _mode_watcher_task() ใน api.py
+       • รันเป็น asyncio coroutine ตั้งแต่ startup
+       • ตรวจ /system/mode ทุก 30 วินาที
+       • เมื่อตรวจพบ mode เปลี่ยนจาก face → cctv เรียก auto-checkout อัตโนมัติ
+
+■ สรุปไฟล์ที่สร้าง / แก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  [แก้ไข] api.py
+    → เพิ่ม POST /attendance/checkout/{per_id} — manual checkout per person
+    → เพิ่ม GET /system/mode — คืน mode ปัจจุบัน (face/cctv) และ active windows
+    → เพิ่ม POST /attendance/auto-checkout — checkout ทุกคนที่ยังไม่ออก
+    → เพิ่ม _do_auto_checkout_all(now) — ใช้ DISTINCT ON query หา IN ล่าสุดต่อคน
+    → เพิ่ม _mode_watcher_task() — asyncio background coroutine ตรวจ mode ทุก 30s
+    → เพิ่ม _api_in_active_window(t) — mirror logic ACTIVE_WINDOWS จาก config.py
+    → แก้ไข session_live() — any_active=True เฉพาะเมื่อ data.active=True (ไม่ใช่แค่ ts recent)
+
+  [แก้ไข] main.py
+    → สลับ priority: ตรวจ _ALWAYS_ACTIVE ก่อน _DASHBOARD_CHILD
+      (แก้ปัญหา CCTV mode ไม่เคยถูกเข้า เมื่อ spawn จาก api.py)
+    → เพิ่มการเขียน live_state (active=False) ใน CCTV block ทุก _LIVE_WRITE_INTERVAL
+
+  [แก้ไข] dashboard/src/views/CameraView.vue
+    → เพิ่ม fetchSystemMode() เรียก /system/mode ทุก 30s
+    → เพิ่ม mode badge บน camera header (🖥 CCTV / 🕐 ช่วงเวลา)
+    → เพิ่ม auto-fullscreen เมื่อ mode=cctv และออก fullscreen เมื่อกลับเป็น face
+    → เพิ่ม onCheckedOut() handler — refresh ข้อมูลหลังลงชื่อออก
+    → PersonCard เพิ่ม @checked-out event listener
+
+  [แก้ไข] dashboard/src/components/PersonCard.vue
+    → เพิ่มปุ่ม "🚪 ลงชื่อออก" (แสดงเมื่อ status=IN && !out_time)
+    → เพิ่ม doCheckout() เรียก POST /attendance/checkout/{per_id}
+    → emit 'checked-out' หลัง checkout สำเร็จ
+
+  [แก้ไข] dashboard/src/router/index.js
+    → เพิ่ม route { path: '/cctv', meta: { label: 'โหมด CCTV', cctv: true } }
+
+  [แก้ไข] dashboard/src/App.vue
+    → version bump: v1.10.0 → v1.11.0
+
+■ เทคโนโลยีที่ใช้
+────────────────────────────────────────────────────────────────────────
+
+  - Python / FastAPI        — REST endpoints, asyncio background task
+  - asyncio                 — create_task(), infinite loop scheduler
+  - PostgreSQL / SQLite     — DISTINCT ON query หา IN ล่าสุดต่อ per_id
+  - Vue 3 / Composition API — ref, emit, onMounted, onUnmounted
+  - Vue Router              — meta fields, hash history, route.meta.cctv
+  - Fullscreen API          — requestFullscreen() / exitFullscreen()
+
+■ ปัญหาที่พบและแนวทางแก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  ปัญหา : main.py ที่ spawn จาก api.py ไม่เคยเข้า CCTV mode
+  วิเคราะห์: api.py ส่ง FACE_CAMERA_CHILD=1 และ FACE_ALWAYS_ACTIVE=1 ทั้งคู่
+             แต่ main.py ตรวจ _DASHBOARD_CHILD ก่อน → เข้า active=True เสมอ
+             _ALWAYS_ACTIVE block ไม่ถูกตรวจเลย
+  แก้ไข : สลับ if/elif ให้ _ALWAYS_ACTIVE มาก่อน _DASHBOARD_CHILD
+
+  ปัญหา : Dashboard แยกไม่ออกว่า main.py อยู่ใน CCTV mode หรือ offline
+  วิเคราะห์: main.py ไม่เขียน live_state ใน CCTV block → ts หยุด update
+             session_live() คิดว่า process ตาย ไม่ใช่ CCTV mode
+  แก้ไข : เขียน live_state (active=False) ใน CCTV block ทุก 1 วินาที
+           session_live() ตั้ง any_active=True เฉพาะเมื่อ data.active=True
+
+  ปัญหา : isFullscreen ถูกใช้ก่อน declare ใน fetchSystemMode()
+  วิเคราะห์: fetchSystemMode() ถูก define ก่อน ref declarations
+             ทำให้ JavaScript error ขณะ setup
+  แก้ไข : ย้าย systemMode variables และ fetchSystemMode()
+           ไปอยู่หลัง BASE_URL และ isFullscreen declarations
+
+════════════════════════════════════════════════════════════════════════
+  รายงานการปฏิบัติงานฝึกประสบการณ์วิชาชีพ
   วันที่  : อังคารที่ 21 เมษายน 2569
   สัปดาห์ : สัปดาห์ที่ 6
 ════════════════════════════════════════════════════════════════════════
