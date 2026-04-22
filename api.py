@@ -54,10 +54,10 @@ import pathlib
 _ROOT = pathlib.Path(__file__).parent
 
 # ── Frame/State files directory ───────────────────────────────────────────────
-# ปกติเก็บใน _ROOT เดียวกับ api.py
+# ปกติเก็บใน _ROOT/live/ เพื่อไม่ให้ไฟล์ live_* กระจายใน root
 # บน Docker ตั้ง FACE_FRAMES_DIR=/tmp/frames เพื่อใช้ tmpfs (RAM) แทน disk
 # → กำจัด I/O jitter ที่ทำให้ MJPEG stream กระตุก
-_FRAMES_DIR = pathlib.Path(os.environ.get("FACE_FRAMES_DIR", str(_ROOT)))
+_FRAMES_DIR = pathlib.Path(os.environ.get("FACE_FRAMES_DIR", str(_ROOT / "live")))
 _FRAMES_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Dashboard static files (Vue build output) ────────────────────────────────
@@ -210,23 +210,74 @@ def attendance_today():
             """)
             rows = cur.fetchall()
 
-    return [
-        {
+    # ── Enrich records ที่ per_name ว่าง ──────────────────────────────
+    # ถ้าตอน check-in ดึงชื่อจาก external API ไม่ได้ → ชื่อจะว่างใน DB
+    # แก้โดย fetch ใหม่ต่อ per_id (cache ต่อ request) แล้ว update DB ด้วย
+    from api_client import fetch_person_by_pid as _fetch
+    _api_cache: dict = {}   # per_id → person dict (cache ภายใน request นี้)
+    _to_update: list = []   # [(per_id, name, prename_th, per_name, per_surname, posname_th, organize_th, organize_id)]
+
+    result = []
+    for r in rows:
+        rec = {
             "id":          r[0],
             "per_id":      r[1],
-            "name":        r[2],
-            "prename_th":  r[3],
-            "per_name":    r[4],
-            "per_surname": r[5],
-            "posname_th":  r[6],
-            "organize_th": r[7],
-            "organize_id": r[8],
+            "name":        r[2] or "",
+            "prename_th":  r[3] or "",
+            "per_name":    r[4] or "",
+            "per_surname": r[5] or "",
+            "posname_th":  r[6] or "",
+            "organize_th": r[7] or "",
+            "organize_id": r[8] or "",
             "status":      r[9],
             "camera_name": r[10],
             "check_time":  r[11].isoformat() if r[11] else None,
         }
-        for r in rows
-    ]
+
+        # enrich เฉพาะ record ที่ per_name ว่าง
+        if not rec["per_name"] and rec["per_id"]:
+            pid = rec["per_id"]
+            if pid not in _api_cache:
+                try:
+                    _api_cache[pid] = _fetch(pid)
+                except Exception:
+                    _api_cache[pid] = None
+
+            p = _api_cache.get(pid)
+            if p:
+                rec["name"]        = p.get("name", "")        or rec["name"]
+                rec["prename_th"]  = p.get("prename_th", "")  or rec["prename_th"]
+                rec["per_name"]    = p.get("per_name", "")    or rec["per_name"]
+                rec["per_surname"] = p.get("per_surname", "") or rec["per_surname"]
+                rec["posname_th"]  = p.get("posname_th", "")  or rec["posname_th"]
+                rec["organize_th"] = p.get("organize_th", "") or rec["organize_th"]
+                rec["organize_id"] = p.get("organize_id", "") or rec["organize_id"]
+                # mark ให้ update DB ครั้งเดียวต่อ per_id (ไม่ update ซ้ำทุก record)
+                if pid not in {u[0] for u in _to_update}:
+                    _to_update.append((
+                        rec["name"], rec["prename_th"], rec["per_name"],
+                        rec["per_surname"], rec["posname_th"],
+                        rec["organize_th"], rec["organize_id"], pid,
+                    ))
+
+        result.append(rec)
+
+    # อัปเดต DB ครั้งเดียวสำหรับทุก per_id ที่ enrich ได้
+    if _to_update:
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.executemany("""
+                        UPDATE attendance_logs
+                        SET name=%s, prename_th=%s, per_name=%s, per_surname=%s,
+                            posname_th=%s, organize_th=%s, organize_id=%s
+                        WHERE per_id=%s
+                          AND (per_name IS NULL OR per_name = '')
+                    """, _to_update)
+        except Exception:
+            pass
+
+    return result
 
 
 @app.get("/attendance/{per_id}")
@@ -929,8 +980,12 @@ def face_process_start():
         return {"ok": False, "reason": "already running", "pid": _face_process.pid}
     try:
         env = os.environ.copy()
-        env["FACE_HEADLESS"]       = "1"   # ปิด GUI window — stream ผ่าน live_frame.jpg แทน
-        env["FACE_ALWAYS_ACTIVE"]  = "1"   # รัน 24/7 ข้าม Active Windows — หยุดเองเมื่อกด Stop
+        env["FACE_HEADLESS"]        = "1"
+        env["FACE_ALWAYS_ACTIVE"]   = "1"
+        env["FACE_CAMERA_CHILD"]    = "1"
+        # ชี้ live files ไปที่ _FRAMES_DIR เดียวกับที่ api.py อ่าน
+        env["FACE_LIVE_FRAME_PATH"] = str(_FRAMES_DIR / "live_frame.jpg")
+        env["FACE_LIVE_STATE_PATH"] = str(_FRAMES_DIR / "live_state.json")
         _face_process = _subprocess.Popen(
             [_sys.executable, str(_ROOT / "main.py")],
             cwd=str(_ROOT),

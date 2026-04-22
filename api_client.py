@@ -84,14 +84,23 @@ def fetch_person_by_pid(per_id: str) -> dict | None:
     """
     ดึงข้อมูลพนักงานจาก per_id (เลข 13 หลัก = ชื่อโฟลเดอร์ใน known_faces/)
 
+    ลำดับการดึง:
+      1. MOCK_MODE=True → ใช้ _MOCK_PERSONS
+      2. External API → _real_fetch()
+      3. Fallback: local attendance DB → _local_fetch()
+         (ใช้เมื่อ API ไม่มีข้อมูล หรือ timeout — ดึงจาก check-in ล่าสุดใน DB)
+
     Returns:
         dict  ที่มี per_id, name, per_name, per_surname, prenameth_abbr,
-              organize_th, posname_th, ... ครบตามที่ external API ส่งมา
-        None  ถ้าไม่พบ หรือ error
+              organize_th, posname_th, ...
+        None  ถ้าไม่พบทั้งใน API และ DB
     """
     if MOCK_MODE:
         return _mock_fetch(per_id)
-    return _real_fetch(per_id)
+    result = _real_fetch(per_id)
+    if not result:
+        result = _local_fetch(per_id)
+    return result
 
 
 def _mock_fetch(per_id: str) -> dict | None:
@@ -115,9 +124,66 @@ def _real_fetch(per_id: str) -> dict | None:
         if resp.status_code == 404:
             return None
         resp.raise_for_status()
-        return resp.json()
+        body = resp.json()
+
+        # หา dict ที่มี per_name หรือ per_id จาก wrapper ที่ API อาจห่อมา
+        # เช่น {"data": {...}}, {"result": {...}}, {"employee": {...}}
+        person = None
+        if isinstance(body, dict):
+            if body.get("per_name") or body.get("per_id"):
+                person = body   # ส่ง flat ตรงๆ
+            else:
+                for key in ("data", "result", "employee", "person", "info"):
+                    candidate = body.get(key)
+                    if isinstance(candidate, dict) and (candidate.get("per_name") or candidate.get("per_id")):
+                        person = candidate
+                        break
+
+        if not person:
+            print(f"[API CLIENT] ไม่พบข้อมูล per_name ใน response: {str(body)[:200]}")
+            return None
+
+        print(f"[API CLIENT] ดึงข้อมูลสำเร็จ per_id={per_id} per_name={person.get('per_name')}")
+        return person
+
     except Exception as e:
         print(f"[API CLIENT] fetch_person_by_pid({per_id}): {e}")
+        return None
+
+
+def _local_fetch(per_id: str) -> dict | None:
+    """Fallback: ดึงจาก local attendance DB (ข้อมูลจาก check-in ล่าสุดที่มีชื่อ)"""
+    try:
+        from db import get_connection
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT per_id, name, prename_th, per_name, per_surname,
+                           posname_th, organize_th, organize_id
+                    FROM attendance
+                    WHERE per_id = %s
+                      AND per_name IS NOT NULL AND per_name != ''
+                    ORDER BY check_time DESC
+                    LIMIT 1
+                """, (per_id,))
+                row = cur.fetchone()
+        if not row:
+            print(f"[API CLIENT] local_fetch: ไม่พบ per_id={per_id} ใน attendance DB")
+            return None
+        print(f"[API CLIENT] local_fetch: ใช้ข้อมูลจาก DB สำหรับ per_id={per_id}")
+        return {
+            "per_id":         row[0],
+            "name":           row[1] or "",
+            "prename_th":     row[2] or "",
+            "per_name":       row[3] or "",
+            "per_surname":    row[4] or "",
+            "posname_th":     row[5] or "",
+            "organize_th":    row[6] or "",
+            "organize_id":    row[7] or "",
+            "prenameth_abbr": row[2] or "",  # ใช้ prename_th แทน abbr เมื่อมาจาก DB
+        }
+    except Exception as e:
+        print(f"[API CLIENT] local_fetch({per_id}): {e}")
         return None
 
 

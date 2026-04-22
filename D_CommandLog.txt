@@ -25,9 +25,33 @@
   ตรวจสถานะ container:
     docker compose -f docker/docker-compose.yml ps
 
+  Restart ระบบ (ไม่ rebuild image):
+    docker compose -f docker/docker-compose.yml restart
+
+  Restart เฉพาะ service:
+    docker compose -f docker/docker-compose.yml restart api
+    docker compose -f docker/docker-compose.yml restart db
+
+  Restart แบบ down+up (หยุดแล้วเริ่มใหม่ สะอาดกว่า):
+    docker compose -f docker/docker-compose.yml down && docker compose -f docker/docker-compose.yml up -d
+
+  Restart พร้อม rebuild image (หลังแก้ไข code):
+    docker compose -f docker/docker-compose.yml down && docker compose -f docker/docker-compose.yml up -d --build
+
   เปิด URL หลังรัน:
     http://localhost:8000/dashboard/    ← Web Dashboard
     http://localhost:8000/docs          ← API Docs (Swagger)
+
+  โครงสร้างไฟล์ภาพ (PicSAVE):
+    PicSAVE/YYYY/MM/DD/HH-MM-SS_{per_id}_IN.jpg    ← รูป full frame ตอน check-in
+    PicSAVE/YYYY/MM/DD/HH-MM-SS_{per_id}_FACE.jpg  ← face crop ตอน check-in
+    PicSAVE/YYYY/MM/DD/HH-MM-SS_{per_id}_OUT.jpg   ← รูปล่าสุดที่เจอก่อน check-out
+
+  โครงสร้างไฟล์ Live (live/):
+    live/live_frame.jpg              ← frame ล่าสุดจากกล้อง (single-cam)
+    live/live_state.json             ← session state (single-cam)
+    live/live_frame_{cam_id}.jpg     ← frame กล้อง id (multi-cam)
+    live/live_state_{cam_id}.json    ← session state กล้อง id (multi-cam)
 
 
 ■ Dashboard (Vue — build สำหรับ production)

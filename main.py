@@ -125,10 +125,12 @@ def landmarks_68_to_dict(pts) -> dict:
 import json as _json
 
 _LIVE_WRITE_INTERVAL = 1.0    # เขียนทุก N วินาที
+_LIVE_DIR = os.path.join(os.path.dirname(__file__), "live")
+os.makedirs(_LIVE_DIR, exist_ok=True)
 # override ด้วย env FACE_LIVE_STATE_PATH เมื่อ start จาก api.py (multi-camera)
 _LIVE_STATE_PATH = (
     os.environ.get("FACE_LIVE_STATE_PATH")
-    or os.path.join(os.path.dirname(__file__), "live_state.json")
+    or os.path.join(_LIVE_DIR, "live_state.json")
 )
 
 # ─── Live Frame Writer (สำหรับ Dashboard Camera Stream) ─────────────────────
@@ -137,7 +139,7 @@ _LIVE_STATE_PATH = (
 # override ด้วย env FACE_LIVE_FRAME_PATH เมื่อ start จาก api.py (multi-camera)
 _LIVE_FRAME_PATH = (
     os.environ.get("FACE_LIVE_FRAME_PATH")
-    or os.path.join(os.path.dirname(__file__), "live_frame.jpg")
+    or os.path.join(_LIVE_DIR, "live_frame.jpg")
 )
 _LIVE_FRAME_INTERVAL = 1.0 / 15   # ~15fps
 _LIVE_FRAME_JPEG_Q   = int(os.environ.get("FACE_STREAM_JPEG_QUALITY", 70))
@@ -198,19 +200,31 @@ def _write_live_state(now_ts: float, session, active: bool, path=None):
                 liveness_msg = "รอตรวจสอบ"
             liveness = "pending"
 
+        if person.checked_out:
+            _status = "OUT"
+        elif person.checked_in:
+            _status = "IN"
+        else:
+            _status = "PENDING"
+
         persons_data.append({
             "per_id":       person.per_id,
+            "name":         person.display_name  or person.per_id,
             "display_name": person.display_name  or person.per_id,
+            "prename_th":   person.prename_th    or "",
             "per_name":     person.per_name      or "",
             "per_surname":  person.per_surname   or "",
             "organize_th":  person.organize_th   or "",
             "posname_th":   person.posname_th    or "",
+            "status":       _status,
+            "in_time":      person.first_seen.isoformat() if person.first_seen else None,
+            "out_time":     person.last_seen.isoformat()  if person.checked_out and person.last_seen else None,
             "checked_in":   person.checked_in,
             "checked_out":  person.checked_out,
             "first_seen":   person.first_seen.isoformat() if person.first_seen else None,
             "last_seen":    person.last_seen.isoformat()  if person.last_seen  else None,
-            "liveness":     liveness,       # confirmed | pending | failed | challenge
-            "liveness_msg": liveness_msg,   # ข้อความสำหรับแสดงบน Dashboard
+            "liveness":     liveness,
+            "liveness_msg": liveness_msg,
         })
 
     try:
@@ -770,8 +784,10 @@ if __name__ == "__main__":
             _env["FACE_ALWAYS_ACTIVE"]   = "1"               # รัน 24/7 ไม่หยุดตาม Active Windows
             _env["CAMERA_URL"]           = str(_cam["source"])
             _env["FACE_CAM_NAME"]        = _cam.get("name", _cam["id"])
-            _env["FACE_LIVE_FRAME_PATH"] = os.path.join(_base, f"live_frame_{_cam['id']}.jpg")
-            _env["FACE_LIVE_STATE_PATH"] = os.path.join(_base, f"live_state_{_cam['id']}.json")
+            _live_dir = os.path.join(_base, "live")
+            os.makedirs(_live_dir, exist_ok=True)
+            _env["FACE_LIVE_FRAME_PATH"] = os.path.join(_live_dir, f"live_frame_{_cam['id']}.jpg")
+            _env["FACE_LIVE_STATE_PATH"] = os.path.join(_live_dir, f"live_state_{_cam['id']}.json")
             print(f"[MULTI-CAM]  {_cam['id']} → {_cam['source']}")
             _p = _sp.Popen([sys.executable, os.path.abspath(__file__)], cwd=_base, env=_env)
             _procs.append((_cam["id"], _p))
