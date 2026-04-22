@@ -23,6 +23,7 @@
     <footer class="text-center text-xs text-gui-dim py-3
                    border-t border-gui-border shrink-0">
       Face Attendance Dashboard
+      <span class="ml-2 opacity-50">v1.11.0</span>
     </footer>
 
   </div>

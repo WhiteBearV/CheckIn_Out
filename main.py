@@ -460,18 +460,15 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN",
                 break
 
         # ─── Active Window Check ───
-        if _DASHBOARD_CHILD:
-            # spawn จาก api.py → face recognition ตลอดเวลา ไม่สนใจ ACTIVE_WINDOWS
-            if now.date() != _current_date:
-                _current_date = now.date()
-                session       = SessionManager()
-                last_faces    = []
-                last_face_ts  = now_ts
-                checkout_done = False
-                print(f"[DAILY RESET] วันใหม่ {now.strftime('%Y-%m-%d')}")
-            _active = True
-        elif _ALWAYS_ACTIVE:
+        # ลำดับความสำคัญ:
+        #   1. ALWAYS_ACTIVE (รวมถึงเมื่อ Dashboard spawn ด้วย FACE_ALWAYS_ACTIVE=1)
+        #      → respect ACTIVE_WINDOWS: สลับ face/CCTV mode + auto-checkout
+        #   2. DASHBOARD_CHILD เท่านั้น (ไม่มี ALWAYS_ACTIVE)
+        #      → face recognition ตลอดเวลา ไม่สนใจตาราง
+        #   3. Normal mode → ใช้ Active Windows ตาม config
+        if _ALWAYS_ACTIVE:
             # ── Always Active: ใช้ ACTIVE_WINDOWS แบ่ง face mode / CCTV mode ──
+            # ทำงานแม้ถูก spawn จาก Dashboard (FACE_CAMERA_CHILD=1 ป้องกันแค่ recursive spawn)
             _in_face_window = _in_active_window(now.time(), cfg.ACTIVE_WINDOWS)
 
             # reset วันใหม่ตอนเที่ยงคืน (อัพเดต _current_date เท่านั้น)
@@ -496,6 +493,16 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN",
                 print(f"[FACE→CCTV] เข้าโหมด CCTV {now.strftime('%H:%M')}")
 
             _active = _in_face_window
+        elif _DASHBOARD_CHILD:
+            # spawn จาก api.py โดยไม่มี ALWAYS_ACTIVE → face recognition ตลอดเวลา
+            if now.date() != _current_date:
+                _current_date = now.date()
+                session       = SessionManager()
+                last_faces    = []
+                last_face_ts  = now_ts
+                checkout_done = False
+                print(f"[DAILY RESET] วันใหม่ {now.strftime('%Y-%m-%d')}")
+            _active = True
         else:
             # ── ใช้ Active Windows ตาม config ──
             _active = _in_active_window(now.time(), cfg.ACTIVE_WINDOWS)
@@ -533,6 +540,10 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN",
                 if now_ts - _last_frame_write >= _LIVE_FRAME_INTERVAL:
                     _last_frame_write = now_ts
                     _write_live_frame(cctv_frame, path=live_frame_path)
+                # เขียน live_state ด้วย active=False ให้ Dashboard รู้ว่าอยู่ใน CCTV mode
+                if now_ts - _last_state_write >= _LIVE_WRITE_INTERVAL:
+                    _last_state_write = now_ts
+                    _write_live_state(now_ts, session, False, path=live_state_path)
                 key = _waitkey(33) & 0xFF   # ~30fps
             else:
                 # ── Idle mode: แสดงหน้าจอรอ ลด CPU/GPU ──

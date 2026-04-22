@@ -18,6 +18,7 @@ Endpoints:
 
 import os
 import json as _json
+import asyncio as _asyncio
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,6 +32,30 @@ from db import get_connection
 load_dotenv()
 
 app = FastAPI(title="Face Attendance API", version="2.0.0")
+
+# ── Startup: เริ่ม background scheduler ──────────────────────────────────────
+@app.on_event("startup")
+async def _startup():
+    _asyncio.create_task(_mode_watcher_task())
+
+# ── Active Windows (อ่านจาก config.py เหมือน main.py) ────────────────────────
+try:
+    import config as _face_cfg
+    _ACTIVE_WINDOWS = _face_cfg.ACTIVE_WINDOWS
+except Exception:
+    from datetime import time as _dtime
+    _ACTIVE_WINDOWS = [(_dtime(5, 0), _dtime(22, 0))]
+
+def _api_in_active_window(t) -> bool:
+    """ตรวจว่าเวลา t อยู่ใน Active Window (เหมือน _in_active_window ใน main.py)"""
+    for start, end in _ACTIVE_WINDOWS:
+        if start <= end:
+            if start <= t < end:
+                return True
+        else:                    # ข้ามเที่ยงคืน
+            if t >= start or t < end:
+                return True
+    return False
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
 # อนุญาต Vue dev server (port 5173) เรียก API ได้ระหว่าง development
@@ -280,6 +305,58 @@ def attendance_today():
     return result
 
 
+@app.post("/attendance/checkout/{per_id}")
+def manual_checkout(per_id: str):
+    """
+    ลงชื่อออกด้วยตนเองจาก Dashboard
+    - ต้องมี IN วันนี้ก่อน
+    - ถ้ามี OUT วันนี้แล้ว → แจ้งว่าซ้ำ
+    - ใช้ชื่อ/หน่วยงานจาก IN record ล่าสุดของวันนี้
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT 1 FROM attendance_logs
+                WHERE per_id = %s
+                  AND DATE(check_time) = CURRENT_DATE
+                  AND status = 'OUT'
+                LIMIT 1
+            """, (per_id,))
+            if cur.fetchone():
+                return {"success": False, "reason": "วันนี้ลงชื่อออกแล้ว"}
+
+            cur.execute("""
+                SELECT name, prename_th, per_name, per_surname,
+                       posname_th, organize_th, organize_id, camera_name
+                FROM attendance_logs
+                WHERE per_id = %s
+                  AND DATE(check_time) = CURRENT_DATE
+                  AND status = 'IN'
+                ORDER BY check_time DESC
+                LIMIT 1
+            """, (per_id,))
+            row = cur.fetchone()
+            if not row:
+                return {"success": False, "reason": "ยังไม่มีการลงชื่อเข้าวันนี้"}
+
+            name, prename_th, per_name, per_surname, posname_th, organize_th, organize_id, camera_name = row
+
+            cur.execute("""
+                INSERT INTO attendance_logs
+                    (per_id, status, camera_name, check_time,
+                     name, prename_th, per_name, per_surname,
+                     posname_th, organize_th, organize_id)
+                VALUES (%s, 'OUT', %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                per_id, camera_name or 'manual', datetime.now(),
+                name, prename_th, per_name, per_surname,
+                posname_th, organize_th, organize_id,
+            ))
+        conn.commit()
+
+    return {"success": True, "per_id": per_id, "status": "OUT"}
+
+
 @app.get("/attendance/{per_id}")
 def attendance_by_person(
     per_id: str,
@@ -403,6 +480,114 @@ def clear_today_attendance():
         "deleted_rows":  deleted_rows,
         "cache_cleared": cache_cleared,
     }
+
+
+# ╔═══════════════════════════════════════════════════════════════════════════╗
+# ║  System Mode & Scheduler (Active Windows — เหมือน GUI main.py)            ║
+# ╚═══════════════════════════════════════════════════════════════════════════╝
+
+@app.get("/system/mode")
+def system_mode():
+    """
+    คืนโหมดระบบปัจจุบันตาม ACTIVE_WINDOWS ใน config.py
+      mode = "face" : อยู่ในช่วง Active Window → เปิด face recognition
+      mode = "cctv" : นอกช่วง → โหมด CCTV เท่านั้น
+    """
+    now = datetime.now()
+    in_window = _api_in_active_window(now.time())
+    windows = [
+        {"start": s.strftime("%H:%M"), "end": e.strftime("%H:%M")}
+        for s, e in _ACTIVE_WINDOWS
+    ]
+    return {
+        "mode":           "face" if in_window else "cctv",
+        "in_window":      in_window,
+        "current_time":   now.strftime("%H:%M:%S"),
+        "active_windows": windows,
+    }
+
+
+def _do_auto_checkout_all(now: datetime) -> int:
+    """
+    checkout ทุกคนที่มี IN วันนี้แต่ยังไม่มี OUT
+    ใช้ชื่อ/หน่วยงานจาก IN record ล่าสุดของแต่ละคน
+    คืนจำนวนคนที่ checkout สำเร็จ
+    """
+    count = 0
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT DISTINCT ON (a.per_id)
+                        a.per_id, a.name, a.prename_th, a.per_name, a.per_surname,
+                        a.posname_th, a.organize_th, a.organize_id, a.camera_name
+                    FROM attendance_logs a
+                    WHERE DATE(a.check_time) = CURRENT_DATE
+                      AND a.status = 'IN'
+                      AND a.per_id NOT IN (
+                          SELECT per_id FROM attendance_logs
+                          WHERE DATE(check_time) = CURRENT_DATE AND status = 'OUT'
+                      )
+                    ORDER BY a.per_id, a.check_time DESC
+                """)
+                rows = cur.fetchall()
+
+            for row in rows:
+                per_id, name, prename_th, per_name, per_surname, posname_th, organize_th, organize_id, camera_name = row
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        INSERT INTO attendance_logs
+                            (per_id, status, camera_name, check_time,
+                             name, prename_th, per_name, per_surname,
+                             posname_th, organize_th, organize_id)
+                        VALUES (%s, 'OUT', %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (
+                        per_id, camera_name or 'auto', now,
+                        name, prename_th, per_name, per_surname,
+                        posname_th, organize_th, organize_id,
+                    ))
+                count += 1
+            conn.commit()
+        print(f"[AUTO-CHECKOUT] checkout {count} คน  {now.strftime('%H:%M:%S')}")
+    except Exception as e:
+        print(f"[AUTO-CHECKOUT] error: {e}")
+    return count
+
+
+@app.post("/attendance/auto-checkout")
+def attendance_auto_checkout():
+    """
+    checkout ทุกคนที่ IN วันนี้แต่ยังไม่มี OUT
+    เรียกจาก Dashboard เมื่อ active window สิ้นสุด (หรือ manual trigger)
+    """
+    now   = datetime.now()
+    count = _do_auto_checkout_all(now)
+    return {"success": True, "checked_out": count, "time": now.isoformat()}
+
+
+# ── Background Scheduler: ตรวจ face→cctv transition แล้ว auto-checkout ───────
+_sched_last_in_window: "bool | None" = None   # None = ยังไม่ได้ตรวจครั้งแรก
+
+async def _mode_watcher_task():
+    """
+    Background coroutine ที่รันตลอดอายุ api.py
+    ตรวจทุก 30 วินาที — เมื่อ transition face→cctv → auto-checkout ทันที
+    เหมือนพฤติกรรมของ main.py ใน ALWAYS_ACTIVE mode
+    """
+    global _sched_last_in_window
+    while True:
+        await _asyncio.sleep(30)
+        try:
+            now       = datetime.now()
+            in_window = _api_in_active_window(now.time())
+
+            if _sched_last_in_window is True and not in_window:
+                print(f"[SCHEDULER] face→cctv transition {now.strftime('%H:%M')} → auto-checkout")
+                _do_auto_checkout_all(now)
+
+            _sched_last_in_window = in_window
+        except Exception as e:
+            print(f"[SCHEDULER] watcher error: {e}")
 
 
 # ╔═══════════════════════════════════════════════════════════════════════════╗
@@ -919,6 +1104,7 @@ def session_live():
 
     # ── อ่าน per-camera state files (live_state_cam1.json, live_state_cam2.json ฯลฯ) ──
     # ค้นหาทั้งใน _FRAMES_DIR (tmpfs) และ _ROOT (legacy)
+    _now = _time.time()
     _state_paths = sorted({*_FRAMES_DIR.glob("live_state_*.json"), *_ROOT.glob("live_state_*.json")})
     for path in _state_paths:
         found_cam_files = True
@@ -926,11 +1112,16 @@ def session_live():
             data = _json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             continue
-        ts = data.get("ts")
-        if ts is not None and (_time.time() - ts <= 5):
-            any_active = True
+        ts          = data.get("ts")
+        data_active = data.get("active", True)   # True = face mode, False = CCTV mode
+        is_recent   = ts is not None and (_now - ts <= 5)
+
+        if is_recent:
             if latest_ts is None or ts > latest_ts:
                 latest_ts = ts
+            if data_active:
+                # face recognition mode เท่านั้นที่นับว่า active
+                any_active = True
         for p in data.get("persons", []):
             pid = p.get("per_id")
             if pid and pid not in merged:
@@ -953,7 +1144,11 @@ def session_live():
         data = _json.loads(_LIVE_STATE_PATH.read_text(encoding="utf-8"))
     except Exception:
         return {"active": False, "ts": None, "stale": True, "persons": []}
-    stale = (data.get("ts") is None) or (_time.time() - data["ts"] > 5)
+    ts          = data.get("ts")
+    data_active = data.get("active", True)
+    is_recent   = ts is not None and (_now - ts <= 5)
+    # stale เมื่อ: ts เก่า หรือ main.py อยู่ใน CCTV mode (face recognition หยุด)
+    stale = not is_recent or not data_active
     data["stale"] = stale
     return data
 

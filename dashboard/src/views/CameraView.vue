@@ -36,17 +36,33 @@
               {{ cameras.length }} กล้อง
             </span>
           </h2>
-          <span
-            class="text-xs px-2 py-0.5 rounded-full font-medium"
-            :class="{
-              'bg-gui-in/15  text-gui-in':     allLive,
-              'bg-yellow-400/15 text-yellow-400': anyLive && !allLive,
-              'bg-gui-out/15 text-gui-out':    anyStarting && !anyLive,
-              'bg-gui-dim/15 text-gui-dim':    !anyLive && !anyStarting,
-            }"
-          >
-            {{ overallStatus }}
-          </span>
+          <div class="flex items-center gap-2">
+            <!-- System Mode Badge -->
+            <span
+              v-if="systemMode === 'cctv'"
+              class="text-xs px-2 py-0.5 rounded-full font-semibold
+                     bg-blue-500/15 text-blue-400 border border-blue-500/30"
+              title="อยู่นอกช่วงเวลาทำงาน — โหมด CCTV"
+            >🖥 CCTV Mode</span>
+            <span
+              v-else-if="systemMode === 'face'"
+              class="text-xs px-2 py-0.5 rounded-full font-medium
+                     bg-gui-in/10 text-gui-in/70"
+              title="อยู่ในช่วงเวลาทำงาน — Face Recognition เปิดอยู่"
+            >🕐 {{ activeWindowStr }}</span>
+            <!-- Camera status -->
+            <span
+              class="text-xs px-2 py-0.5 rounded-full font-medium"
+              :class="{
+                'bg-gui-in/15  text-gui-in':     allLive,
+                'bg-yellow-400/15 text-yellow-400': anyLive && !allLive,
+                'bg-gui-out/15 text-gui-out':    anyStarting && !anyLive,
+                'bg-gui-dim/15 text-gui-dim':    !anyLive && !anyStarting,
+              }"
+            >
+              {{ overallStatus }}
+            </span>
+          </div>
         </div>
 
         <!-- ══════════════════════════════════════════════════════════════
@@ -488,7 +504,13 @@
         {{ attendLoading ? 'กำลังโหลด...' : 'ยังไม่มีการลงเวลาวันนี้' }}
       </div>
       <div v-else class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-        <PersonCard v-for="p in mergedPersons" :key="p.per_id" :person="p" :api-base="API_BASE"/>
+        <PersonCard
+          v-for="p in mergedPersons"
+          :key="p.per_id"
+          :person="p"
+          :api-base="API_BASE"
+          @checked-out="onCheckedOut"
+        />
       </div>
     </section>
 
@@ -502,6 +524,7 @@
 
 <script setup>
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
+import { useRoute } from 'vue-router'
 import LiveDetection       from '@/components/LiveDetection.vue'
 import StatCard            from '@/components/StatCard.vue'
 import PersonCard          from '@/components/PersonCard.vue'
@@ -512,11 +535,53 @@ import CameraManagerModal  from '@/components/CameraManagerModal.vue'
 import { useAttendance }  from '@/composables/useAttendance.js'
 import { useLiveSession } from '@/composables/useLiveSession.js'
 
+// ── Route ───────────────────────────────────────────────────────────
+const route = useRoute()
+
 // ── Config ─────────────────────────────────────────────────────────
 const BASE_URL        = import.meta.env.VITE_API_BASE_URL ?? '/api'
 const API_BASE        = BASE_URL
 const CLEAR_TODAY_URL = `${API_BASE}/attendance/today/all`
 const POLL_MS         = 2_000
+
+// ── System Mode (Active Windows — เหมือน GUI main.py) ──────────────
+// poll ทุก 30 วินาที — auto-enter CCTV เมื่อนอก active window,
+//                      auto-checkout เมื่อ transition face→cctv
+const systemMode      = ref(null)   // 'face' | 'cctv' | null
+const activeWindowStr = ref('')
+let   _prevSysMode    = null
+
+async function fetchSystemMode() {
+  try {
+    const res  = await fetch(`${BASE_URL}/system/mode`)
+    if (!res.ok) return
+    const data = await res.json()
+    const newMode = data.mode   // 'face' | 'cctv'
+
+    if (data.active_windows?.length) {
+      const w = data.active_windows[0]
+      activeWindowStr.value = `${w.start}–${w.end}`
+    }
+
+    // face→cctv: trigger auto-checkout ฝั่ง frontend ด้วย (backend ก็ทำ แต่ frontend refresh)
+    if (_prevSysMode === 'face' && newMode === 'cctv') {
+      fetch(`${BASE_URL}/attendance/auto-checkout`, { method: 'POST' })
+        .then(() => refresh()).catch(() => {})
+    }
+
+    // เข้า CCTV fullscreen อัตโนมัติเมื่อ mode=cctv
+    if (newMode === 'cctv' && !isFullscreen.value) {
+      isFullscreen.value = true
+    }
+    // ออก fullscreen เมื่อกลับมา face mode (เฉพาะที่เข้าอัตโนมัติ)
+    if (_prevSysMode === 'cctv' && newMode === 'face' && isFullscreen.value) {
+      isFullscreen.value = false
+    }
+
+    _prevSysMode     = newMode
+    systemMode.value = newMode
+  } catch { /* offline / API ยังไม่พร้อม */ }
+}
 
 // ── Camera List ─────────────────────────────────────────────────────
 const cameras = ref([])
@@ -709,16 +774,29 @@ function onKeyDown(e) {
   }
 }
 
+// ── Checkout handler ─────────────────────────────────────────────────
+async function onCheckedOut(_perId) {
+  await refresh()
+}
+
 // ── Lifecycle ────────────────────────────────────────────────────────
+let _sysModeTimer = null
+
 onMounted(async () => {
+  // โหมด CCTV (route meta.cctv = true) → เปิด fullscreen อัตโนมัติ
+  if (route.meta?.cctv) isFullscreen.value = true
   await loadCameras()
   fetchAllStatuses()
   pollTimer = setInterval(fetchAllStatuses, POLL_MS)
   window.addEventListener('keydown', onKeyDown)
+  // ตรวจ system mode ทันที + ทุก 30 วินาที
+  await fetchSystemMode()
+  _sysModeTimer = setInterval(fetchSystemMode, 30_000)
 })
 
 onUnmounted(() => {
   clearInterval(pollTimer)
+  clearInterval(_sysModeTimer)
   window.removeEventListener('keydown', onKeyDown)
   document.body.style.overflow = '' // cleanup เผื่อ unmount ขณะ fullscreen
 })

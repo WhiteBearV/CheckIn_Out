@@ -1,6 +1,6 @@
-═════��══════════════════════════════════════════════════════════════════
+════════════════════════════════════════════════════════════════════════
   Command Log — Face Attendance System
-  อัปเดตล่าสุด : 20 เมษายน 2569
+  อัปเดตล่าสุด : 22 เมษายน 2569
 ════════════════════════════════════════════════════════════════════════
 
 ■ Docker (วิธีหลัก — รันผ่าน Container)
@@ -52,6 +52,32 @@
     live/live_state.json             ← session state (single-cam)
     live/live_frame_{cam_id}.jpg     ← frame กล้อง id (multi-cam)
     live/live_state_{cam_id}.json    ← session state กล้อง id (multi-cam)
+
+
+■ Docker Hub (Push / Pull image)
+────────────────────────────────────────────────────────────────────────
+
+  Build dashboard ก่อน push (อัปเดต static/):
+    cd dashboard && npm run build
+
+  Build Docker image:
+    cd docker
+    docker compose build --no-cache api
+
+  Tag และ Push ขึ้น Docker Hub:
+    docker tag docker-api photcharap/face-attendance:latest
+    docker login
+    docker push photcharap/face-attendance:latest
+
+  Pull และรันที่เครื่องอื่น:
+    docker pull photcharap/face-attendance:latest
+    docker compose -f docker/docker-compose.yml down && docker compose -f docker/docker-compose.yml up -d
+
+  ตรวจสอบ env var ใน container (ยืนยัน API URL ถูกต้อง):
+    docker compose -f docker/docker-compose.yml exec api python3 -c "import os; print('URL:',os.environ.get('EXTERNAL_API_URL'))"
+
+  ดู log แบบ filter realtime:
+    docker compose -f docker/docker-compose.yml logs -f api | grep --line-buffered "API CLIENT"
 
 
 ■ Dashboard (Vue — build สำหรับ production)

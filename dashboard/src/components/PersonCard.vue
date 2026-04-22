@@ -123,6 +123,20 @@
         </div>
       </div>
 
+      <!-- ปุ่มลงชื่อออก (แสดงเฉพาะ status=IN และยังไม่มี OUT) -->
+      <button
+        v-if="person.status === 'IN' && !person.out_time"
+        @click="doCheckout"
+        :disabled="checkingOut"
+        class="mt-1 w-full py-1.5 rounded-lg text-xs font-semibold
+               border border-gui-out/40 text-gui-out
+               hover:bg-gui-out/10 hover:border-gui-out/60
+               disabled:opacity-40 disabled:cursor-not-allowed
+               transition-colors"
+      >
+        {{ checkingOut ? 'กำลังบันทึก...' : '🚪 ลงชื่อออก' }}
+      </button>
+
     </div>
   </div>
 </template>
@@ -132,11 +146,34 @@ import { ref, computed, watch } from 'vue'
 import StatusBadge   from './StatusBadge.vue'
 import LivenessBadge from './LivenessBadge.vue'
 
-// ── Props ──────────────────────────────────────────────────────────
+// ── Props + Emits ──────────────────────────────────────────────────
 const props = defineProps({
   person:  { type: Object, required: true },
   apiBase: { type: String, default: '/api' },
 })
+
+const emit = defineEmits(['checked-out'])
+
+// ── Checkout ───────────────────────────────────────────────────────
+const checkingOut = ref(false)
+
+async function doCheckout() {
+  if (checkingOut.value) return
+  checkingOut.value = true
+  try {
+    const res  = await fetch(`${props.apiBase}/attendance/checkout/${props.person.per_id}`, { method: 'POST' })
+    const data = await res.json()
+    if (data.success) {
+      emit('checked-out', props.person.per_id)
+    } else {
+      alert(data.reason || 'ไม่สามารถลงชื่อออกได้')
+    }
+  } catch {
+    alert('เชื่อมต่อ API ไม่ได้')
+  } finally {
+    checkingOut.value = false
+  }
+}
 
 // ── Photo ─────────────────────────────────────────────────────────
 const photoError = ref(false)
