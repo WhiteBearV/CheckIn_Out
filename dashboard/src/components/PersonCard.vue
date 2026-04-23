@@ -52,22 +52,19 @@
         {{ initial }}
       </div>
 
-      <!-- Badge มุมบนขวา: ถ้ามี liveness → แสดง LivenessBadge แทน StatusBadge -->
+      <!-- Badge มุมบนขวา: PENDING → รอตรวจสอบ, IN/OUT → LivenessBadge หรือ StatusBadge -->
       <div class="absolute top-2 right-2">
-        <LivenessBadge v-if="person.liveness" :status="person.liveness" />
-        <StatusBadge
-          v-else-if="person.status !== 'PENDING'"
-          :status="person.status"
-        />
         <span
-          v-else
+          v-if="person.status === 'PENDING'"
           class="inline-flex items-center gap-1 px-2 py-0.5
                  rounded-md text-xs font-semibold
                  bg-gui-dim/15 text-gui-dim"
         >
-          <span class="w-1.5 h-1.5 rounded-full bg-gui-dim" />
-          รอตรวจ
+          <span class="w-1.5 h-1.5 rounded-full bg-gui-dim animate-pulse" />
+          รอตรวจสอบ
         </span>
+        <LivenessBadge v-else-if="person.liveness" :status="person.liveness" />
+        <StatusBadge v-else :status="person.status" />
       </div>
     </div>
 
@@ -104,11 +101,14 @@
 
       <!-- เวลา IN / OUT ── เหมือน GUI panel -->
       <div class="grid grid-cols-2 gap-1 text-xs">
-        <!-- IN time -->
+        <!-- IN time — แสดงเฉพาะ status=IN หรือ OUT (checked_in แล้ว) -->
         <div>
           <div class="text-gui-dim mb-0.5">เข้า (IN)</div>
-          <div class="font-mono font-semibold text-gui-in tabular-nums">
-            {{ formatTime(person.in_time) }}
+          <div
+            class="font-mono font-semibold tabular-nums"
+            :class="person.status !== 'PENDING' && person.in_time ? 'text-gui-in' : 'text-gui-dim/40'"
+          >
+            {{ person.status !== 'PENDING' && person.in_time ? formatTime(person.in_time) : '—' }}
           </div>
         </div>
         <!-- OUT time -->
@@ -122,20 +122,6 @@
           </div>
         </div>
       </div>
-
-      <!-- ปุ่มลงชื่อออก (แสดงเฉพาะ status=IN และยังไม่มี OUT) -->
-      <button
-        v-if="person.status === 'IN' && !person.out_time"
-        @click="doCheckout"
-        :disabled="checkingOut"
-        class="mt-1 w-full py-1.5 rounded-lg text-xs font-semibold
-               border border-gui-out/40 text-gui-out
-               hover:bg-gui-out/10 hover:border-gui-out/60
-               disabled:opacity-40 disabled:cursor-not-allowed
-               transition-colors"
-      >
-        {{ checkingOut ? 'กำลังบันทึก...' : '🚪 ลงชื่อออก' }}
-      </button>
 
     </div>
   </div>

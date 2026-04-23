@@ -23,16 +23,6 @@ const routes = [
     },
   },
   {
-    path:      '/cctv',
-    name:      'cctv',
-    component: CameraView,
-    meta: {
-      label: 'โหมด CCTV',
-      icon:  '🖥',
-      cctv:  true,   // trigger isFullscreen อัตโนมัติใน CameraView
-    },
-  },
-  {
     path:      '/camera/:camId',
     name:      'camera-detail',
     component: SingleCameraView,

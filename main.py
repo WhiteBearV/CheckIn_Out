@@ -157,7 +157,7 @@ def _write_live_frame(frame_bgr, path=None):
     except Exception:
         pass
 
-def _write_live_state(now_ts: float, session, active: bool, path=None):
+def _write_live_state(now_ts: float, session, active: bool, path=None, in_frame_names: set = None):
     """
     เขียน session state ปัจจุบันลง live_state.json
     ─────────────────────────────────────────────────────────────────
@@ -225,6 +225,7 @@ def _write_live_state(now_ts: float, session, active: bool, path=None):
             "last_seen":    person.last_seen.isoformat()  if person.last_seen  else None,
             "liveness":     liveness,
             "liveness_msg": liveness_msg,
+            "in_frame":     (name in in_frame_names) if in_frame_names is not None else False,
         })
 
     try:
@@ -743,7 +744,9 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN",
         # ─── เขียน live state สำหรับ Dashboard (throttle 1 วิ) ────────────────
         if now_ts - _last_state_write >= _LIVE_WRITE_INTERVAL:
             _last_state_write = now_ts
-            _write_live_state(now_ts, session, _active, path=live_state_path)
+            _current_names = {n for _, n in _face_with_names}
+            _write_live_state(now_ts, session, _active, path=live_state_path,
+                              in_frame_names=_current_names)
 
         key = _waitkey(1) & 0xFF
         if key == ord("q") or key == 27:

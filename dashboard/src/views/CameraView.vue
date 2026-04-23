@@ -242,7 +242,7 @@
 
       <!-- ── Right panel ────────────────────────────────────────────
            Normal mode : LiveDetection + สถานะระบบ + วิธีใช้
-           Fullscreen  : รายชื่อวันนี้ (kiosk sidebar)
+           Fullscreen  : รายชื่อที่พบวันนี้ (kiosk sidebar)
       ─────────────────────────────────────────────────────────────── -->
       <div
         :class="isFullscreen
@@ -306,13 +306,13 @@
 
         </template>
 
-        <!-- ─ Fullscreen mode: รายชื่อวันนี้ (kiosk sidebar) ──────── -->
+        <!-- ─ Fullscreen mode: รายชื่อที่พบวันนี้ (kiosk sidebar) ──────── -->
         <template v-else>
 
           <div class="px-4 py-3 border-b border-gui-border bg-gui-panel flex items-center justify-between shrink-0">
             <div class="flex items-center gap-2">
               <span class="text-gui-in font-bold text-base">▣</span>
-              <span class="font-semibold text-sm text-gui-text">รายชื่อวันนี้</span>
+              <span class="font-semibold text-sm text-gui-text">รายชื่อที่พบวันนี้</span>
               <span class="text-xs px-2 py-0.5 rounded-full bg-gui-border/60 text-gui-dim font-mono tabular-nums">
                 {{ mergedPersons.length }} คน
               </span>
@@ -396,8 +396,12 @@
             </div>
           </div>
 
-          <div class="px-4 py-2 border-t border-gui-border shrink-0 text-center bg-gui-panel/30">
+          <div class="px-4 py-2.5 border-t border-gui-border shrink-0 bg-gui-panel/30
+                      flex items-center justify-between">
             <span class="text-[11px] text-gui-dim">{{ todayStr }}</span>
+            <span class="text-sm font-mono font-semibold text-gui-text tabular-nums">
+              {{ clockStr }}
+            </span>
           </div>
 
         </template>
@@ -485,7 +489,7 @@
       <div class="flex items-center justify-between mb-3">
         <h2 class="font-semibold text-sm flex items-center gap-2">
           <span class="text-gui-in">▣</span>
-          รายชื่อวันนี้
+          รายชื่อที่พบวันนี้
           <span class="text-xs text-gui-dim font-normal">({{ mergedPersons.length }} คน)</span>
           <span v-if="!liveStale"
             class="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-gui-in/15 text-gui-in font-semibold">
@@ -514,9 +518,33 @@
       </div>
     </section>
 
-    <!-- ══ Attendance Feed ════════════════════════════════════════════ -->
-    <section style="min-height: 300px">
-      <AttendanceFeed :feed="feed" :loading="attendLoading"/>
+    <!-- ══ รายชื่อเช็คชื่อเข้าออก ══════════════════════════════════════ -->
+    <section>
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="font-semibold text-sm flex items-center gap-2">
+          <span class="text-gui-out">▣</span>
+          รายชื่อเช็คชื่อเข้าออก
+          <span class="text-xs text-gui-dim font-normal">({{ checkedPersons.length }} คน)</span>
+        </h2>
+        <div class="flex items-center gap-3 text-xs text-gui-dim">
+          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-gui-in"/> ยังอยู่</span>
+          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-gui-out"/> ออกแล้ว</span>
+        </div>
+      </div>
+      <div v-if="checkedPersons.length === 0"
+        class="bg-gui-panel border border-gui-border rounded-xl py-12 flex flex-col items-center gap-2 text-gui-dim text-sm">
+        <span class="text-4xl">📋</span>
+        {{ attendLoading ? 'กำลังโหลด...' : 'ยังไม่มีการเช็คชื่อวันนี้' }}
+      </div>
+      <div v-else class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+        <PersonCard
+          v-for="p in checkedPersons"
+          :key="p.per_id"
+          :person="p"
+          :api-base="API_BASE"
+          @checked-out="onCheckedOut"
+        />
+      </div>
     </section>
 
   </div>
@@ -528,7 +556,6 @@ import { useRoute } from 'vue-router'
 import LiveDetection       from '@/components/LiveDetection.vue'
 import StatCard            from '@/components/StatCard.vue'
 import PersonCard          from '@/components/PersonCard.vue'
-import AttendanceFeed      from '@/components/AttendanceFeed.vue'
 import HourlyChart         from '@/components/HourlyChart.vue'
 import OrgBreakdown        from '@/components/OrgBreakdown.vue'
 import CameraManagerModal  from '@/components/CameraManagerModal.vue'
@@ -803,7 +830,7 @@ onUnmounted(() => {
 
 // ── Attendance Data ──────────────────────────────────────────────────
 const {
-  stats, byOrg, hourly, feed, persons,
+  stats, byOrg, hourly, persons,
   loading: attendLoading, error: attendError, lastFetch, refresh,
 } = useAttendance()
 
@@ -836,6 +863,11 @@ const mergedPersons = computed(() => {
     return new Date(a.in_time ?? 0) - new Date(b.in_time ?? 0)
   })
 })
+
+// เฉพาะคนที่เช็คชื่อเข้าหรือออกแล้ว (ไม่รวม PENDING)
+const checkedPersons = computed(() =>
+  mergedPersons.value.filter(p => p.status === 'IN' || p.status === 'OUT')
+)
 
 // ── Photo helpers ────────────────────────────────────────────────────
 const failedPhotos = ref(new Set())
@@ -878,9 +910,13 @@ async function doClearToday() {
   catch { /* ignore */ } finally { clearing.value = false }
 }
 
-// ── Last fetch label ─────────────────────────────────────────────────
+// ── Clock + Last fetch label ─────────────────────────────────────────
 const now = ref(new Date())
-setInterval(() => { now.value = new Date() }, 5000)
+setInterval(() => { now.value = new Date() }, 1000)
+
+const clockStr = computed(() =>
+  now.value.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+)
 const lastFetchStr = computed(() => {
   if (!lastFetch.value) return 'รอข้อมูล...'
   const diff = Math.floor((now.value - lastFetch.value) / 1000)
