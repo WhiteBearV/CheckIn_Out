@@ -8,6 +8,44 @@ const REFRESH_INTERVAL  = 30_000
 const SCAN_TIMEOUT_SEC  = 10
 const STREAM_BASE = import.meta.env.DEV ? 'http://localhost:8001' : ''
 
+// ─── Mock data (เปิด/ปิดด้วย USE_MOCK) ────────────────────────────────────────
+const USE_MOCK = true   // TODO: ลบ mock ออกก่อน deploy — เปลี่ยนเป็น false เพื่อใช้ API จริง
+
+const MOCK_RECORDS = [
+  { id:1,  per_id:'EMP001', per_name:'สุชาติ',    per_surname:'อินทรประสิทธิ์', organize_th:'สำนักวิจัย',          status:'IN',  check_time:'2026-04-20T08:12:40', cam_id:'cam_main' },
+  { id:2,  per_id:'EMP002', per_name:'ปรียา',      per_surname:'วัฒนกุล',        organize_th:'คณะครุศาสตร์',        status:'IN',  check_time:'2026-04-20T08:14:22', cam_id:'cam_main' },
+  { id:3,  per_id:'EMP003', per_name:'วราวุธ',     per_surname:'โสภิต',           organize_th:'กองกลาง',             status:'IN',  check_time:'2026-04-20T08:55:08', cam_id:'cam_web'  },
+  { id:4,  per_id:'EMP004', per_name:'นันทวัน',    per_surname:'ศรีรัตน์',        organize_th:'สำนักวิจัย',          status:'IN',  check_time:'2026-04-20T09:02:13', cam_id:'cam_main' },
+  { id:5,  per_id:'EMP005', per_name:'ปิยะดา',     per_surname:'เจริญสุข',        organize_th:'กองการเงิน',          status:'OUT', check_time:'2026-04-20T12:15:49', cam_id:'cam_web'  },
+  { id:6,  per_id:'EMP006', per_name:'ธนกร',       per_surname:'เกียรติศักดิ์',   organize_th:'กองสื่อสารองค์กร',   status:'OUT', check_time:'2026-04-20T12:20:06', cam_id:'cam_main' },
+  { id:7,  per_id:'EMP007', per_name:'วิภาวี',     per_surname:'ชินวัตร',         organize_th:'คณะวิศวกรรมศาสตร์',  status:'IN',  check_time:'2026-04-20T13:02:18', cam_id:'cam_web'  },
+  { id:8,  per_id:'EMP008', per_name:'ธีรพล',      per_surname:'มงคลสวัสดิ์',    organize_th:'คณะวิศวกรรมศาสตร์',  status:'IN',  check_time:'2026-04-20T07:58:01', cam_id:'cam_main' },
+  { id:9,  per_id:'EMP009', per_name:'สมหญิง',     per_surname:'รักษาวงศ์',       organize_th:'คณะครุศาสตร์',        status:'IN',  check_time:'2026-04-20T08:30:55', cam_id:'cam_web'  },
+  { id:10, per_id:'EMP010', per_name:'ประเสริฐ',   per_surname:'ทองดี',           organize_th:'กองกลาง',             status:'IN',  check_time:'2026-04-20T08:45:12', cam_id:'cam_main' },
+  { id:11, per_id:'EMP011', per_name:'มาลี',       per_surname:'สุขใจ',           organize_th:'กองการเงิน',          status:'IN',  check_time:'2026-04-20T09:10:44', cam_id:'cam_web'  },
+  { id:12, per_id:'EMP012', per_name:'อนุชา',      per_surname:'พรหมมา',          organize_th:'สำนักวิจัย',          status:'OUT', check_time:'2026-04-20T11:50:33', cam_id:'cam_main' },
+  { id:13, per_id:'EMP013', per_name:'กนกวรรณ',    per_surname:'เพ็ญศรี',         organize_th:'คณะวิศวกรรมศาสตร์',  status:'IN',  check_time:'2026-04-20T08:05:27', cam_id:'cam_web'  },
+  { id:14, per_id:'EMP014', per_name:'จิรายุ',     per_surname:'แก้วมณี',         organize_th:'กองสื่อสารองค์กร',   status:'IN',  check_time:'2026-04-20T08:22:18', cam_id:'cam_main' },
+  { id:15, per_id:'EMP015', per_name:'รัตนา',      per_surname:'สมบูรณ์',         organize_th:'สำนักวิจัย',          status:'IN',  check_time:'2026-04-20T08:03:55', cam_id:'cam_main' },
+  { id:16, per_id:'EMP016', per_name:'พิชัย',      per_surname:'ลาภมาก',          organize_th:'คณะครุศาสตร์',        status:'OUT', check_time:'2026-04-20T13:45:00', cam_id:'cam_web'  },
+  { id:17, per_id:'EMP017', per_name:'สายชล',      per_surname:'บุญเรือง',        organize_th:'กองกลาง',             status:'IN',  check_time:'2026-04-20T09:20:10', cam_id:'cam_main' },
+  { id:18, per_id:'EMP018', per_name:'ณัฐพล',      per_surname:'วงษ์สุวรรณ',     organize_th:'คณะวิศวกรรมศาสตร์',  status:'IN',  check_time:'2026-04-20T07:50:33', cam_id:'cam_web'  },
+  { id:19, per_id:'EMP019', per_name:'ชลธิชา',     per_surname:'จันทร์เพ็ญ',     organize_th:'กองการเงิน',          status:'IN',  check_time:'2026-04-20T08:38:47', cam_id:'cam_main' },
+  { id:20, per_id:'EMP020', per_name:'สมศักดิ์',   per_surname:'เดชขุน',          organize_th:'สำนักวิจัย',          status:'OUT', check_time:'2026-04-20T12:05:19', cam_id:'cam_web'  },
+  { id:21, per_id:'EMP021', per_name:'พรทิพย์',    per_surname:'นาคสุข',          organize_th:'คณะครุศาสตร์',        status:'IN',  check_time:'2026-04-20T08:48:26', cam_id:'cam_main' },
+  { id:22, per_id:'EMP022', per_name:'วิชาญ',      per_surname:'มีสุข',           organize_th:'กองสื่อสารองค์กร',   status:'IN',  check_time:'2026-04-20T09:05:52', cam_id:'cam_web'  },
+  { id:23, per_id:'EMP023', per_name:'อรอุมา',     per_surname:'ฤทธิ์ดี',         organize_th:'คณะวิศวกรรมศาสตร์',  status:'OUT', check_time:'2026-04-20T11:30:07', cam_id:'cam_main' },
+  { id:24, per_id:'EMP024', per_name:'ศุภชัย',     per_surname:'โกมลวิทย์',      organize_th:'สำนักวิจัย',          status:'IN',  check_time:'2026-04-20T08:17:39', cam_id:'cam_web'  },
+  { id:25, per_id:'EMP025', per_name:'กาญจนา',     per_surname:'ดีสม',            organize_th:'กองกลาง',             status:'IN',  check_time:'2026-04-20T08:59:11', cam_id:'cam_main' },
+  { id:26, per_id:'EMP026', per_name:'ทวีศักดิ์',  per_surname:'สุขสบาย',        organize_th:'คณะครุศาสตร์',        status:'IN',  check_time:'2026-04-20T07:45:03', cam_id:'cam_web'  },
+  { id:27, per_id:'EMP027', per_name:'นิภา',       per_surname:'แสงทอง',          organize_th:'กองการเงิน',          status:'OUT', check_time:'2026-04-20T13:10:28', cam_id:'cam_main' },
+  { id:28, per_id:'EMP028', per_name:'ภาณุวัฒน์',  per_surname:'ชูชีพ',           organize_th:'คณะวิศวกรรมศาสตร์',  status:'IN',  check_time:'2026-04-20T08:28:44', cam_id:'cam_web'  },
+  { id:29, per_id:'EMP029', per_name:'สุนีย์',     per_surname:'พูลสวัสดิ์',      organize_th:'กองสื่อสารองค์กร',   status:'IN',  check_time:'2026-04-20T09:33:16', cam_id:'cam_main' },
+  { id:30, per_id:'EMP030', per_name:'ไพโรจน์',    per_surname:'ศรีสวัสดิ์',      organize_th:'สำนักวิจัย',          status:'IN',  check_time:'2026-04-20T08:08:59', cam_id:'cam_web'  },
+]
+
+const MOCK_HOURLY = [0,0,0,0,0,0,0,3,28,42,8,4,12,15,2,1,2,8,4,1,0,0,0,0]
+
 /** แปลง "HH:MM:SS" → วินาทีที่ผ่านไปจากตอนนี้ */
 function elapsedSec(timeStr) {
   if (!timeStr || timeStr === '-') return 0
@@ -48,7 +86,7 @@ async function fetchCamState(camId) {
 
 function isFresh(state) {
   if (!state || !state.ts) return false
-  return (Date.now() / 1000 - state.ts) < 5
+  return (Date.now() / 1000 - state.ts) < 8
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
@@ -120,41 +158,28 @@ function HourlyChart({ hours }) {
 
 // ─── DeptChart ─────────────────────────────────────────────────────────────────
 
-const DEPT_COLORS = ['#00ffff', '#0089ff', '#a855f7', '#22c55e', '#f97316']
+const DEPT_COLORS = ['#22c55e', '#0089ff', '#a855f7', '#f97316', '#eab308']
 
 function DeptChart({ depts, total }) {
   if (!depts.length) return (
-    <div
-      className="h-20 flex items-center justify-center font-mono text-[10px]"
-      style={{ color: 'var(--c-text-4)' }}
-    >
+    <div className="flex items-center justify-center font-mono text-[10px]"
+      style={{ height: 80, color: 'var(--c-text-4)' }}>
       ไม่มีข้อมูล
     </div>
   )
   return (
-    <div className="space-y-2.5">
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       {depts.map(([dept, count], i) => (
-        <div key={dept}>
-          <div className="flex justify-between items-center mb-0.5">
-            <span
-              className="font-mono text-[10px] truncate"
-              style={{ color: 'var(--c-text-2)', maxWidth: '75%' }}
-            >
-              {dept}
-            </span>
-            <span className="font-mono text-[10px]"
-              style={{ color: DEPT_COLORS[i % DEPT_COLORS.length] }}>
-              {count}
-            </span>
+        <div className="dept-row" key={dept}>
+          <div className="dept-top">
+            <span className="dept-name">{dept}</span>
+            <span className="dept-count" style={{ color: DEPT_COLORS[i % DEPT_COLORS.length] }}>{count}</span>
           </div>
-          <div className="h-0.5 rounded-full" style={{ background: 'var(--c-border)' }}>
-            <div
-              className="h-0.5 rounded-full transition-all duration-500"
-              style={{
-                width:      `${(count / (total || 1)) * 100}%`,
-                background: DEPT_COLORS[i % DEPT_COLORS.length] + '90',
-              }}
-            />
+          <div className="track">
+            <div className="fill" style={{
+              width: `${(count / (total || 1)) * 100}%`,
+              background: DEPT_COLORS[i % DEPT_COLORS.length],
+            }} />
           </div>
         </div>
       ))}
@@ -213,7 +238,7 @@ function FaceModal({ src, name, onClose }) {
 function FaceSnap({ perId, activeCams, size = 32, shape = 'circle', onClick, cacheBust = 0 }) {
   const [idx, setIdx] = useState(0)
   const isSquare = shape === 'square'
-  const endpoint = isSquare ? 'snapfull' : 'snap'
+  const endpoint = isSquare ? 'snapfull' : 'snap'  // square = full frame, circle = face crop
   const srcs = activeCams.map(id =>
     `${STREAM_BASE}/${endpoint}/${id}/${encodeURIComponent(perId)}?t=${cacheBust}`
   )
@@ -228,12 +253,11 @@ function FaceSnap({ perId, activeCams, size = 32, shape = 'circle', onClick, cac
       style={{
         width:        isSquare ? '100%' : size,
         height:       isSquare ? '100%' : size,
-        aspectRatio:  isSquare ? '1/1' : undefined,
         background:   'var(--c-bg-deep)',
         color:        'var(--c-text-3)',
         border:       '1px solid var(--c-border)',
         borderRadius: isSquare ? 6 : '50%',
-        fontSize:     Math.round((isSquare ? 40 : size) * 0.38),
+        fontSize:     isSquare ? 20 : Math.round(size * 0.38),
         cursor:       'default',
       }}
     >
@@ -252,7 +276,6 @@ function FaceSnap({ perId, activeCams, size = 32, shape = 'circle', onClick, cac
       style={{
         width:        isSquare ? '100%' : size,
         height:       isSquare ? '100%' : size,
-        aspectRatio:  isSquare ? '1/1' : undefined,
         borderRadius: isSquare ? 6 : '50%',
         border:       '1px solid var(--c-border)',
         cursor:       onClick ? 'zoom-in' : 'default',
@@ -293,8 +316,12 @@ function PersonFoundCard({ person, perId, camId, camName, onFaceClick, cacheBust
     >
       {/* รูปเต็มเฟรม */}
       <div
-        className="w-full overflow-hidden"
-        style={{ aspectRatio: '16/9', background: 'var(--c-bg-deep)' }}
+        style={{
+          width: '100%', height: 79,
+          overflow: 'hidden', position: 'relative',
+          background: 'var(--c-bg-deep)',
+          borderRadius: '6px 6px 0 0',
+        }}
       >
         <FaceSnap
           perId={perId}
@@ -317,9 +344,17 @@ function PersonFoundCard({ person, perId, camId, camName, onFaceClick, cacheBust
         <div className="flex items-center justify-between">
           <span className="font-mono text-[9px]" style={{ color }}>{status}</span>
           <span className="font-mono text-[9px]" style={{ color: 'var(--c-text-4)' }}>
-            {person.first_seen !== '-' ? person.first_seen : '—'}
+            {person.first_seen && person.first_seen !== '-' ? person.first_seen.slice(0, 5) : '—'}
           </span>
         </div>
+        {person.last_seen && person.last_seen !== '-' && (
+          <div className="flex items-center justify-between">
+            <span className="font-mono text-[9px]" style={{ color: 'var(--c-text-4)' }}>พบล่าสุด</span>
+            <span className="font-mono text-[9px]" style={{ color: 'var(--c-text-3)' }}>
+              {person.last_seen.slice(0, 5)}
+            </span>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -389,8 +424,8 @@ export default function Dashboard() {
 
   const { data = [], isLoading, dataUpdatedAt } = useQuery({
     queryKey:        ['attendance-today'],
-    queryFn:         fetchAttendanceToday,
-    refetchInterval: REFRESH_INTERVAL,
+    queryFn:         USE_MOCK ? () => MOCK_RECORDS : fetchAttendanceToday,
+    refetchInterval: USE_MOCK ? false : REFRESH_INTERVAL,
   })
 
   // กล้องที่ active อยู่ (list of IDs)
@@ -467,61 +502,62 @@ export default function Dashboard() {
     {faceModal && (
       <FaceModal src={faceModal.src} name={faceModal.name} onClose={closeFace} />
     )}
-    <div className="p-8 space-y-6 min-h-full">
+    <div className="page">
+
+      {/* ── Mock warning banner ─────────────────────────────────────────────── */}
+      {USE_MOCK && (
+        <div style={{
+          background: 'rgba(234,179,8,0.10)', border: '1px solid rgba(234,179,8,0.35)',
+          borderRadius: 'var(--radius-sm)', padding: '8px 14px',
+          fontFamily: 'var(--font-mono)', fontSize: 11, color: '#eab308',
+          display: 'flex', alignItems: 'center', gap: 8,
+        }}>
+          ⚠ MOCK MODE — ข้อมูลจำลอง ไม่ใช่ข้อมูลจริง · ลบออกก่อน deploy (Dashboard.jsx บรรทัด 12)
+        </div>
+      )}
 
       {/* ── Header ──────────────────────────────────────────────────────────── */}
-      <div className="flex items-end justify-between">
+      <div className="page-head">
         <div>
-          <p className="font-mono text-[11px] uppercase tracking-widest mb-2"
-            style={{ color: 'var(--c-accent)' }}>
-            Attendance
-          </p>
-          <h1 className="text-3xl font-light leading-none" style={{ color: 'var(--c-text)' }}>
-            Dashboard
-          </h1>
-          <p className="text-sm mt-2" style={{ color: 'var(--c-text-3)' }}>
+          <div className="eb" style={{ marginBottom: 6 }}>DASHBOARD · TODAY</div>
+          <div className="h1">Dashboard</div>
+          <div className="sub">
             {new Date().toLocaleDateString('th-TH', {
               weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
             })}
-          </p>
+          </div>
         </div>
-
-        <div className="flex items-center gap-2 pb-1">
-          <span className="relative flex w-1.5 h-1.5">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#22c55e] opacity-60" />
-            <span className="relative inline-flex rounded-full w-1.5 h-1.5 bg-[#22c55e]" />
-          </span>
-          <span className="font-mono text-[11px]" style={{ color: 'var(--c-text-3)' }}>
-            {lastUpdated ? `updated ${lastUpdated}` : 'loading...'}
-          </span>
+        <div className="status">
+          <span className="dot" />
+          {lastUpdated ? `updated ${lastUpdated}` : 'loading...'}
         </div>
       </div>
 
       {/* ── Stat cards ──────────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+      <div className="stats">
         <StatCard title="เช็คอินวันนี้"   value={isLoading ? null : stats.inCount}
-          subtitle="ครั้งที่บันทึก IN" color="green"
+          subtitle="วันนี้" color="#22c55e"
           icon={<svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
               d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1" />
           </svg>}
         />
         <StatCard title="เช็คเอาท์วันนี้" value={isLoading ? null : stats.outCount}
-          subtitle="ครั้งที่บันทึก OUT" color="orange"
+          subtitle="ออกแล้ว" color="#f97316"
           icon={<svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
               d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
           </svg>}
         />
         <StatCard title="อยู่ในอาคาร"     value={isLoading ? null : stats.stillInside}
-          subtitle="IN แต่ยังไม่ OUT" color="blue"
+          subtitle="ยังอยู่ในอาคาร" color="#0089ff"
           icon={<svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
               d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
           </svg>}
         />
         <StatCard title="พนักงานทั้งหมด"  value={isLoading ? null : stats.total}
-          subtitle="คนที่มีการลงเวลา" color="purple"
+          subtitle="คนที่มีการลงเวลา" color="#a855f7"
           icon={<svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
               d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -530,51 +566,24 @@ export default function Dashboard() {
       </div>
 
       {/* ── Charts ──────────────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-5 gap-4">
-
-        {/* Timeline */}
-        <div
-          className="col-span-3 rounded p-4"
-          style={{ background: 'var(--c-bg-card)', border: '1px solid var(--c-border)' }}
-        >
-          <div className="flex items-center justify-between mb-3">
-            <div>
-              <p className="font-mono text-[10px] uppercase tracking-widest"
-                style={{ color: 'var(--c-accent)' }}>
-                Timeline
-              </p>
-              <p className="text-sm font-light mt-0.5" style={{ color: 'var(--c-text-3)' }}>
-                การลงเวลาตามช่วงโมง
-              </p>
-            </div>
-            <div className="flex items-center gap-3 font-mono text-[9px]"
-              style={{ color: 'var(--c-text-4)' }}>
-              <span className="flex items-center gap-1">
-                <span className="w-2 h-1.5 rounded-sm" style={{ background: 'var(--c-accent)' }} />
-                ชั่วโมงนี้
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="w-2 h-1.5 rounded-sm" style={{ background: 'var(--c-accent-border)' }} />
-                ที่ผ่านมา
-              </span>
-            </div>
+      <div className="two-col" style={{ gridTemplateColumns: '1fr 300px' }}>
+        <div className="panel">
+          <div className="p-head">
+            <span className="eb">TIMELINE · HOURLY</span>
+            <span className="eb eb-muted">ชั่วโมงนี้</span>
           </div>
-          <HourlyChart hours={hourly} />
+          <div className="p-body" style={{ padding: '18px 20px' }}>
+            <HourlyChart hours={hourly} />
+          </div>
         </div>
-
-        {/* Departments */}
-        <div
-          className="col-span-2 rounded p-4"
-          style={{ background: 'var(--c-bg-card)', border: '1px solid var(--c-border)' }}
-        >
-          <p className="font-mono text-[10px] uppercase tracking-widest mb-1"
-            style={{ color: 'var(--c-accent)' }}>
-            Departments
-          </p>
-          <p className="text-sm font-light mb-3" style={{ color: 'var(--c-text-3)' }}>
-            แจกตามหน่วยงาน
-          </p>
-          <DeptChart depts={depts} total={stats.inCount} />
+        <div className="panel">
+          <div className="p-head">
+            <span className="eb">DEPARTMENTS</span>
+            <span className="eb eb-muted">top 5</span>
+          </div>
+          <div className="p-body">
+            <DeptChart depts={depts} total={stats.inCount} />
+          </div>
         </div>
       </div>
 
@@ -676,35 +685,11 @@ export default function Dashboard() {
       </div>
 
       {/* ── Attendance Table ─────────────────────────────────────────────────── */}
-      <div
-        className="rounded"
-        style={{ background: 'var(--c-bg-card)', border: '1px solid var(--c-border)' }}
-      >
-        <div
-          className="flex items-center justify-between px-6 py-4"
-          style={{ borderBottom: '1px solid var(--c-border)' }}
-        >
-          <div>
-            <p className="font-mono text-[11px] uppercase tracking-widest mb-1"
-              style={{ color: 'var(--c-accent)' }}>
-              Records
-            </p>
-            <h2 className="text-base font-light" style={{ color: 'var(--c-text-2)' }}>
-              รายการลงเวลาวันนี้
-            </h2>
-          </div>
-          <span
-            className="font-mono text-[11px] px-2.5 py-1 rounded"
-            style={{
-              background: 'var(--c-bg-app)',
-              border:     '1px solid var(--c-border)',
-              color:      'var(--c-text-3)',
-            }}
-          >
-            {data.length} รายการ
-          </span>
+      <div className="table-wrap">
+        <div className="table-head">
+          <span className="title">รายการลงเวลาวันนี้</span>
+          <span className="eb eb-muted">{data.length} records</span>
         </div>
-
         <AttendanceTable records={data} isLoading={isLoading} />
       </div>
 

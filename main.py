@@ -816,14 +816,18 @@ def run_camera(cam_cfg: dict):
                 "show_fps":      cfg.SHOW_FPS,
             },
         }
+        stream_frame = raw_frame.copy()
+        ui.draw_face_guide(stream_frame, _face_with_names,
+                           session.liveness, session.persons, now_ts)
+
         if _HEADLESS:
-            _write_live_frame(cam_id, _combined)
+            _write_live_frame(cam_id, stream_frame)
             _write_live_state(cam_id, _state)
         else:
-            stream_server.push_frame(cam_id, _combined)
+            stream_server.push_frame(cam_id, stream_frame)
             stream_server.push_state(cam_id, _state)
 
-        _imshow(np.hstack([frame, panel]))
+        _imshow(_combined)
 
         if stream_server.get_cv_window():
             key = cv2.waitKey(1) & 0xFF
@@ -853,46 +857,56 @@ def stop_cameras():
 
 
 def start_camera_workers():
-    """เริ่มแค่ camera worker threads — ไม่มี display loop
-    เรียกได้จาก /system/start (web) โดยไม่กระทบ OpenCV window หลัก"""
+    """เริ่ม/hotload camera worker threads — เรียกได้จาก /system/start หรือ /cameras/reload
+    ถ้ามี workers อยู่แล้ว จะ spawn เฉพาะกล้องใหม่ที่ยังไม่มี thread (hotload เหมือนกด R)
+    ถ้ายังไม่มี workers เลย จะ start ทุกตัวใหม่"""
     global _camera_threads
     import threading as _threading
 
-    # หยุด workers เดิมก่อน (ถ้ามี)
-    _stop_event.set()
-    for t in _camera_threads:
-        t.join(timeout=3)
-    _stop_event.clear()
-
-    cameras = getattr(cfg, "CAMERAS", [])
-    cameras = [c for c in cameras if c.get("url") or c.get("index") is not None]
-    if not cameras:
-        cameras = [{
+    configs = stream_server._load_cam_configs()
+    if not configs:
+        configs = getattr(cfg, "CAMERAS", [])
+        configs = [c for c in configs if c.get("url") or c.get("index") is not None]
+    if not configs:
+        configs = [{
             "id":    "cam1",
             "name":  "CAM_MAIN",
             "url":   cfg.CAMERA_URL or None,
             "index": 1,
             "flip":  cfg.CAMERA_FLIP,
         }]
-    if not stream_server._CAMERAS_JSON.exists() and cameras:
-        stream_server._save_cam_configs(cameras)
-    cameras = [
+    if not stream_server._CAMERAS_JSON.exists() and configs:
+        stream_server._save_cam_configs(configs)
+    configs = [
         {**c, "url": _resolve_url(c["url"])} if "url" in c else c
-        for c in cameras
+        for c in configs
     ]
 
-    _sel_cam["id"] = cameras[0]["id"]
+    # กรอง alive threads ออกก่อน
+    _camera_threads = [t for t in _camera_threads if t.is_alive()]
+    running_ids = {t.name for t in _camera_threads}
 
-    _camera_threads = [
-        _threading.Thread(
+    # clear _stop_event เสมอก่อน spawn threads ใหม่
+    # (ถ้าไม่ทำ thread ใหม่จะ exit ทันทีถ้า event ยังถูก set ค้างจาก stop ก่อนหน้า)
+    _stop_event.clear()
+
+    new_cams = [c for c in configs if f"cam-{c['id']}" not in running_ids]
+    if not new_cams:
+        print("[MAIN] All cameras already running — nothing to hotload")
+        return
+
+    if _sel_cam.get("id") is None and configs:
+        _sel_cam["id"] = configs[0]["id"]
+
+    for cam_cfg in new_cams:
+        t = _threading.Thread(
             target=run_camera, args=(cam_cfg,),
             name=f"cam-{cam_cfg['id']}", daemon=True,
         )
-        for cam_cfg in cameras
-    ]
-    for t in _camera_threads:
+        _camera_threads.append(t)
         t.start()
-    print(f"[MAIN] Camera workers started: {[c['id'] for c in cameras]}")
+        print(f"[MAIN] Camera worker started: {cam_cfg['id']}")
+    print(f"[MAIN] Hotloaded {len(new_cams)} new cam(s): {[c['id'] for c in new_cams]}")
 
 
 def start_cameras():
@@ -1442,3 +1456,7 @@ if __name__ == "__main__":
         _sig.signal(_sig.SIGTERM, lambda *_: _stop_event.set())
         start_camera_workers()
         _stop_event.wait()
+        # รอ worker threads ให้ save_snapshots() เสร็จก่อน process ออก
+        for _t in list(_camera_threads):
+            if _t.is_alive():
+                _t.join(timeout=8)

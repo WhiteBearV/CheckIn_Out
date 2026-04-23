@@ -7,26 +7,8 @@
   },
   {
     "id": "cam2",
-    "name": "CAM_WEB",
+    "name": "CAM_WEb",
     "flip": true,
     "index": 1
-  },
-  {
-    "id": "cam3",
-    "name": "CAM_PHONE",
-    "flip": true,
-    "index": 0
-  },
-  {
-    "id": "cam4",
-    "name": "CAM_OUTER",
-    "flip": true,
-    "index": 2
-  },
-  {
-    "id": "cam5",
-    "name": "SD;GSK",
-    "flip": true,
-    "index": 3
   }
 ]

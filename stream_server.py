@@ -735,11 +735,19 @@ async def snapfull_person_cam(cam_id: str, name: str):
 
 @app.post('/cache/clear')
 async def cache_clear():
-    """ล้าง snapshot buffer ทั้งหมด (face crop + full frame)"""
+    """ล้าง snapshot buffer + ไฟล์ snap ทั้งหมด (ไม่ล้าง cam_states เพื่อให้ frontend ยังรู้ว่ากล้อง online)"""
     with _lock:
         _cam_snaps.clear()
         _cam_snaps_full.clear()
-    return {'cleared': True}
+    deleted = 0
+    for pattern in ('live_snap_*.jpg', 'live_snapfull_*.jpg'):
+        for f in _ROOT.glob(pattern):
+            try:
+                f.unlink()
+                deleted += 1
+            except OSError:
+                pass
+    return {'cleared': True, 'files_deleted': deleted}
 
 
 _ROOT      = Path(__file__).parent
@@ -778,16 +786,20 @@ def _file_active_cams() -> list:
 
 
 async def _hybrid_mjpeg_gen(cam_id: str):
-    """Hybrid MJPEG: file-based (headless) หรือ in-memory (direct mode)"""
-    frame_file  = _frame_path(cam_id)
-    prev_mtime  = -1.0
-    prev_count  = -1
+    """Hybrid MJPEG: file-based (headless) หรือ in-memory (direct mode)
+    ส่ง last frame ทันทีเมื่อ browser เปิด connection ใหม่ — ไม่ดำขณะรอ frame ถัดไป"""
+    frame_file = _frame_path(cam_id)
+    prev_mtime = -1.0
+    prev_count = -1
+    first      = True   # ส่ง last frame ทันทีสำหรับ connection ใหม่
+
     while True:
         # ── file-based (headless subprocess) ─────────────────────────────────
         try:
             if frame_file.exists():
                 mtime = frame_file.stat().st_mtime
-                if mtime != prev_mtime:
+                if first or mtime != prev_mtime:
+                    first      = False
                     prev_mtime = mtime
                     jpeg = frame_file.read_bytes()
                     yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'
@@ -799,7 +811,8 @@ async def _hybrid_mjpeg_gen(cam_id: str):
         with _lock:
             jpeg  = _cam_frames.get(cam_id)
             count = _cam_counts.get(cam_id, 0)
-        if jpeg and count != prev_count:
+        if jpeg and (first or count != prev_count):
+            first      = False
             prev_count = count
             yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'
                    + jpeg + b'\r\n')
@@ -877,7 +890,7 @@ async def system_start():
 
 @app.post('/system/stop')
 async def system_stop():
-    """Stop face recognition + api.py"""
+    """Stop face recognition + api.py (graceful shutdown → save PicSAVE)"""
     result = {}
 
     # หยุด face recognition
@@ -888,7 +901,14 @@ async def system_stop():
         except Exception as e:
             result['face'] = f'error: {e}'
     if _proc_alive('main'):
-        _procs['main'].terminate()
+        _procs['main'].terminate()   # SIGTERM → main.py จะ save_snapshots() ก่อนตาย
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(_procs['main'].wait),
+                timeout=8,
+            )
+        except asyncio.TimeoutError:
+            _procs['main'].kill()    # kill ถ้ารอนานเกิน 8 วิ
         result['face'] = 'terminated'
 
     # หยุด api
@@ -898,7 +918,32 @@ async def system_stop():
     else:
         result['api'] = 'not_running'
 
+    # ล้าง live_frame / live_state ไฟล์ที่ค้างอยู่
+    cleaned = 0
+    for pattern in ('live_frame_*.jpg', 'live_state_*.json'):
+        for f in _ROOT.glob(pattern):
+            try:
+                f.unlink()
+                cleaned += 1
+            except OSError:
+                pass
+    result['cleaned_files'] = cleaned
+
     return result
+
+
+@app.post('/cameras/reload')
+async def cameras_reload():
+    """Hotload กล้องที่เพิ่งเพิ่มใหม่ใน cameras.json โดยไม่ต้อง restart ระบบ
+    (เหมือนกดปุ่ม R ที่หลังบ้าน — spawn thread ให้เฉพาะกล้องใหม่)"""
+    if _start_fn is None:
+        return {'reloaded': 0, 'msg': 'ระบบไม่ได้รันในโหมด direct (ใช้ START ก่อน)'}
+    try:
+        import asyncio as _aio
+        result = await _aio.to_thread(_start_fn)
+        return {'reloaded': True, 'msg': 'reload สำเร็จ'}
+    except Exception as e:
+        return {'reloaded': False, 'msg': str(e)}
 
 
 # ─── Legacy single-cam endpoints (→ cam1) ────────────────────────────────────
