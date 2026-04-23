@@ -133,6 +133,27 @@ _LIVE_STATE_PATH = (
     or os.path.join(_LIVE_DIR, "live_state.json")
 )
 
+# ─── Boot Status Writer (สำหรับ Dashboard loading screen) ───────────────────
+# เขียน boot_status.json ระหว่าง startup เพื่อให้ Dashboard แสดงหน้าโหลด
+# ลบไฟล์เมื่อเข้า main loop แล้ว
+_BOOT_PATH = (
+    os.environ.get("FACE_BOOT_PATH")
+    or os.path.join(_LIVE_DIR, "boot_status.json")
+)
+
+def _write_boot(msg: str):
+    try:
+        with open(_BOOT_PATH, "w", encoding="utf-8") as _f:
+            _json.dump({"msg": msg, "ts": datetime.now().timestamp()}, _f)
+    except Exception:
+        pass
+
+def _clear_boot():
+    try:
+        os.remove(_BOOT_PATH)
+    except Exception:
+        pass
+
 # ─── Live Frame Writer (สำหรับ Dashboard Camera Stream) ─────────────────────
 # เขียน live_frame.jpg ทุก ~67ms (15fps) เพื่อให้ Dashboard แสดง stream
 # ใช้ atomic rename เพื่อป้องกัน race condition กับ api.py
@@ -260,7 +281,9 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN",
     """
 
     # ─── โหลด face encodings (ArcFace 512d) ───
+    _write_boot("กำลังโหลดฐานข้อมูลใบหน้า...")
     if not os.path.exists(cfg.ENCODINGS_FILE):
+        _clear_boot()
         raise FileNotFoundError(
             f"ไม่พบ {cfg.ENCODINGS_FILE}\n"
             f"รัน encode_faces_arcface.py ก่อน"
@@ -274,6 +297,7 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN",
     print(f"[DB] โหลด {len(known_names)} คน จาก {cfg.ENCODINGS_FILE}")
 
     # ─── InsightFace ───
+    _write_boot("กำลังโหลด AI Model (InsightFace)...")
     from insightface.app import FaceAnalysis
     import onnxruntime as ort
 
@@ -303,6 +327,7 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN",
     print(f"[ARCFACE] InsightFace ready  det_size={cfg.DET_SIZE}")
 
     # ─── เปิดกล้อง ───
+    _write_boot("กำลังเปิดกล้อง...")
     # ลำดับการใช้ source: parameter > env CAMERA_URL > camera_index
     cam_src = camera_source if camera_source is not None else (cfg.CAMERA_URL if cfg.CAMERA_URL else camera_index)
     # แปลง "0", "1" (string จาก env CAMERA_URL) เป็น int เพื่อให้ OpenCV เปิด USB ได้
@@ -312,6 +337,7 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN",
     cam = ThreadedCamera(cam_src)
 
     # ─── MediaPipe Hands ───
+    _write_boot("กำลังติดตั้งระบบตรวจจับ...")
     hands = mp.solutions.hands.Hands(
         static_image_mode=False,
         max_num_hands=1,
@@ -431,6 +457,7 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN",
     # ═══════════════════════════════════════
     # MAIN LOOP
     # ═══════════════════════════════════════
+    _clear_boot()   # โหลดเสร็จแล้ว — ลบ boot status ให้ Dashboard หยุดแสดง loading
     while True:
         ret, frame = cam.read()
         if not ret or frame is None:

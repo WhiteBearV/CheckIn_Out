@@ -153,26 +153,38 @@
                   <ellipse cx="80" cy="42.3" rx="25.4" ry="29.9" fill="none" :stroke="ovalInnerColorFor(cam.id)" stroke-width="0.2"/>
                 </svg>
 
-                <!-- Thumbnail offline: แสดงแค่ข้อความ -->
+                <!-- Thumbnail: ข้อความเล็ก -->
                 <div v-if="isThumbnail(cam.id)" class="relative z-20 text-[9px] text-gui-dim/70">
-                  {{ getCamState(cam.id).isStarting ? 'กำลังเริ่ม...' : 'ออฟไลน์' }}
+                  {{ isLive(cam.id) || getCamState(cam.id).isBooting ? 'กำลังดาวน์โหลด...' : 'ออฟไลน์' }}
                 </div>
 
-                <!-- Normal/focused offline: ปุ่มเปิด -->
+                <!-- Normal/focused: ปุ่มเปิด หรือ Downloading -->
                 <template v-else>
-                  <div v-if="!getCamState(cam.id).isStarting" class="relative z-20 flex flex-col items-center gap-2">
+                  <!-- ปุ่มเปิด: เฉพาะเมื่อกล้องดับสนิท ไม่รัน ไม่โหลด -->
+                  <div v-if="!isLive(cam.id) && !getCamState(cam.id).isStarting && !getCamState(cam.id).isBooting"
+                       class="relative z-20 flex flex-col items-center gap-2">
                     <button @click.stop="startFace(cam.id)"
                       class="btn-cam-start px-5 py-2 rounded-lg text-xs transition-colors"
                     >▶ เปิด</button>
                   </div>
-                  <div v-else class="relative z-20 flex items-center gap-2 text-gui-out text-xs">
-                    <div class="w-4 h-4 border-2 border-gui-out border-t-transparent rounded-full animate-spin"/>
-                    กำลังเริ่มต้น...
+
+                  <!-- Downloading screen: แสดงตลอดจนกว่ากล้องจะมี frame จริง -->
+                  <div v-else class="relative z-20 flex flex-col items-center gap-3 w-full px-6">
+                    <span class="text-white/50 text-[9px] tracking-widest uppercase">Face Attendance System</span>
+                    <span class="text-blue-300/90 text-[11px] font-medium">กำลังดาวน์โหลด...</span>
+                    <div class="w-full max-w-[180px] h-[4px] bg-white/10 rounded-full overflow-hidden">
+                      <div class="h-full bg-green-400/80 rounded-full"
+                           :style="`width:${bootProgressFor(cam.id)}%;transition:width 0.8s ease`"/>
+                    </div>
+                    <span v-if="getCamState(cam.id).bootMsg"
+                          class="text-white/35 text-[9px] text-center leading-tight">
+                      {{ getCamState(cam.id).bootMsg }}
+                    </span>
+                    <div class="flex items-center gap-1.5 mt-0.5">
+                      <div v-for="i in 5" :key="i" class="w-1.5 h-1.5 rounded-full dl-dot-cam"
+                           :style="`animation-delay:${(i-1)*0.18}s`"/>
+                    </div>
                   </div>
-                  <div v-if="isLive(cam.id) && !hasRecentFrame(cam.id)"
-                    class="absolute top-4 left-1/2 -translate-x-1/2 z-20
-                           bg-gui-out/15 border border-gui-out/40 text-gui-out text-xs px-3 py-1.5 rounded-lg"
-                  >⚠ Frame หาย</div>
                 </template>
 
               </div>
@@ -643,6 +655,8 @@ function initCamState(cam) {
     camStates[cam.id] = {
       faceStatus:    { running: false, pid: null, has_frame: false, frame_age_sec: null },
       isStarting:    false,
+      isBooting:     false,
+      bootMsg:       null,
       streamStartTs: Date.now(),
       streamError:   false,
     }
@@ -653,6 +667,8 @@ function getCamState(camId) {
   return camStates[camId] ?? {
     faceStatus:    { running: false, pid: null, has_frame: false, frame_age_sec: null },
     isStarting:    false,
+    isBooting:     false,
+    bootMsg:       null,
     streamStartTs: 0,
     streamError:   false,
   }
@@ -698,6 +714,19 @@ function onCameraClick(camId) {
   // คลิกที่ focused cam → ไม่ทำอะไร (ใช้ปุ่ม ✕ เพื่อออก)
 }
 
+// ── Boot Progress ────────────────────────────────────────────────────
+const _BOOT_STEPS = {
+  'กำลังโหลดฐานข้อมูลใบหน้า...':        20,
+  'กำลังโหลด AI Model (InsightFace)...': 50,
+  'กำลังเปิดกล้อง...':                   75,
+  'กำลังติดตั้งระบบตรวจจับ...':          90,
+}
+function bootProgressFor(camId) {
+  const state = getCamState(camId)
+  if (!state.isBooting) return 100
+  return _BOOT_STEPS[state.bootMsg] ?? 5
+}
+
 // ── Per-Camera Helpers ───────────────────────────────────────────────
 const isLive          = (camId) => getCamState(camId).faceStatus.running ?? false
 const hasRecentFrame  = (camId) => {
@@ -730,8 +759,10 @@ function toggleFace(camId) {
 }
 
 async function startFace(camId) {
-  if (!camStates[camId] || camStates[camId].isStarting) return
+  if (!camStates[camId] || camStates[camId].isStarting || camStates[camId].isBooting) return
   camStates[camId].isStarting  = true
+  camStates[camId].isBooting   = true
+  camStates[camId].bootMsg     = null
   camStates[camId].streamError = false
   try {
     const res  = await fetch(`${BASE_URL}/cameras/${camId}/face/start`, { method: 'POST' })
@@ -739,8 +770,10 @@ async function startFace(camId) {
     if (data.ok) {
       camStates[camId].streamStartTs = Date.now()
       setTimeout(() => fetchStatus(camId), 2_000)
+    } else {
+      camStates[camId].isBooting = false
     }
-  } catch { /* ignore */ } finally {
+  } catch { camStates[camId].isBooting = false } finally {
     camStates[camId].isStarting = false
   }
 }
@@ -769,7 +802,11 @@ async function fetchStatus(camId) {
     const res = await fetch(`${BASE_URL}/cameras/${camId}/face/status`)
     if (!res.ok) return
     const data = await res.json()
-    if (camStates[camId]) camStates[camId].faceStatus = data
+    if (camStates[camId]) {
+      camStates[camId].faceStatus = data
+      camStates[camId].bootMsg    = data.boot_msg ?? null
+      if (data.has_frame || !data.running) camStates[camId].isBooting = false
+    }
   } catch { /* ignore */ }
 }
 
@@ -923,3 +960,14 @@ const lastFetchStr = computed(() => {
   return diff < 60 ? `${diff} วินาทีที่แล้ว` : `${Math.floor(diff / 60)} นาทีที่แล้ว`
 })
 </script>
+
+<style scoped>
+@keyframes dl-dot-cam {
+  0%, 100% { opacity: 0.2; transform: scale(0.7); background: rgba(255,255,255,0.2); }
+  50%       { opacity: 1;   transform: scale(1.3); background: rgba(100,210,255,0.9); }
+}
+.dl-dot-cam {
+  background: rgba(255,255,255,0.2);
+  animation: dl-dot-cam 1.2s ease-in-out infinite;
+}
+</style>

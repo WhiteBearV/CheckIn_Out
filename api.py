@@ -825,6 +825,7 @@ def update_camera_flip(cam_id: str, body: CameraFlipBody):
             env["CAMERA_FLIP"]          = "1" if body.flip else "0"
             env["FACE_LIVE_FRAME_PATH"] = str(_live_frame_path_for(cam_id))
             env["FACE_LIVE_STATE_PATH"] = str(_live_state_path_for(cam_id))
+            env["FACE_BOOT_PATH"]       = str(_boot_path_for(cam_id))
             new_proc = _subprocess.Popen(
                 [_sys.executable, str(_ROOT / "main.py")],
                 cwd=str(_ROOT),
@@ -1311,6 +1312,10 @@ def _live_state_path_for(cam_id: str) -> pathlib.Path:
     return _FRAMES_DIR / f"live_state_{cam_id}.json"
 
 
+def _boot_path_for(cam_id: str) -> pathlib.Path:
+    return _FRAMES_DIR / f"boot_status_{cam_id}.json"
+
+
 @app.get("/cameras/{cam_id}/face-stream")
 def cameras_face_stream(cam_id: str):
     """
@@ -1361,6 +1366,15 @@ def cameras_face_status(cam_id: str):
     if has_frame:
         frame_age = round(_time.time() - live_frame.stat().st_mtime, 1)
 
+    boot_msg = None
+    boot_path = _boot_path_for(cam_id)
+    if boot_path.exists():
+        try:
+            import json as _j
+            boot_msg = _j.loads(boot_path.read_text(encoding="utf-8")).get("msg")
+        except Exception:
+            pass
+
     return {
         "cam_id":        cam_id,
         "cam_name":      _CAMERAS[cam_id]["name"],
@@ -1368,6 +1382,7 @@ def cameras_face_status(cam_id: str):
         "pid":           proc.pid if running else None,
         "has_frame":     has_frame,
         "frame_age_sec": frame_age,
+        "boot_msg":      boot_msg,
     }
 
 
@@ -1398,6 +1413,7 @@ def cameras_face_start(cam_id: str):
         env["CAMERA_FLIP"]          = "1" if cam.get("flip", False) else "0"
         env["FACE_LIVE_FRAME_PATH"] = str(_live_frame_path_for(cam_id))
         env["FACE_LIVE_STATE_PATH"] = str(_live_state_path_for(cam_id))
+        env["FACE_BOOT_PATH"]       = str(_boot_path_for(cam_id))
 
         proc = _subprocess.Popen(
             [_sys.executable, str(_ROOT / "main.py")],

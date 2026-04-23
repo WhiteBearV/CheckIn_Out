@@ -152,7 +152,8 @@
                 :stroke="camLive ? 'rgba(0,220,0,0.3)' : 'rgba(255,255,255,0.15)'" stroke-width="0.2"/>
             </svg>
 
-            <div v-if="!camStarting" class="relative z-20 flex flex-col items-center gap-2">
+            <!-- ปุ่มเปิด: เฉพาะเมื่อกล้องดับสนิท ไม่รัน ไม่โหลด -->
+            <div v-if="!camStarting && !camLive" class="relative z-20 flex flex-col items-center gap-2">
               <button
                 @click="startFace"
                 class="px-6 py-2.5 rounded-lg text-sm font-semibold transition-colors
@@ -162,18 +163,19 @@
               </button>
             </div>
 
-            <div v-else class="relative z-20 flex items-center gap-2 text-gui-out text-sm">
-              <div class="w-4 h-4 border-2 border-gui-out border-t-transparent rounded-full animate-spin"/>
-              กำลังเริ่มต้น...
-            </div>
-
-            <div
-              v-if="camLive && !camHasFrame"
-              class="absolute top-4 left-1/2 -translate-x-1/2 z-20
-                     bg-gui-out/15 border border-gui-out/40 text-gui-out
-                     text-xs px-3 py-1.5 rounded-lg"
-            >
-              ⚠ Frame หาย
+            <!-- Downloading screen: แสดงตลอดจนกว่ากล้องจะมี frame จริง -->
+            <div v-else class="relative z-20 flex flex-col items-center gap-3 w-full px-10">
+              <span class="text-white/50 text-xs tracking-widest uppercase">Face Attendance System</span>
+              <span class="text-blue-300/90 text-sm font-medium">กำลังดาวน์โหลด...</span>
+              <div class="w-full max-w-[260px] h-[5px] bg-white/10 rounded-full overflow-hidden">
+                <div class="h-full bg-green-400/80 rounded-full"
+                     :style="`width:${camBootProgress}%;transition:width 0.8s ease`"/>
+              </div>
+              <span v-if="camBootMsg" class="text-white/35 text-xs text-center">{{ camBootMsg }}</span>
+              <div class="flex items-center gap-2.5">
+                <div v-for="i in 5" :key="i" class="w-2 h-2 rounded-full dl-dot-single"
+                     :style="`animation-delay:${(i-1)*0.18}s`"/>
+              </div>
             </div>
 
           </div>
@@ -320,6 +322,8 @@ async function loadCamera() {
 const camState = ref({
   faceStatus:    { running: false, pid: null, has_frame: false, frame_age_sec: null },
   isStarting:    false,
+  isBooting:     false,
+  bootMsg:       null,
   streamStartTs: Date.now(),
   streamError:   false,
 })
@@ -330,7 +334,19 @@ const camHasFrame = computed(() => {
   return age !== null && age !== undefined && age <= 8
 })
 const frameAge    = computed(() => camState.value.faceStatus.frame_age_sec ?? null)
-const camStarting = computed(() => camState.value.isStarting)
+const camStarting = computed(() => camState.value.isStarting || camState.value.isBooting)
+const camBootMsg  = computed(() => camState.value.bootMsg)
+
+const _BOOT_STEPS = {
+  'กำลังโหลดฐานข้อมูลใบหน้า...':        20,
+  'กำลังโหลด AI Model (InsightFace)...': 50,
+  'กำลังเปิดกล้อง...':                   75,
+  'กำลังติดตั้งระบบตรวจจับ...':          90,
+}
+const camBootProgress = computed(() => {
+  if (!camState.value.isBooting) return 100
+  return _BOOT_STEPS[camState.value.bootMsg] ?? 5
+})
 const streamUrl   = computed(() =>
   `${BASE_URL}/cameras/${camId.value}/face-stream?t=${camState.value.streamStartTs}`
 )
@@ -342,8 +358,10 @@ function toggleFace() {
 }
 
 async function startFace() {
-  if (camState.value.isStarting) return
+  if (camState.value.isStarting || camState.value.isBooting) return
   camState.value.isStarting  = true
+  camState.value.isBooting   = true
+  camState.value.bootMsg     = null
   camState.value.streamError = false
   try {
     const res  = await fetch(`${BASE_URL}/cameras/${camId.value}/face/start`, { method: 'POST' })
@@ -351,8 +369,10 @@ async function startFace() {
     if (data.ok) {
       camState.value.streamStartTs = Date.now()
       setTimeout(() => fetchStatus(), 2_000)
+    } else {
+      camState.value.isBooting = false
     }
-  } catch { /* ignore */ } finally {
+  } catch { camState.value.isBooting = false } finally {
     camState.value.isStarting = false
   }
 }
@@ -374,6 +394,8 @@ async function fetchStatus() {
     if (!res.ok) return
     const data = await res.json()
     camState.value.faceStatus = data
+    camState.value.bootMsg    = data.boot_msg ?? null
+    if (data.has_frame || !data.running) camState.value.isBooting = false
   } catch { /* ignore */ }
 }
 
@@ -418,3 +440,14 @@ const todayStr = new Date().toLocaleDateString('th-TH', {
   year: 'numeric', month: 'long', day: 'numeric', weekday: 'long',
 })
 </script>
+
+<style scoped>
+@keyframes dl-dot-single {
+  0%, 100% { opacity: 0.2; transform: scale(0.7); background: rgba(255,255,255,0.2); }
+  50%       { opacity: 1;   transform: scale(1.3); background: rgba(100,210,255,0.9); }
+}
+.dl-dot-single {
+  background: rgba(255,255,255,0.2);
+  animation: dl-dot-single 1.2s ease-in-out infinite;
+}
+</style>

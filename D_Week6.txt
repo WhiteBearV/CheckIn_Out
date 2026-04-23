@@ -1,5 +1,137 @@
 ════════════════════════════════════════════════════════════════════════
   รายงานการปฏิบัติงานฝึกประสบการณ์วิชาชีพ
+  วันที่  : พฤหัสบดีที่ 23 เมษายน 2569
+  สัปดาห์ : สัปดาห์ที่ 6
+════════════════════════════════════════════════════════════════════════
+
+■ งานที่ดำเนินการในวันนี้
+────────────────────────────────────────────────────────────────────────
+
+1. เพิ่มหน้า Downloading บน Web Dashboard ขณะ main.py กำลังโหลด
+   ─────────────────────────────────────────────────────────────────
+   เดิมเมื่อผู้ใช้กดปุ่ม "▶ เปิด" บน Dashboard กล้องจะยังคงดำ
+   ไม่มี feedback ใดๆ จนกว่า main.py จะโหลดเสร็จและส่ง frame มา
+   (ซึ่งใช้เวลา 20–60 วินาที)
+   เพิ่มหน้าโหลดพร้อม progress bar และข้อความบอก step ปัจจุบัน
+
+   การทำงาน:
+     main.py เขียนไฟล์ boot_status_{cam_id}.json ก่อนแต่ละขั้นตอน
+     api.py อ่านไฟล์นั้นและส่ง boot_msg กลับใน /cameras/{id}/face/status
+     Dashboard poll status ทุก 2 วินาที และแสดงข้อความตาม boot_msg
+
+   - เพิ่ม _BOOT_PATH, _write_boot(msg), _clear_boot() ใน main.py
+       • _write_boot() เรียกก่อนแต่ละขั้นตอนใหญ่ในช่วง startup
+         — "กำลังโหลดฐานข้อมูลใบหน้า..."
+         — "กำลังโหลด AI Model (InsightFace)..."
+         — "กำลังเปิดกล้อง..."
+         — "กำลังติดตั้งระบบตรวจจับ..."
+       • _clear_boot() เรียกทันทีที่เข้า main loop (โหลดเสร็จแล้ว)
+       • path รับจาก env var FACE_BOOT_PATH เพื่อแยกไฟล์ตาม cam_id
+
+   - เพิ่ม _boot_path_for(cam_id) และ boot_msg ใน api.py
+       • cameras_face_start() ส่ง FACE_BOOT_PATH เป็น env var ให้ main.py
+       • cameras_face_status() อ่านไฟล์ boot_status_{cam_id}.json
+         แล้วคืน boot_msg ใน JSON response
+
+   - เพิ่ม isBooting / bootMsg state ใน CameraView.vue
+       • startFace() ตั้ง isBooting=true ทันทีที่กดปุ่ม
+       • fetchStatus() ล้าง isBooting เมื่อ has_frame=true หรือ running=false
+       • หน้า Downloading แสดงเมื่อ isBooting=true แทน frame ดำ
+
+   - เพิ่ม isBooting / bootMsg state ใน SingleCameraView.vue
+       • camStarting computed รวม isStarting || isBooting
+       • แสดง Downloading screen เช่นเดียวกับ CameraView
+
+2. ปรับ Progress Bar ให้สอดคล้องกับขั้นตอนโหลดจริง
+   ─────────────────────────────────────────────────────────────────
+   เดิม progress bar ใช้ CSS animation ปลอม (0% → 93% ใน 60 วินาที)
+   ซึ่งไม่สัมพันธ์กับการโหลดจริงของ main.py เลย
+   เปลี่ยนให้ bar กระโดดไปตำแหน่งจริงเมื่อ boot_msg เปลี่ยนแต่ละ step
+
+   Mapping bootMsg → ความคืบหน้า:
+     เริ่มต้น (ยังไม่มี msg)               →  5%
+     กำลังโหลดฐานข้อมูลใบหน้า             → 20%
+     กำลังโหลด AI Model (InsightFace)      → 50%
+     กำลังเปิดกล้อง                        → 75%
+     กำลังติดตั้งระบบตรวจจับ               → 90%
+     โหลดเสร็จ (isBooting=false)           → 100%
+
+   - แก้ไข CameraView.vue
+       • เพิ่ม _BOOT_STEPS map และ bootProgressFor(camId) function
+       • bar ใช้ :style="width:${bootProgressFor(cam.id)}%;
+         transition:width 0.8s ease" แทน CSS animation class
+       • ลบ @keyframes dl-fill-cam และ .dl-bar-cam ออก
+
+   - แก้ไข SingleCameraView.vue
+       • เพิ่ม _BOOT_STEPS map และ camBootProgress computed
+       • bar ใช้ :style="width:${camBootProgress}%;
+         transition:width 0.8s ease" แทน CSS animation class
+       • ลบ @keyframes dl-fill-single และ .dl-bar-single ออก
+
+■ สรุปไฟล์ที่สร้าง / แก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  [แก้ไข] main.py
+    → เพิ่ม _BOOT_PATH (อ่านจาก env FACE_BOOT_PATH)
+    → เพิ่ม _write_boot(msg) เขียน JSON {msg, ts} ลงไฟล์
+    → เพิ่ม _clear_boot() ลบไฟล์ boot_status เมื่อโหลดเสร็จ
+    → เรียก _write_boot() ก่อนทุก step ใหญ่ใน startup
+    → เรียก _clear_boot() ที่จุดเริ่ม while True (main loop)
+
+  [แก้ไข] api.py
+    → เพิ่ม _boot_path_for(cam_id) คืน Path ของ boot_status_{cam_id}.json
+    → cameras_face_start() ส่ง FACE_BOOT_PATH ใน env ของ subprocess
+    → cameras_face_status() อ่าน boot_msg จากไฟล์ boot_status และ
+      รวมไว้ใน JSON response
+
+  [แก้ไข] dashboard/src/views/CameraView.vue
+    → เพิ่ม isBooting, bootMsg ใน initCamState / getCamState
+    → startFace() ตั้ง isBooting=true ทันทีที่เรียก
+    → fetchStatus() ล้าง isBooting เมื่อ has_frame || !running
+    → แสดง Downloading screen แทนพื้นดำ ขณะ isBooting=true
+    → เพิ่ม _BOOT_STEPS map และ bootProgressFor() function
+    → bar ใช้ inline :style transition แทน CSS @keyframes
+
+  [แก้ไข] dashboard/src/views/SingleCameraView.vue
+    → เพิ่ม isBooting, bootMsg ใน camState
+    → camStarting computed รวม isStarting || isBooting
+    → เพิ่ม camBootMsg และ camBootProgress computed
+    → bar ใช้ inline :style transition แทน CSS @keyframes
+
+■ เทคโนโลยีที่ใช้
+────────────────────────────────────────────────────────────────────────
+
+  - Python / FastAPI        — subprocess env vars, JSON file I/O
+  - Vue 3 / Composition API — reactive state, computed, polling
+  - CSS Transition          — width transition แทน keyframe animation
+  - Docker / Vite           — npm run build → static/ → docker rebuild
+
+■ ปัญหาที่พบและแนวทางแก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  ปัญหา : Downloading screen ขึ้นแค่แปปเดียวแล้วหาย
+  วิเคราะห์: isStarting=true ตลอดช่วง HTTP request เท่านั้น (~200ms)
+             พอ API ตอบกลับ isStarting กลับเป็น false ทันที
+             ในขณะที่ main.py ยังไม่เริ่มโหลดด้วยซ้ำ
+  แก้ไข : เพิ่ม isBooting state แยกต่างหาก ตั้งค่าทันทีที่กดปุ่ม
+           ล้างเฉพาะเมื่อ fetchStatus() รายงานว่า has_frame=true
+           หรือ running=false (camera พร้อมหรือ error)
+
+  ปัญหา : Progress bar ไม่สัมพันธ์กับการโหลดจริง
+  วิเคราะห์: CSS animation วิ่งตามเวลา (60 วินาที) ไม่รู้ว่า
+             main.py กำลังทำ step ไหนอยู่
+  แก้ไข : Map boot_msg แต่ละค่าเป็นเปอร์เซ็นต์คงที่
+           bar ขยับด้วย CSS transition ทุกครั้งที่ boot_msg เปลี่ยน
+
+  ปัญหา : Vue source แก้แล้วแต่ browser ไม่เห็นการเปลี่ยนแปลง
+  วิเคราะห์: Dockerfile ทำ COPY . . เพื่อ copy static/ ที่ build แล้ว
+             ไม่ได้รัน npm run build ใน Docker build process
+             ทำให้ source ที่แก้ไม่ถูก bundle เข้า image
+  แก้ไข : รัน npm run build ใน dashboard/ บน host ก่อนทุกครั้ง
+           แล้วจึง docker compose up --build เพื่อ copy static/ ใหม่
+
+════════════════════════════════════════════════════════════════════════
+  รายงานการปฏิบัติงานฝึกประสบการณ์วิชาชีพ
   วันที่  : พุธที่ 22 เมษายน 2569
   สัปดาห์ : สัปดาห์ที่ 6
 ════════════════════════════════════════════════════════════════════════
