@@ -39,13 +39,19 @@
         <div class="absolute left-0 inset-y-0 w-[3px] rounded-r-sm"
           :class="livenessBorderClass(p.liveness)" />
 
-        <!-- Avatar -->
-        <div
-          class="w-9 h-9 rounded-full flex items-center justify-center
-                 font-bold text-sm shrink-0 ml-1.5"
-          :class="livenessAvatarClass(p.liveness)"
-        >
-          {{ (p.per_name || p.display_name || '?')[0] }}
+        <!-- Avatar (รูปจาก API → fallback เป็นตัวอักษร) -->
+        <div class="w-9 h-9 rounded-full overflow-hidden shrink-0 ml-1.5 border border-gui-border/40 flex items-center justify-center"
+             :class="faceErrors[p.per_id] ? livenessAvatarClass(p.liveness) : 'bg-black/20'">
+          <img
+            v-if="!faceErrors[p.per_id]"
+            :src="`${API_BASE}/person-profile/${p.per_id}`"
+            class="w-full h-full object-cover"
+            :alt="(p.per_name || p.display_name || '?')[0]"
+            @error="faceErrors[p.per_id] = true"
+          />
+          <span v-else class="font-bold text-sm">
+            {{ (p.per_name || p.display_name || '?')[0] }}
+          </span>
         </div>
 
         <!-- ชื่อ + หน่วยงาน + liveness msg -->
@@ -82,9 +88,14 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, reactive } from 'vue'
 import LivenessBadge from './LivenessBadge.vue'
 import { useLiveSession } from '@/composables/useLiveSession.js'
+
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '/api'
+
+// ── Photo error tracking (per per_id) ────────────────────────────
+const faceErrors = reactive({})
 
 const { active, stale, persons, lastUpdate } = useLiveSession()
 

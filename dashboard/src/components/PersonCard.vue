@@ -27,30 +27,20 @@
       : 'border-gui-out/30'"
   >
     <!-- ── ส่วนบน: รูป + status badge ── -->
-    <div class="relative bg-black/30 aspect-video flex items-center justify-center">
+    <div class="relative bg-black/30 aspect-video overflow-hidden flex items-center justify-center">
 
       <!-- รูป snapshot (โหลดจาก /api/person-photo/{per_id}) -->
       <img
         v-if="!photoError"
         :src="photoUrl"
         :alt="displayName"
-        class="w-full h-full object-cover"
+        class="w-full h-full object-cover object-top cursor-zoom-in"
         @error="photoError = true"
+        @click="lightboxOpen = true"
       />
 
-      <!-- Fallback: วงกลม Avatar เมื่อไม่มีรูป -->
-      <div
-        v-else
-        class="w-20 h-20 rounded-full flex items-center justify-center
-               text-3xl font-bold"
-        :class="person.status === 'IN'
-          ? 'bg-gui-in/20 text-gui-in'
-          : person.status === 'PENDING'
-          ? 'bg-purple-500/20 text-purple-400'
-          : 'bg-gui-out/20 text-gui-out'"
-      >
-        {{ initial }}
-      </div>
+      <!-- ไม่มีรูป: แสดงพื้นที่ว่างสีเข้ม -->
+      <div v-else class="w-full h-full bg-gui-bg/60" />
 
       <!-- Badge มุมบนขวา: PENDING → รอตรวจสอบ, IN/OUT → LivenessBadge หรือ StatusBadge -->
       <div class="absolute top-2 right-2">
@@ -67,6 +57,37 @@
         <StatusBadge v-else :status="person.status" />
       </div>
     </div>
+
+    <!-- ── Lightbox Modal ── -->
+    <Teleport to="body">
+      <Transition name="lb">
+        <div
+          v-if="lightboxOpen"
+          class="fixed inset-0 z-50 flex flex-col items-center justify-center
+                 bg-black/85 backdrop-blur-sm"
+          @click.self="lightboxOpen = false"
+          @keydown.esc.window="lightboxOpen = false"
+        >
+          <!-- รูปเต็ม -->
+          <img
+            :src="photoUrl"
+            :alt="displayName"
+            class="max-w-[90vw] max-h-[80vh] object-contain rounded-xl shadow-2xl"
+          />
+          <!-- ชื่อ + ปุ่มปิด -->
+          <div class="mt-4 flex items-center gap-4">
+            <span class="text-white font-semibold text-sm">{{ displayName }}</span>
+            <button
+              @click="lightboxOpen = false"
+              class="px-3 py-1 rounded-lg text-xs border border-white/20
+                     text-white/70 hover:text-white hover:border-white/50 transition-colors"
+            >
+              ✕ ปิด
+            </button>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
 
     <!-- ── ส่วนล่าง: ข้อมูล ── -->
     <div class="p-3 flex flex-col gap-1.5 flex-1">
@@ -128,17 +149,21 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed } from 'vue'
 import StatusBadge   from './StatusBadge.vue'
 import LivenessBadge from './LivenessBadge.vue'
 
 // ── Props + Emits ──────────────────────────────────────────────────
 const props = defineProps({
-  person:  { type: Object, required: true },
-  apiBase: { type: String, default: '/api' },
+  person:    { type: Object,  required: true },
+  apiBase:   { type: String,  default: '/api' },
+  photoMode: { type: String,  default: 'profile' }, // 'profile' | 'verify'
 })
 
 const emit = defineEmits(['checked-out'])
+
+// ── Lightbox ───────────────────────────────────────────────────────
+const lightboxOpen = ref(false)
 
 // ── Checkout ───────────────────────────────────────────────────────
 const checkingOut = ref(false)
@@ -163,20 +188,15 @@ async function doCheckout() {
 
 // ── Photo ─────────────────────────────────────────────────────────
 const photoError = ref(false)
-const photoBust  = ref('')   // cache-busting suffix — เปลี่ยนเมื่อ retry
 
-// URL ดึงรูปจาก endpoint (ถ้า 404 → photoError = true → แสดง avatar)
-const photoUrl = computed(() =>
-  `${props.apiBase}/person-photo/${props.person.per_id}${photoBust.value}`
-)
-
-// เมื่อ status เปลี่ยนเป็น IN (PENDING → IN = check-in สำเร็จ รูปพร้อมแล้ว)
-// → reset error + เปลี่ยน URL ด้วย timestamp เพื่อ bypass browser 404 cache
-watch(() => props.person.status, (newStatus) => {
-  if (newStatus === 'IN') {
-    photoError.value = false
-    photoBust.value  = `?t=${Date.now()}`
+const photoUrl = computed(() => {
+  if (props.photoMode === 'verify') {
+    // รูปจากกล้องตอน verify จริง (_IN.jpg หรือ _OUT.jpg)
+    const st = props.person.status === 'OUT' ? 'OUT' : 'IN'
+    return `${props.apiBase}/person-photo/${props.person.per_id}?status=${st}`
   }
+  // default: รูปโปรไฟล์จาก External API (per_picpath) เท่านั้น
+  return `${props.apiBase}/person-profile/${props.person.per_id}`
 })
 
 // ── Display name ───────────────────────────────────────────────────
@@ -218,3 +238,8 @@ function formatTime(iso) {
   })
 }
 </script>
+
+<style scoped>
+.lb-enter-active, .lb-leave-active { transition: opacity 0.2s ease; }
+.lb-enter-from,  .lb-leave-to     { opacity: 0; }
+</style>

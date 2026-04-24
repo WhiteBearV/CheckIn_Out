@@ -554,6 +554,7 @@
           :key="p.per_id"
           :person="p"
           :api-base="API_BASE"
+          photo-mode="verify"
           @checked-out="onCheckedOut"
         />
       </div>

@@ -1013,31 +1013,53 @@ def camera_stream():
 
 
 @app.get("/person-photo/{per_id}")
-def person_photo(per_id: str):
+def person_photo(per_id: str, status: str = Query("IN", regex="^(IN|OUT)$")):
     """
-    คืนรูป snapshot IN ล่าสุดของพนักงานวันนี้
-    ────────────────────────────────────────────────────────
-    ค้นหาใน PicSAVE/YYYY/MM/DD/*_{per_id}_IN.jpg
-    ถ้าไม่พบ → 404 (Vue จะแสดง avatar initials แทน)
-
-    ใช้ใน PersonCard.vue:
-      <img :src="`/api/person-photo/${person.per_id}`" @error="useFallback" />
+    รูป verify จากกล้อง (PicSAVE เท่านั้น) — ใช้ใน AttendanceFeed
+      status=IN  → _IN.jpg  → _OUT.jpg → 404
+      status=OUT → _OUT.jpg → _IN.jpg  → 404
+    ไม่ใช้ per_picpath เด็ดขาด เพื่อให้แสดงรูปที่ถ่ายตอน verify จริงๆ
     """
     import glob as _glob
     from fastapi.responses import FileResponse
     from datetime import date as _date
 
-    today   = _date.today()
-    folder  = _ROOT / "PicSAVE" / today.strftime("%Y") / today.strftime("%m") / today.strftime("%d")
-    pattern = str(folder / f"*_{per_id}_IN.jpg")
-    matches = sorted(_glob.glob(pattern))
+    today  = _date.today()
+    folder = _ROOT / "PicSAVE" / today.strftime("%Y") / today.strftime("%m") / today.strftime("%d")
 
-    if not matches:
-        raise HTTPException(status_code=404, detail="No photo found")
+    suffixes = ["_IN.jpg", "_OUT.jpg"] if status == "IN" else ["_OUT.jpg", "_IN.jpg"]
+    for suffix in suffixes:
+        matches = sorted(_glob.glob(str(folder / f"*_{per_id}{suffix}")))
+        if matches:
+            return FileResponse(matches[-1], media_type="image/jpeg",
+                                headers={"Cache-Control": "no-cache"})
 
-    # คืนรูปล่าสุด (sort ตาม filename = เวลา)
-    return FileResponse(matches[-1], media_type="image/jpeg",
-                        headers={"Cache-Control": "max-age=300"})
+    raise HTTPException(status_code=404, detail="No verify photo found")
+
+
+@app.get("/person-profile/{per_id}")
+def person_profile(per_id: str):
+    """
+    รูปโปรไฟล์จาก External API (per_picpath เท่านั้น) — ใช้ใน PersonCard
+    ไม่ใช้ PicSAVE เด็ดขาด เพื่อแสดงรูปโปรไฟล์ทางการ
+    """
+    import requests as _req
+    from fastapi.responses import Response
+
+    try:
+        from api_client import fetch_person_by_pid
+        person  = fetch_person_by_pid(per_id)
+        pic_url = (person or {}).get("per_picpath", "")
+        if pic_url:
+            r = _req.get(pic_url, timeout=5)
+            if r.ok:
+                ctype = r.headers.get("content-type", "image/jpeg")
+                return Response(content=r.content, media_type=ctype,
+                                headers={"Cache-Control": "max-age=3600"})
+    except Exception:
+        pass
+
+    raise HTTPException(status_code=404, detail="No profile photo")
 
 
 @app.get("/person-face/{per_id}")

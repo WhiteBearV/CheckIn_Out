@@ -282,15 +282,12 @@ const mergedPersons = computed(() => {
       result.push({ ...dbP, liveness: null, liveness_msg: null })
   })
 
-  // Sort: IN ก่อน → PENDING → OUT → DB-only (ออกแล้ว)
+  // Sort: FIFO — เรียงตาม in_time เก่าสุดขึ้นก่อน (คนเข้าก่อนแสดงก่อน)
+  // คนที่ยังไม่มี in_time (PENDING ที่เพิ่งตรวจเจอ) อยู่ท้ายสุด
   return result.sort((a, b) => {
-    const aInLive = liveSet.has(a.per_id)
-    const bInLive = liveSet.has(b.per_id)
-    if (aInLive !== bInLive) return aInLive ? -1 : 1
-    const ord = { IN: 0, PENDING: 1, OUT: 2 }
-    if (a.status !== b.status)
-      return (ord[a.status] ?? 3) - (ord[b.status] ?? 3)
-    return new Date(a.in_time ?? 0) - new Date(b.in_time ?? 0)
+    const aTime = a.in_time ? new Date(a.in_time).getTime() : Infinity
+    const bTime = b.in_time ? new Date(b.in_time).getTime() : Infinity
+    return aTime - bTime
   })
 })
 

@@ -70,15 +70,26 @@
             <!-- ── Avatar + ชื่อ ── -->
             <td class="px-4 py-2.5">
               <div class="flex items-center gap-2.5">
-                <!-- วงกลม Avatar แสดงตัวอักษรแรกของชื่อ -->
+                <!-- Avatar container ขนาดคงที่ ไม่ขยายแถว -->
                 <div
-                  class="w-7 h-7 rounded-full flex items-center justify-center
-                         text-xs font-bold shrink-0"
-                  :class="row.status === 'IN'
-                    ? 'bg-gui-in/20  text-gui-in'
-                    : 'bg-gui-out/20 text-gui-out'"
+                  class="w-7 h-7 rounded-full overflow-hidden shrink-0 flex items-center justify-center"
+                  :class="photoErrors[`${row.id}`]
+                    ? (row.status === 'IN' ? 'bg-gui-in/20' : 'bg-gui-out/20')
+                    : 'bg-black/20'"
                 >
-                  {{ getInitial(row) }}
+                  <img
+                    v-if="!photoErrors[`${row.id}`]"
+                    :src="`${API_BASE}/person-photo/${row.per_id}?status=${row.status}`"
+                    class="w-full h-full object-cover object-top cursor-zoom-in"
+                    :alt="getInitial(row)"
+                    @error="photoErrors[`${row.id}`] = true"
+                    @click="lightboxRow = row"
+                  />
+                  <span
+                    v-else
+                    class="text-xs font-bold"
+                    :class="row.status === 'IN' ? 'text-gui-in' : 'text-gui-out'"
+                  >{{ getInitial(row) }}</span>
                 </div>
                 <div class="min-w-0">
                   <!-- ชื่อเต็ม -->
@@ -116,10 +127,51 @@
       </table>
     </div>
   </div>
+
+  <!-- ── Lightbox ── -->
+  <Teleport to="body">
+    <Transition name="lb">
+      <div
+        v-if="lightboxRow"
+        class="fixed inset-0 z-50 flex flex-col items-center justify-center
+               bg-black/85 backdrop-blur-sm"
+        @click.self="lightboxRow = null"
+        @keydown.esc.window="lightboxRow = null"
+      >
+        <img
+          :src="`${API_BASE}/person-photo/${lightboxRow.per_id}?status=${lightboxRow.status}`"
+          :alt="lightboxRow.name"
+          class="max-w-[90vw] max-h-[80vh] object-contain rounded-xl shadow-2xl"
+        />
+        <div class="mt-4 flex items-center gap-3">
+          <span
+            class="px-2 py-0.5 rounded text-xs font-bold"
+            :class="lightboxRow.status === 'IN' ? 'bg-gui-in/20 text-gui-in' : 'bg-gui-out/20 text-gui-out'"
+          >{{ lightboxRow.status }}</span>
+          <span class="text-white font-semibold text-sm">{{ lightboxRow.name || buildFullName(lightboxRow) }}</span>
+          <span class="text-white/50 text-xs font-mono">{{ formatTime(lightboxRow.check_time) }}</span>
+          <button
+            @click="lightboxRow = null"
+            class="px-3 py-1 rounded-lg text-xs border border-white/20
+                   text-white/70 hover:text-white hover:border-white/50 transition-colors"
+          >✕ ปิด</button>
+        </div>
+      </div>
+    </Transition>
+  </Teleport>
 </template>
 
 <script setup>
+import { reactive, ref } from 'vue'
 import StatusBadge from './StatusBadge.vue'
+
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '/api'
+
+// ── Lightbox ───────────────────────────────────────────────────────
+const lightboxRow = ref(null)
+
+// ── Photo error tracking (per log_id) ─────────────────────────────
+const photoErrors = reactive({})
 
 // ── Props ──────────────────────────────────────────────────────────
 defineProps({
@@ -156,3 +208,8 @@ function formatTime(iso) {
   })
 }
 </script>
+
+<style scoped>
+.lb-enter-active, .lb-leave-active { transition: opacity 0.2s ease; }
+.lb-enter-from,  .lb-leave-to     { opacity: 0; }
+</style>
