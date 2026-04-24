@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { fetchPerson } from '../api/attendance'
+import { maskPid } from '../utils/pid'
 
 const STREAM_BASE = import.meta.env.DEV ? 'http://localhost:8001' : ''
 
@@ -628,12 +630,21 @@ function elapsedSec(firstSeenStr) {
 
 // ─── PersonPanelCard ───────────────────────────────────────────────────────────
 
-function PersonPanelCard({ camId, camName, name, person, cacheBust, onFaceClick }) {
-  const [imgFailed, setImgFailed] = useState(false)
-  const snapSrc = `${STREAM_BASE}/snap/${camId}/${encodeURIComponent(name)}?t=${cacheBust}`
+function PersonPanelCard({ camId, camName, name, person, onFaceClick }) {
+  // per_id เต็ม (ไว้ lookup External API) — name prop = masked form
+  const perId    = person.per_id || ''
+  const maskedId = person.per_id_masked || name
 
-  // reset ทุกครั้งที่ cacheBust/camId/name เปลี่ยน → ลองโหลดรูปใหม่
-  useEffect(() => { setImgFailed(false) }, [cacheBust, camId, name])
+  // ดึงข้อมูลพนักงาน (รวม per_picpath) จาก External API ผ่าน backend proxy
+  const { data: personInfo } = useQuery({
+    queryKey: ['person', perId],
+    queryFn:  () => fetchPerson(perId),
+    enabled:  !!perId,
+    staleTime: 10 * 60 * 1000,
+  })
+  const photoUrl = personInfo?.per_picpath || ''
+  const [imgFailed, setImgFailed] = useState(false)
+  useEffect(() => { setImgFailed(false) }, [photoUrl])
 
   const elapsed = elapsedSec(person.first_seen)
   const st = person.checked_out
@@ -644,17 +655,27 @@ function PersonPanelCard({ camId, camName, name, person, cacheBust, onFaceClick 
     ? { label: 'สแกนไม่สำเร็จ', cls: 'fail',     color: '#ef4444' }
     : { label: 'กำลังสแกน',     cls: 'scanning', color: '#eab308' }
 
-  const initial = (name[0] || '?').toUpperCase()
+  const displayName = person.display_name || maskedId
+  const initial = (displayName[0] || '?').toUpperCase()
+  const hasPhoto = photoUrl && !imgFailed
+  const hasLast  = person.last_seen && person.last_seen !== '-'
 
   return (
     <div className={`person ${st.cls}`}>
-      {/* face area — 52x52, คลิกขยายได้ */}
+      {/* face area — 52x52, คลิกขยายได้ถ้ามีรูป */}
       <div
         className="face"
-        style={{ width: 52, height: 52, cursor: imgFailed ? 'default' : 'zoom-in' }}
-        onClick={() => !imgFailed && onFaceClick?.({ src: snapSrc, name: person.display_name || name })}
+        style={{ width: 52, height: 52, cursor: hasPhoto ? 'zoom-in' : 'default' }}
+        onClick={() => hasPhoto && onFaceClick?.({ src: photoUrl, name: displayName })}
       >
-        {imgFailed ? (
+        {hasPhoto ? (
+          <img
+            src={photoUrl}
+            alt=""
+            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+            onError={() => setImgFailed(true)}
+          />
+        ) : (
           <div style={{
             width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',
             fontFamily: 'var(--font-mono)', fontSize: 18, fontWeight: 600,
@@ -662,24 +683,24 @@ function PersonPanelCard({ camId, camName, name, person, cacheBust, onFaceClick 
           }}>
             {initial}
           </div>
-        ) : (
-          <img
-            src={snapSrc}
-            alt=""
-            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-            onError={() => setImgFailed(true)}
-          />
         )}
       </div>
       <div className="info">
-        <div className="pname">{person.display_name || name}</div>
+        <div className="pname">{displayName}</div>
         <div className="pmeta">
           <span style={{ color: st.color }}>• {st.label}</span>
           <span>📷 {camName || camId}</span>
         </div>
       </div>
-      {person.first_seen && person.first_seen !== '-' && (
-        <div className="ptime">{person.first_seen.slice(0, 5)}</div>
+      {(person.first_seen && person.first_seen !== '-') && (
+        <div className="ptime" style={{ textAlign: 'right', lineHeight: 1.2 }}>
+          <div>{person.first_seen.slice(0, 5)}</div>
+          {hasLast && (
+            <div style={{ fontSize: 9, color: 'var(--c-text-4)', fontFamily: 'var(--font-mono)' }}>
+              last {person.last_seen.slice(0, 5)}
+            </div>
+          )}
+        </div>
       )}
     </div>
   )
@@ -1035,7 +1056,6 @@ export default function LiveCam() {
                         key={`${camId}-${name}`}
                         camId={camId} camName={camName}
                         name={name} person={person}
-                        cacheBust={cacheBust}
                         onFaceClick={setFaceModal}
                       />
                     ))}

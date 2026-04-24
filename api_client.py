@@ -121,6 +121,22 @@ def _real_fetch(per_id: str) -> dict | None:
         return None
 
 
+# ─── Mask per_id — แสดง/บันทึกชื่อไฟล์แค่ 4 ตัวท้าย ─────────────────────────
+
+def mask_pid(per_id) -> str:
+    """เซ็นเซอร์เลข per_id 13 หลัก → '*********6666' (โชว์แค่ 4 ตัวท้าย)
+
+    ใช้ทุกที่ที่ per_id จะโผล่สู่ภายนอก — UI, ชื่อไฟล์ (live_snap, PicSAVE),
+    state ที่ส่งให้ frontend — เพื่อไม่ให้เลขบัตร ปชช. 13 หลักรั่วออกไป
+    """
+    if not per_id:
+        return ""
+    s = str(per_id)
+    if len(s) <= 4:
+        return s
+    return "*" * (len(s) - 4) + s[-4:]
+
+
 # ─── สร้างชื่อแสดงผล ─────────────────────────────────────────────────────────
 
 def get_display_name(person_dict: dict | None) -> str:
@@ -150,11 +166,15 @@ def mark_attendance(per_id: str, status: str,
                     per_surname: str = None,
                     posname_th: str = None,
                     organize_th: str = None,
-                    organize_id: str = None) -> bool:
+                    organize_id: str = None) -> tuple[bool, str]:
     """
     บันทึก IN หรือ OUT ผ่าน local API (api.py)
 
-    Returns: True ถ้าสำเร็จ, False ถ้าซ้ำหรือ error
+    Returns (ok, reason):
+      (True,  "")                       — สำเร็จ
+      (False, "วันนี้บันทึก IN แล้ว")   — ซ้ำ (DB rule)
+      (False, "ยังไม่มี IN วันนี้")      — OUT โดยไม่มี IN (DB rule)
+      (False, "ERROR: ...")             — network/server error
     """
     try:
         payload = {
@@ -180,11 +200,11 @@ def mark_attendance(per_id: str, status: str,
 
         if result.get("success"):
             print(f"[API CLIENT] บันทึก {status} สำเร็จ ({per_id})")
-            return True
-        else:
-            print(f"[API CLIENT] ไม่บันทึก ({per_id}, {status}): {result.get('reason')}")
-            return False
+            return True, ""
+        reason = result.get("reason") or ""
+        print(f"[API CLIENT] ไม่บันทึก ({per_id}, {status}): {reason}")
+        return False, reason
 
     except Exception as e:
         print(f"[API CLIENT] mark_attendance({per_id}, {status}): {e}")
-        return False
+        return False, f"ERROR: {e}"

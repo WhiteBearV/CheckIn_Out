@@ -51,6 +51,7 @@ import threading as _t
 import config as cfg
 from camera import ThreadedCamera
 from session_manager import SessionManager
+from api_client import mask_pid
 import ui_renderer as ui
 import stream_server
 from pathlib import Path as _pl_mod
@@ -667,14 +668,16 @@ def run_camera(cam_cfg: dict):
             _face_with_names.append((face_box, name))
 
             # ── Push face thumbnail + full frame สำหรับ web frontend ──
+            # ใช้ masked pid (4 ตัวท้าย) เป็นชื่อไฟล์ / key — ไม่รั่ว per_id 13 หลัก
+            mkey = mask_pid(name)
             if _HEADLESS:
                 if crop.size > 0:
-                    _write_live_snap(cam_id, name, crop)
-                _write_live_snapfull(cam_id, name, raw_frame)
+                    _write_live_snap(cam_id, mkey, crop)
+                _write_live_snapfull(cam_id, mkey, raw_frame)
             else:
                 if crop.size > 0:
-                    stream_server.push_snapshot(cam_id, name, crop)
-                stream_server.push_snapshot_full(cam_id, name, raw_frame)
+                    stream_server.push_snapshot(cam_id, mkey, crop)
+                stream_server.push_snapshot_full(cam_id, mkey, raw_frame)
 
             # ── Landmarks (68-point → dict) ──
             lm_dict = None
@@ -780,7 +783,7 @@ def run_camera(cam_cfg: dict):
             "next_window": None,
             "faces": [
                 {
-                    "name":  name,
+                    "name":  mask_pid(name),
                     "bbox":  [int(l), int(t), int(r2), int(b)],
                     "color": list(ui.get_face_visual(name,
                                   session.persons.get(name),
@@ -797,9 +800,12 @@ def run_camera(cam_cfg: dict):
                 oval_cx, oval_cy, oval_ew, oval_eh, now_ts,
             ),
             "persons": {
-                n: {
-                    "display_name": p.display_name or n,
-                    "per_id":       p.per_id or "",
+                mask_pid(n): {
+                    "display_name": p.display_name or mask_pid(n),
+                    # per_id เต็มยังอยู่ในสตรีม JSON (ต้องใช้ lookup รูปจาก External API
+                    # ผ่าน /person/{per_id}) — แต่ UI display + ชื่อไฟล์จะ mask ทั้งหมด
+                    "per_id":        p.per_id or "",
+                    "per_id_masked": mask_pid(p.per_id),
                     "organize_th":  p.organize_th or "",
                     "posname_th":   p.posname_th or "",
                     "checked_in":   p.checked_in,

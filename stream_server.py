@@ -860,7 +860,6 @@ async def system_start():
         try:
             env = {**os.environ,
                    'FACE_HEADLESS':      '1',
-                   'FACE_ALWAYS_ACTIVE': '1',
                    'FACE_CAMERA_CHILD':  '1'}
             _procs['main'] = subprocess.Popen(
                 [sys.executable, str(_ROOT / 'main.py')],

@@ -9,6 +9,10 @@ export default defineConfig({
         target: 'http://localhost:8000',
         changeOrigin: true,
       },
+      '/person': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
       '/stream': {
         target: 'http://localhost:8001',
         changeOrigin: true,

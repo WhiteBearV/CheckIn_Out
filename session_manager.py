@@ -6,9 +6,10 @@ face_label = per_id (เลข 13 หลัก = ชื่อโฟลเดอ�
 """
 
 import os
+import time
 import cv2
 from datetime import datetime
-from api_client import fetch_person_by_pid, get_display_name, mark_attendance
+from api_client import fetch_person_by_pid, get_display_name, mark_attendance, mask_pid
 from liveness_engine import LivenessEngine, LivenessState
 import config as cfg
 
@@ -35,6 +36,10 @@ class PersonInfo:
         self.checked_in      = False
         self.checked_out     = False
         self.absence_reset   = False   # True เมื่อ absence reset → print log ครั้งเดียวตอน re-verify
+        self.is_out_cam      = False   # True เมื่อ DB ตอบว่า IN แล้ว (มาจากกล้องอื่น) → กล้องนี้คือฝั่ง OUT
+        # N-cam safe: save ไฟล์ตาม "ผลจริงที่ DB ยอมรับ" — กล้องที่ชนะ race เท่านั้นที่เซฟ
+        self.in_success      = False   # True เมื่อ try_checkin ที่กล้องนี้ mark IN สำเร็จใน DB
+        self.out_success     = False   # True เมื่อ do_checkout ที่กล้องนี้ mark OUT สำเร็จใน DB
 
     def update_last_detected(self, now_ts: float):
         """อัปเดตทุก detection — ใช้ตรวจ absence เท่านั้น"""
@@ -123,7 +128,7 @@ class SessionManager:
             return False
 
         try:
-            mark_attendance(
+            ok, reason = mark_attendance(
                 person.per_id, "IN", camera_name,
                 check_time=person.first_seen,
                 name=person.api_name,
@@ -135,8 +140,21 @@ class SessionManager:
                 organize_id=person.organize_id,
             )
             person.checked_in = True
-            print(f"[IN] {person.display_name} ({person.per_id})  "
-                  f"time={person.first_seen.strftime('%H:%M:%S')}")
+            if ok:
+                person.in_success = True   # ← กล้องนี้คือ "กล้อง IN จริง" (ชนะ race)
+                print(f"[IN] {person.display_name} ({person.per_id})  "
+                      f"time={person.first_seen.strftime('%H:%M:%S')}")
+            elif "IN แล้ว" in reason:
+                # DB ปฏิเสธเพราะ IN จากกล้องอื่นแล้ว → กล้องนี้เป็นฝั่ง OUT
+                # ย้าย snapshot → snapshot_out ให้ save_snapshots เซฟเป็น _OUT.jpg
+                person.is_out_cam   = True
+                person.snapshot_out = person.snapshot
+                person.snapshot     = None
+                print(f"[SEEN-AGAIN] {person.display_name} ที่ {camera_name} — "
+                      f"IN แล้วจากกล้องอื่น (กล้องนี้เป็นฝั่ง OUT)")
+            else:
+                # network/server error — เก็บเป็น IN ไว้ก่อน (เผื่อ retry ได้ในรอบหน้า)
+                print(f"[IN FAIL] {person.display_name} — {reason or 'unknown'}")
             return True
         except Exception as e:
             print(f"[IN ERROR] {name}: {e}")
@@ -155,14 +173,26 @@ class SessionManager:
 
     def do_checkout(self, camera_name: str, now: datetime) -> int:
         print(f"\n{'='*50}")
-        print(f"[CHECKOUT] เวลา {now.strftime('%H:%M:%S')}")
+        print(f"[CHECKOUT] เวลา {now.strftime('%H:%M:%S')} @ {camera_name}")
         count = 0
+        now_ts = now.timestamp()
         for name, person in self.persons.items():
             last = person.last_seen or now
             if not person.checked_in or person.checked_out:
                 continue
+
+            # N-cam race-resolver: หน่วงตามเวลาที่กล้องนี้ "ไม่ได้เจอ" คนนี้
+            #   กล้องที่เจอล่าสุด (stale 0) → sleep 0  → ชนะ race DB
+            #   กล้องที่ไม่เจอมานาน     → sleep สูง → แพ้ race → DB ปฏิเสธ
+            # ผลคือ DB ได้เวลา OUT จากกล้องที่เจอคนนี้ล่าสุดจริง ๆ
+            # ตัวหาร 1800 (ครึ่ง ชม.): 1h→2s, 5h→10s, 10h→20s, 17h (กะเต็ม)→34s
+            # cap 60s เพียงพอแยก race ในกรณี IN เช้า-OUT เย็น (9 ชม.ห่าง = 18s diff)
+            stale_sec = max(0.0, now_ts - person.last_detected_ts)
+            delay     = min(stale_sec / 1800.0, 60.0)
+            if delay > 0.05:
+                time.sleep(delay)
             try:
-                mark_attendance(
+                ok, reason = mark_attendance(
                     person.per_id, "OUT", camera_name,
                     check_time=last,
                     name=person.api_name,
@@ -174,8 +204,13 @@ class SessionManager:
                     organize_id=person.organize_id,
                 )
                 person.checked_out = True
-                count += 1
-                print(f"  [{person.display_name}] OUT ({last.strftime('%H:%M:%S')})")
+                if ok:
+                    person.out_success = True  # ← กล้องนี้ชนะ race → เป็น "กล้อง OUT จริง"
+                    count += 1
+                    print(f"  [{person.display_name}] OUT ({last.strftime('%H:%M:%S')})")
+                else:
+                    # DB ปฏิเสธ (กล้องอื่น OUT ไปแล้ว หรือ error) → ไม่ save _OUT.jpg จากกล้องนี้
+                    print(f"  [{person.display_name}] OUT skipped: {reason or 'already OUT elsewhere'}")
             except Exception as e:
                 print(f"  [{name}] ERROR: {e}")
         print(f"[CHECKOUT] สำเร็จ {count} คน\n{'='*50}\n")
@@ -184,8 +219,9 @@ class SessionManager:
     def save_snapshots(self, save_root: str = None) -> int:
         """
         บันทึก snapshot ของทุกคนลง PicSAVE/YYYY/MM/DD/
-          - HH-MM-SS_{per_id}_IN.jpg   รูปตอน check-in
-          - HH-MM-SS_{per_id}_OUT.jpg  รูปล่าสุดที่เจอ (มีเฉพาะถ้าเจอหลัง check-in)
+          - HH-MM-SS_{masked_pid}_IN.jpg   รูปตอน check-in
+          - HH-MM-SS_{masked_pid}_OUT.jpg  รูปล่าสุดที่เจอ (มีเฉพาะถ้าเจอหลัง check-in)
+        ชื่อไฟล์ใช้ mask_pid (4 ตัวท้าย) เพื่อไม่รั่วเลข 13 หลักทางชื่อไฟล์
         ใช้วันที่ check-in (first_seen) เป็นชื่อโฟลเดอร์เสมอ
         """
         if save_root is None:
@@ -205,16 +241,25 @@ class SessionManager:
             )
             os.makedirs(folder, exist_ok=True)
 
+            mpid = mask_pid(person.per_id)
+
+            # N-cam safe: save เฉพาะกล้องที่ชนะ race DB เท่านั้น
+            #   _IN.jpg  → เฉพาะกล้องที่ in_success (try_checkin สำเร็จ)
+            #   _OUT.jpg → เฉพาะกล้องที่ out_success (do_checkout สำเร็จ)
+            # กล้องกลาง (ไม่ได้ทั้ง IN ทั้ง OUT) ไม่เซฟอะไรเลย
+
             # รูป IN
-            if person.snapshot is not None and person.snapshot.size > 0:
-                path = os.path.join(folder, f"{in_dt.strftime('%H-%M-%S')}_{person.per_id}_IN.jpg")
+            if (person.in_success
+                    and person.snapshot is not None and person.snapshot.size > 0):
+                path = os.path.join(folder, f"{in_dt.strftime('%H-%M-%S')}_{mpid}_IN.jpg")
                 cv2.imwrite(path, person.snapshot)
                 print(f"[SAVE] {path}")
                 saved += 1
 
-            # รูป OUT (มีเฉพาะถ้าเจอใบหน้าหลัง check-in อย่างน้อยครั้งหนึ่ง)
-            if person.snapshot_out is not None and person.snapshot_out.size > 0:
-                path = os.path.join(folder, f"{out_dt.strftime('%H-%M-%S')}_{person.per_id}_OUT.jpg")
+            # รูป OUT
+            if (person.out_success
+                    and person.snapshot_out is not None and person.snapshot_out.size > 0):
+                path = os.path.join(folder, f"{out_dt.strftime('%H-%M-%S')}_{mpid}_OUT.jpg")
                 cv2.imwrite(path, person.snapshot_out)
                 print(f"[SAVE] {path}")
                 saved += 1

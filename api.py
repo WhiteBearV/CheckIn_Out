@@ -123,6 +123,25 @@ def mark_attendance(req: AttendanceRequest):
     return {"success": True, "per_id": req.per_id, "status": req.status}
 
 
+@app.get("/person/{per_id}")
+def get_person(per_id: str):
+    """ดึงข้อมูลพนักงาน (รวม per_picpath) จาก external API ผ่าน api_client"""
+    from api_client import fetch_person_by_pid
+    data = fetch_person_by_pid(per_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="Person not found")
+    return {
+        "per_id":      data.get("per_id", per_id),
+        "name":        data.get("name", ""),
+        "prename_th":  data.get("prename_th", ""),
+        "per_name":    data.get("per_name", ""),
+        "per_surname": data.get("per_surname", ""),
+        "posname_th":  data.get("posname_th", ""),
+        "organize_th": data.get("organize_th", ""),
+        "per_picpath": data.get("per_picpath", ""),
+    }
+
+
 @app.get("/attendance/today/check")
 def check_attendance_today(
     per_id: str = Query(...),

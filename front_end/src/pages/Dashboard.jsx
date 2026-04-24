@@ -2,49 +2,44 @@ import { useQuery } from '@tanstack/react-query'
 import { useMemo, useState, useEffect, useCallback, useRef } from 'react'
 import StatCard from '../components/StatCard'
 import AttendanceTable from '../components/AttendanceTable'
-import { fetchAttendanceToday } from '../api/attendance'
+import { fetchAttendanceToday, fetchPerson } from '../api/attendance'
+import { maskPid } from '../utils/pid'
 
 const REFRESH_INTERVAL  = 30_000
 const SCAN_TIMEOUT_SEC  = 10
 const STREAM_BASE = import.meta.env.DEV ? 'http://localhost:8001' : ''
 
-// ─── Mock data (เปิด/ปิดด้วย USE_MOCK) ────────────────────────────────────────
-const USE_MOCK = true   // TODO: ลบ mock ออกก่อน deploy — เปลี่ยนเป็น false เพื่อใช้ API จริง
+// ─── localStorage persistence สำหรับ "บุคคลที่พบวันนี้" ────────────────────
+// เก็บรายชื่อที่เจอวันนี้ไว้ แม้กด Stop ก็ยังแสดงต่อ — จะล้างเมื่อเปลี่ยนวันเท่านั้น
+const PERSONS_STORAGE_KEY = 'dashboard-persons-today'
 
-const MOCK_RECORDS = [
-  { id:1,  per_id:'EMP001', per_name:'สุชาติ',    per_surname:'อินทรประสิทธิ์', organize_th:'สำนักวิจัย',          status:'IN',  check_time:'2026-04-20T08:12:40', cam_id:'cam_main' },
-  { id:2,  per_id:'EMP002', per_name:'ปรียา',      per_surname:'วัฒนกุล',        organize_th:'คณะครุศาสตร์',        status:'IN',  check_time:'2026-04-20T08:14:22', cam_id:'cam_main' },
-  { id:3,  per_id:'EMP003', per_name:'วราวุธ',     per_surname:'โสภิต',           organize_th:'กองกลาง',             status:'IN',  check_time:'2026-04-20T08:55:08', cam_id:'cam_web'  },
-  { id:4,  per_id:'EMP004', per_name:'นันทวัน',    per_surname:'ศรีรัตน์',        organize_th:'สำนักวิจัย',          status:'IN',  check_time:'2026-04-20T09:02:13', cam_id:'cam_main' },
-  { id:5,  per_id:'EMP005', per_name:'ปิยะดา',     per_surname:'เจริญสุข',        organize_th:'กองการเงิน',          status:'OUT', check_time:'2026-04-20T12:15:49', cam_id:'cam_web'  },
-  { id:6,  per_id:'EMP006', per_name:'ธนกร',       per_surname:'เกียรติศักดิ์',   organize_th:'กองสื่อสารองค์กร',   status:'OUT', check_time:'2026-04-20T12:20:06', cam_id:'cam_main' },
-  { id:7,  per_id:'EMP007', per_name:'วิภาวี',     per_surname:'ชินวัตร',         organize_th:'คณะวิศวกรรมศาสตร์',  status:'IN',  check_time:'2026-04-20T13:02:18', cam_id:'cam_web'  },
-  { id:8,  per_id:'EMP008', per_name:'ธีรพล',      per_surname:'มงคลสวัสดิ์',    organize_th:'คณะวิศวกรรมศาสตร์',  status:'IN',  check_time:'2026-04-20T07:58:01', cam_id:'cam_main' },
-  { id:9,  per_id:'EMP009', per_name:'สมหญิง',     per_surname:'รักษาวงศ์',       organize_th:'คณะครุศาสตร์',        status:'IN',  check_time:'2026-04-20T08:30:55', cam_id:'cam_web'  },
-  { id:10, per_id:'EMP010', per_name:'ประเสริฐ',   per_surname:'ทองดี',           organize_th:'กองกลาง',             status:'IN',  check_time:'2026-04-20T08:45:12', cam_id:'cam_main' },
-  { id:11, per_id:'EMP011', per_name:'มาลี',       per_surname:'สุขใจ',           organize_th:'กองการเงิน',          status:'IN',  check_time:'2026-04-20T09:10:44', cam_id:'cam_web'  },
-  { id:12, per_id:'EMP012', per_name:'อนุชา',      per_surname:'พรหมมา',          organize_th:'สำนักวิจัย',          status:'OUT', check_time:'2026-04-20T11:50:33', cam_id:'cam_main' },
-  { id:13, per_id:'EMP013', per_name:'กนกวรรณ',    per_surname:'เพ็ญศรี',         organize_th:'คณะวิศวกรรมศาสตร์',  status:'IN',  check_time:'2026-04-20T08:05:27', cam_id:'cam_web'  },
-  { id:14, per_id:'EMP014', per_name:'จิรายุ',     per_surname:'แก้วมณี',         organize_th:'กองสื่อสารองค์กร',   status:'IN',  check_time:'2026-04-20T08:22:18', cam_id:'cam_main' },
-  { id:15, per_id:'EMP015', per_name:'รัตนา',      per_surname:'สมบูรณ์',         organize_th:'สำนักวิจัย',          status:'IN',  check_time:'2026-04-20T08:03:55', cam_id:'cam_main' },
-  { id:16, per_id:'EMP016', per_name:'พิชัย',      per_surname:'ลาภมาก',          organize_th:'คณะครุศาสตร์',        status:'OUT', check_time:'2026-04-20T13:45:00', cam_id:'cam_web'  },
-  { id:17, per_id:'EMP017', per_name:'สายชล',      per_surname:'บุญเรือง',        organize_th:'กองกลาง',             status:'IN',  check_time:'2026-04-20T09:20:10', cam_id:'cam_main' },
-  { id:18, per_id:'EMP018', per_name:'ณัฐพล',      per_surname:'วงษ์สุวรรณ',     organize_th:'คณะวิศวกรรมศาสตร์',  status:'IN',  check_time:'2026-04-20T07:50:33', cam_id:'cam_web'  },
-  { id:19, per_id:'EMP019', per_name:'ชลธิชา',     per_surname:'จันทร์เพ็ญ',     organize_th:'กองการเงิน',          status:'IN',  check_time:'2026-04-20T08:38:47', cam_id:'cam_main' },
-  { id:20, per_id:'EMP020', per_name:'สมศักดิ์',   per_surname:'เดชขุน',          organize_th:'สำนักวิจัย',          status:'OUT', check_time:'2026-04-20T12:05:19', cam_id:'cam_web'  },
-  { id:21, per_id:'EMP021', per_name:'พรทิพย์',    per_surname:'นาคสุข',          organize_th:'คณะครุศาสตร์',        status:'IN',  check_time:'2026-04-20T08:48:26', cam_id:'cam_main' },
-  { id:22, per_id:'EMP022', per_name:'วิชาญ',      per_surname:'มีสุข',           organize_th:'กองสื่อสารองค์กร',   status:'IN',  check_time:'2026-04-20T09:05:52', cam_id:'cam_web'  },
-  { id:23, per_id:'EMP023', per_name:'อรอุมา',     per_surname:'ฤทธิ์ดี',         organize_th:'คณะวิศวกรรมศาสตร์',  status:'OUT', check_time:'2026-04-20T11:30:07', cam_id:'cam_main' },
-  { id:24, per_id:'EMP024', per_name:'ศุภชัย',     per_surname:'โกมลวิทย์',      organize_th:'สำนักวิจัย',          status:'IN',  check_time:'2026-04-20T08:17:39', cam_id:'cam_web'  },
-  { id:25, per_id:'EMP025', per_name:'กาญจนา',     per_surname:'ดีสม',            organize_th:'กองกลาง',             status:'IN',  check_time:'2026-04-20T08:59:11', cam_id:'cam_main' },
-  { id:26, per_id:'EMP026', per_name:'ทวีศักดิ์',  per_surname:'สุขสบาย',        organize_th:'คณะครุศาสตร์',        status:'IN',  check_time:'2026-04-20T07:45:03', cam_id:'cam_web'  },
-  { id:27, per_id:'EMP027', per_name:'นิภา',       per_surname:'แสงทอง',          organize_th:'กองการเงิน',          status:'OUT', check_time:'2026-04-20T13:10:28', cam_id:'cam_main' },
-  { id:28, per_id:'EMP028', per_name:'ภาณุวัฒน์',  per_surname:'ชูชีพ',           organize_th:'คณะวิศวกรรมศาสตร์',  status:'IN',  check_time:'2026-04-20T08:28:44', cam_id:'cam_web'  },
-  { id:29, per_id:'EMP029', per_name:'สุนีย์',     per_surname:'พูลสวัสดิ์',      organize_th:'กองสื่อสารองค์กร',   status:'IN',  check_time:'2026-04-20T09:33:16', cam_id:'cam_main' },
-  { id:30, per_id:'EMP030', per_name:'ไพโรจน์',    per_surname:'ศรีสวัสดิ์',      organize_th:'สำนักวิจัย',          status:'IN',  check_time:'2026-04-20T08:08:59', cam_id:'cam_web'  },
-]
+function getTodayKey() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+}
 
-const MOCK_HOURLY = [0,0,0,0,0,0,0,3,28,42,8,4,12,15,2,1,2,8,4,1,0,0,0,0]
+function loadPersistedPersons() {
+  try {
+    const raw = localStorage.getItem(PERSONS_STORAGE_KEY)
+    if (!raw) return {}
+    const { date, persons } = JSON.parse(raw)
+    if (date !== getTodayKey()) {
+      localStorage.removeItem(PERSONS_STORAGE_KEY)
+      return {}
+    }
+    return persons || {}
+  } catch {
+    return {}
+  }
+}
+
+function savePersistedPersons(persons) {
+  try {
+    localStorage.setItem(PERSONS_STORAGE_KEY, JSON.stringify({
+      date: getTodayKey(), persons,
+    }))
+  } catch {}
+}
 
 /** แปลง "HH:MM:SS" → วินาทีที่ผ่านไปจากตอนนี้ */
 function elapsedSec(timeStr) {
@@ -360,53 +355,102 @@ function PersonFoundCard({ person, perId, camId, camName, onFaceClick, cacheBust
   )
 }
 
-// ─── TodayCard ─────────────────────────────────────────────────────────────────
+// ─── TodayCard — รวม IN + OUT ของคนเดียวในการ์ดเดียว ───────────────────────
 
-function TodayCard({ record, activeCams, onFaceClick }) {
-  const isIn  = record.status === 'IN'
-  const color = isIn ? '#22c55e' : '#f97316'
-  const name  = record.name
-    || `${record.per_name || ''} ${record.per_surname || ''}`.trim()
-    || record.per_id
+function TodayCard({ entry, onFaceClick }) {
+  const { per_id, name, organize_th, in: inRec, out: outRec } = entry
+
+  // ดึงรูปจาก External API ผ่าน backend (/person/{per_id}) — ไม่พึ่งไฟล์ในเครื่อง
+  const { data: personInfo } = useQuery({
+    queryKey: ['person', per_id],
+    queryFn:  () => fetchPerson(per_id),
+    enabled:  !!per_id,
+    staleTime: 10 * 60 * 1000,
+  })
+  const photoUrl = personInfo?.per_picpath || ''
+  const [imgFailed, setImgFailed] = useState(false)
+  useEffect(() => { setImgFailed(false) }, [photoUrl])
+
+  const hasPhoto = photoUrl && !imgFailed
+  const initial  = (name?.[0] || '?').toUpperCase()
+
+  const fmt = iso => iso
+    ? new Date(iso).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })
+    : '—'
+
+  // ขอบบน: ถ้ามี OUT แล้ว = ส้ม, ถ้ามีแค่ IN = เขียว
+  const borderColor = outRec ? '#f97316' : '#22c55e'
 
   return (
     <div
-      className="flex-shrink-0 w-36 rounded p-3 flex flex-col gap-1.5"
+      className="flex-shrink-0 rounded flex flex-col gap-2"
       style={{
+        width: 200, padding: 10,
         background: 'var(--c-bg-card)',
         border:     '1px solid var(--c-border)',
-        borderTop:  `2px solid ${color}`,
+        borderTop:  `2px solid ${borderColor}`,
       }}
     >
-      {/* Face snapshot */}
-      <div className="mx-auto">
-        <FaceSnap
-          perId={record.per_id}
-          activeCams={activeCams}
-          size={44}
-          onClick={src => onFaceClick?.({ src, name })}
-        />
-      </div>
-      <div className="text-center">
-        <div className="font-mono text-[10px] truncate leading-tight"
-          style={{ color: 'var(--c-text-2)' }}>
-          {name}
+      <div className="flex gap-2 items-center" style={{ minWidth: 0 }}>
+        <div
+          onClick={hasPhoto ? () => onFaceClick?.({ src: photoUrl, name }) : undefined}
+          style={{
+            width: 44, height: 44, borderRadius: 6, overflow: 'hidden', flexShrink: 0,
+            background: 'var(--c-bg-deep)',
+            border: '1px solid var(--c-border-s)',
+            cursor: hasPhoto ? 'zoom-in' : 'default',
+          }}
+        >
+          {hasPhoto ? (
+            <img
+              src={photoUrl}
+              alt=""
+              style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+              onError={() => setImgFailed(true)}
+            />
+          ) : (
+            <div style={{
+              width: '100%', height: '100%', display: 'flex',
+              alignItems: 'center', justifyContent: 'center',
+              fontFamily: 'var(--font-mono)', fontSize: 18, fontWeight: 600,
+              color: 'var(--c-text-3)',
+            }}>{initial}</div>
+          )}
         </div>
-        <div className="font-mono text-[9px] mt-0.5 truncate"
-          style={{ color: 'var(--c-text-4)' }}>
-          {record.organize_th || '—'}
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div className="font-mono text-[11px] truncate leading-tight"
+            style={{ color: 'var(--c-text-2)' }}>
+            {name}
+          </div>
+          <div className="font-mono text-[9px] truncate mt-0.5"
+            style={{ color: 'var(--c-text-4)' }}>
+            {organize_th || '—'}
+          </div>
+          <div className="font-mono text-[9px] truncate"
+            style={{ color: 'var(--c-text-4)', opacity: 0.6 }}>
+            {maskPid(per_id)}
+          </div>
         </div>
       </div>
+
       <div
-        className="flex items-center justify-between mt-auto pt-1"
-        style={{ borderTop: '1px solid var(--c-border-s)' }}
+        className="flex flex-col gap-1 pt-1.5"
+        style={{ borderTop: '1px solid var(--c-border-s)', fontFamily: 'var(--font-mono)', fontSize: 10 }}
       >
-        <span className="font-mono text-[9px]" style={{ color }}>{isIn ? 'IN' : 'OUT'}</span>
-        <span className="font-mono text-[9px]" style={{ color: 'var(--c-text-4)' }}>
-          {record.check_time
-            ? new Date(record.check_time).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })
-            : '—'}
-        </span>
+        <div className="flex items-center gap-2">
+          <span style={{ color: inRec ? '#22c55e' : 'var(--c-text-4)', fontWeight: 600, width: 26 }}>IN</span>
+          <span style={{ color: 'var(--c-text-2)', minWidth: 34 }}>{fmt(inRec?.check_time)}</span>
+          <span className="truncate" style={{ color: 'var(--c-text-4)', flex: 1, textAlign: 'right' }}>
+            📷 {inRec?.camera_name || '—'}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span style={{ color: outRec ? '#f97316' : 'var(--c-text-4)', fontWeight: 600, width: 26 }}>OUT</span>
+          <span style={{ color: 'var(--c-text-2)', minWidth: 34 }}>{fmt(outRec?.check_time)}</span>
+          <span className="truncate" style={{ color: 'var(--c-text-4)', flex: 1, textAlign: 'right' }}>
+            📷 {outRec?.camera_name || '—'}
+          </span>
+        </div>
       </div>
     </div>
   )
@@ -418,14 +462,16 @@ export default function Dashboard() {
   const [faceModal,  setFaceModal]  = useState(null)
   const [allStates,  setAllStates]  = useState({})
   const [cacheBust,  setCacheBust]  = useState(0)    // เปลี่ยนทุก 3 วิ → force re-fetch รูป
+  // persist รายชื่อที่เจอวันนี้ (persistent ข้าม Stop/refresh, ล้างเมื่อเปลี่ยนวัน)
+  const [persistedPersons, setPersistedPersons] = useState(() => loadPersistedPersons())
   const openFace  = useCallback(info => setFaceModal(info), [])
   const closeFace = useCallback(() => setFaceModal(null), [])
   const pollRef   = useRef(null)
 
   const { data = [], isLoading, dataUpdatedAt } = useQuery({
     queryKey:        ['attendance-today'],
-    queryFn:         USE_MOCK ? () => MOCK_RECORDS : fetchAttendanceToday,
-    refetchInterval: USE_MOCK ? false : REFRESH_INTERVAL,
+    queryFn:         fetchAttendanceToday,
+    refetchInterval: REFRESH_INTERVAL,
   })
 
   // กล้องที่ active อยู่ (list of IDs)
@@ -474,22 +520,70 @@ export default function Dashboard() {
     return () => clearInterval(t)
   }, [])
 
-  // แสดง 1 การ์ด ต่อ 1 กล้อง — กล้องเดียวกันเจอคนเดียวกัน = 2 การ์ด
-  const livePersons = useMemo(() => {
-    const list = []
-    activeCams.forEach(camId => {
-      const persons = allStates[camId]?.persons
-      if (!persons) return
-      Object.entries(persons).forEach(([name, p]) => {
-        list.push({ camId, name, person: p })
+  // merge live state → persistedPersons (เก็บสะสมในวันนั้น)
+  useEffect(() => {
+    setPersistedPersons(prev => {
+      let changed = false
+      const next = { ...prev }
+      activeCams.forEach(camId => {
+        const persons = allStates[camId]?.persons
+        if (!persons) return
+        Object.entries(persons).forEach(([name, p]) => {
+          next[`${camId}|${name}`] = { camId, name, person: p }
+          changed = true
+        })
       })
+      if (!changed) return prev
+      savePersistedPersons(next)
+      return next
     })
-    return list
   }, [allStates, activeCams])
+
+  // เช็ค day rollover ทุกนาที → ล้างเมื่อข้ามวัน
+  useEffect(() => {
+    const check = () => {
+      try {
+        const raw = localStorage.getItem(PERSONS_STORAGE_KEY)
+        if (!raw) return
+        const { date } = JSON.parse(raw)
+        if (date !== getTodayKey()) {
+          localStorage.removeItem(PERSONS_STORAGE_KEY)
+          setPersistedPersons({})
+        }
+      } catch { /* ignore parse errors */ }
+    }
+    const t = setInterval(check, 60_000)
+    return () => clearInterval(t)
+  }, [])
+
+  // แสดง 1 การ์ด ต่อ (กล้อง × คน) — persist ข้าม Stop, ล้างเมื่อเปลี่ยนวัน
+  const livePersons = useMemo(() => Object.values(persistedPersons), [persistedPersons])
 
   const stats  = useMemo(() => computeStats(data),  [data])
   const hourly = useMemo(() => computeHourly(data), [data])
   const depts  = useMemo(() => computeDepts(data),  [data])
+
+  // รวม records ของคนเดียวกัน (IN + OUT) เป็น entry เดียว
+  const todayEntries = useMemo(() => {
+    const map = new Map()
+    data.forEach(r => {
+      const e = map.get(r.per_id) || { per_id: r.per_id }
+      if (r.status === 'IN')  e.in  = r
+      if (r.status === 'OUT') e.out = r
+      e.name = e.name
+        || r.name
+        || `${r.per_name || ''} ${r.per_surname || ''}`.trim()
+        || r.per_id
+      e.organize_th = e.organize_th || r.organize_th
+      map.set(r.per_id, e)
+    })
+    // เรียงตามเวลาล่าสุด (OUT ถ้ามี, ไม่งั้น IN) — คนที่เพิ่งทำล่าสุดอยู่หน้าสุด
+    return [...map.values()].sort((a, b) => {
+      const ta = new Date(a.out?.check_time || a.in?.check_time || 0).getTime()
+      const tb = new Date(b.out?.check_time || b.in?.check_time || 0).getTime()
+      return tb - ta
+    })
+  }, [data])
 
   const lastUpdated = dataUpdatedAt
     ? new Date(dataUpdatedAt).toLocaleTimeString('th-TH', {
@@ -503,18 +597,6 @@ export default function Dashboard() {
       <FaceModal src={faceModal.src} name={faceModal.name} onClose={closeFace} />
     )}
     <div className="page">
-
-      {/* ── Mock warning banner ─────────────────────────────────────────────── */}
-      {USE_MOCK && (
-        <div style={{
-          background: 'rgba(234,179,8,0.10)', border: '1px solid rgba(234,179,8,0.35)',
-          borderRadius: 'var(--radius-sm)', padding: '8px 14px',
-          fontFamily: 'var(--font-mono)', fontSize: 11, color: '#eab308',
-          display: 'flex', alignItems: 'center', gap: 8,
-        }}>
-          ⚠ MOCK MODE — ข้อมูลจำลอง ไม่ใช่ข้อมูลจริง · ลบออกก่อน deploy (Dashboard.jsx บรรทัด 12)
-        </div>
-      )}
 
       {/* ── Header ──────────────────────────────────────────────────────────── */}
       <div className="page-head">
@@ -677,8 +759,8 @@ export default function Dashboard() {
           </div>
         ) : (
           <div className="flex gap-2 overflow-x-auto pb-1">
-            {data.map(r => (
-              <TodayCard key={r.id} record={r} activeCams={activeCams} onFaceClick={openFace} />
+            {todayEntries.map(e => (
+              <TodayCard key={e.per_id} entry={e} onFaceClick={openFace} />
             ))}
           </div>
         )}
