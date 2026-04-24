@@ -1,5 +1,148 @@
 ════════════════════════════════════════════════════════════════════════
   รายงานการปฏิบัติงานฝึกประสบการณ์วิชาชีพ
+  วันที่  : ศุกร์ที่ 24 เมษายน 2569
+  สัปดาห์ : สัปดาห์ที่ 6
+════════════════════════════════════════════════════════════════════════
+
+■ งานที่ดำเนินการในวันนี้
+────────────────────────────────────────────────────────────────────────
+
+1. เพิ่มการแสดงรูปภาพจาก External API บน Web Dashboard
+   ─────────────────────────────────────────────────────────────────
+   เดิม Web Dashboard ไม่มีการแสดงรูปโปรไฟล์พนักงาน
+   เพิ่ม 2 endpoint ใหม่ใน api.py เพื่อแยกแหล่งรูปให้ชัดเจน:
+
+   - เพิ่ม GET /person-profile/{per_id} — รูปโปรไฟล์จาก External API
+       • ดึง per_picpath จาก External API ผ่าน fetch_person_by_pid()
+       • Proxy รูปภาพกลับมาโดยตรง ไม่ redirect
+       • Cache 1 ชั่วโมง (max-age=3600)
+       • ถ้าไม่มีรูป → 404 (ไม่มี fallback)
+
+   - แก้ไข GET /person-photo/{per_id}?status=IN|OUT — รูปจาก PicSAVE
+       • ค้นหาไฟล์ *_{per_id}_IN.jpg / *_{per_id}_OUT.jpg ใน PicSAVE
+       • ถ้าไม่มีไฟล์ → 404 (ไม่ fallback ไป External API)
+       • ใช้สำหรับรูป verify ที่ถ่ายจากกล้องตอนเช็คชื่อเข้า/ออก
+
+2. แก้ปัญหารูปไม่แสดงใน Production (VITE_API_BASE_URL prefix bug)
+   ─────────────────────────────────────────────────────────────────
+   พบว่า AttendanceFeed.vue และ LiveDetection.vue ใช้ URL hardcode
+   เป็น /api/person-photo/ แต่ FastAPI ไม่มี route ที่ขึ้นต้นด้วย /api/
+   (Vite dev proxy ตัด /api prefix ออกก่อนส่งต่อ แต่ production ไม่มี proxy)
+
+   แก้ไข: เพิ่ม const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '/api'
+   ในทุก component ที่เรียก API แล้วใช้ ${API_BASE}/person-photo/ แทน
+
+3. เพิ่มการแสดงรูปโปรไฟล์ใน LiveDetection ("ตรวจพบในกล้อง")
+   ─────────────────────────────────────────────────────────────────
+   เดิม LiveDetection.vue ใช้ /api/person-face/{per_id} ซึ่งไม่มี endpoint
+   เปลี่ยนให้ใช้ /person-profile/{per_id} (External API เท่านั้น)
+   ถ้าไม่มีรูปใน API → แสดงตัวอักษรย่อชื่อ (initial letter) แทน
+   ถ้ามีรูปใน API → แสดงในวงกลมขนาด 36px พร้อม border
+
+   - นำ faceTick ref และ setInterval timer ออก (ไม่จำเป็นแล้ว)
+   - เพิ่ม faceErrors = reactive({}) สำหรับ track รูปที่โหลดไม่สำเร็จ
+
+4. เพิ่มการแสดงรูปภาพใน AttendanceFeed ("รายชื่อเช็คชื่อเข้าออก")
+   ─────────────────────────────────────────────────────────────────
+   เดิม AttendanceFeed.vue ไม่มีรูปภาพเลย
+   เพิ่ม avatar วงกลมขนาด 28px แสดงรูป verify จาก PicSAVE
+   (/person-photo/{per_id}?status=IN หรือ OUT ตาม record นั้น)
+   คลิกรูปเปิด lightbox แสดงรูปเต็มพร้อมชื่อ สถานะ และเวลา
+   ถ้าโหลดรูปไม่ได้ → แสดงตัวอักษรย่อชื่อสีตาม status (เขียว IN / เหลือง OUT)
+
+   - เปลี่ยน error tracking key จาก per_id เป็น log_id
+     เพื่อให้ IN และ OUT ของคนเดียวกันมี error state แยกจากกัน
+   - เพิ่ม lightboxRow ref + Teleport lightbox modal
+
+5. เพิ่ม lightbox (click-to-fullscreen) บน PersonCard
+   ─────────────────────────────────────────────────────────────────
+   เดิม PersonCard.vue แสดงรูปแต่คลิกไม่ได้
+   เพิ่ม lightboxOpen ref และ Teleport modal เพื่อแสดงรูปเต็มจอ
+   ปิดได้ด้วยการกด Esc หรือคลิกนอกรูป
+
+6. แยกแหล่งรูปของ PersonCard ด้วย prop photoMode
+   ─────────────────────────────────────────────────────────────────
+   เพิ่ม prop photoMode: 'profile' | 'verify' ใน PersonCard.vue
+   - 'profile' (default): ดึงรูปจาก /person-profile/{per_id} (External API)
+     ใช้ใน DashboardView "รายชื่อที่พบวันนี้"
+   - 'verify': ดึงรูปจาก /person-photo/{per_id}?status=IN|OUT (PicSAVE)
+     ใช้ใน CameraView "รายชื่อเช็คชื่อเข้าออก"
+
+   CameraView.vue: เพิ่ม photo-mode="verify" บน PersonCard
+   ใน loop checkedPersons เพื่อแสดงรูปที่ถ่ายตอนเช็คชื่อจริง
+
+7. แก้การเรียงลำดับ "รายชื่อที่พบวันนี้" ให้เป็น FIFO
+   ─────────────────────────────────────────────────────────────────
+   เดิม DashboardView.vue จัดกลุ่ม IN ก่อน OUT แล้วเรียงภายในกลุ่ม
+   เปลี่ยนให้เรียงตาม in_time จากน้อยไปมาก (คนที่มาก่อนแสดงก่อน)
+   คนที่ยังไม่มี in_time (PENDING) แสดงท้ายสุด (ใช้ Infinity แทน)
+
+■ สรุปไฟล์ที่สร้าง / แก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  [แก้ไข] api.py
+    → เพิ่ม GET /person-profile/{per_id} — proxy รูปโปรไฟล์จาก External API
+    → แก้ GET /person-photo/{per_id}?status= — PicSAVE เท่านั้น ไม่ fallback
+
+  [แก้ไข] dashboard/src/components/LiveDetection.vue
+    → เปลี่ยน URL รูปจาก /api/person-face/ → ${API_BASE}/person-profile/
+    → เพิ่ม API_BASE จาก VITE_API_BASE_URL
+    → นำ faceTick และ setInterval ออก
+    → เพิ่ม faceErrors reactive สำหรับ track โหลดรูปไม่สำเร็จ
+
+  [แก้ไข] dashboard/src/components/AttendanceFeed.vue
+    → เพิ่ม API_BASE จาก VITE_API_BASE_URL
+    → เพิ่ม avatar รูปจาก ${API_BASE}/person-photo/{per_id}?status=
+    → เพิ่ม photoErrors reactive (key = log_id)
+    → เพิ่ม lightboxRow ref + Teleport lightbox modal
+    → เพิ่ม <style scoped> fade transition สำหรับ lightbox
+
+  [แก้ไข] dashboard/src/components/PersonCard.vue
+    → เพิ่ม prop photoMode ('profile' | 'verify')
+    → photoUrl computed แยก URL ตาม photoMode
+    → เพิ่ม lightboxOpen ref + Teleport lightbox modal
+    → ถ้าไม่มีรูป: แสดงพื้นที่ว่างสีเข้ม (ไม่แสดง initials)
+    → ลบ watch ที่ไม่จำเป็นออก
+
+  [แก้ไข] dashboard/src/views/DashboardView.vue
+    → แก้ mergedPersons sort ให้เรียงตาม in_time ascending (FIFO)
+      คนที่ไม่มี in_time (PENDING) แสดงท้ายสุด
+
+  [แก้ไข] dashboard/src/views/CameraView.vue
+    → เพิ่ม photo-mode="verify" บน PersonCard ใน checkedPersons loop
+
+■ เทคโนโลยีที่ใช้
+────────────────────────────────────────────────────────────────────────
+
+  - Python / FastAPI        — Proxy endpoint, FileResponse, HTTPException
+  - Vue 3 / Composition API — ref, reactive, computed, Teleport, Transition
+  - CSS                     — aspect-video, object-cover object-top
+  - Vite                    — VITE_API_BASE_URL env var, proxy configuration
+
+■ ปัญหาที่พบและแนวทางแก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  ปัญหา : รูปไม่แสดงใน production แต่ขึ้นในระหว่าง dev
+  วิเคราะห์: Dev mode มี Vite proxy ตัด /api prefix ก่อนส่งต่อ FastAPI
+             Production ไม่มี proxy → URL /api/person-photo/ ไม่มี route
+             VITE_API_BASE_URL='' (empty string) ทำให้ควรใช้ /person-photo/
+             แต่ component hardcode /api/ ไว้จึงเรียกผิด endpoint
+  แก้ไข : เพิ่ม const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '/api'
+           ทุก component ที่เรียก API แล้วใช้ template literal แทน hardcode
+
+  ปัญหา : AttendanceFeed รูป IN/OUT ของคนเดียวกันใช้ error state เดียวกัน
+  วิเคราะห์: error tracking key ใช้ per_id ทำให้ error ของ IN record
+             ทับ error ของ OUT record ของคนเดียวกัน
+             ถ้า IN load ไม่ได้ OUT จะถูก fallback เป็น initial ด้วย
+  แก้ไข : เปลี่ยน key เป็น log_id (unique ต่อ record ไม่ใช่ต่อคน)
+
+  ปัญหา : รูปใน PersonCard ตัดเฉพาะส่วนลำตัว ไม่เห็นใบหน้า
+  วิเคราะห์: CSS object-center ทำให้ center crop ตามค่า default
+             รูปโปรไฟล์ส่วนใหญ่ใบหน้าอยู่ส่วนบนของภาพ
+  แก้ไข : เปลี่ยนเป็น object-cover object-top ให้ crop จากด้านบน
+
+════════════════════════════════════════════════════════════════════════
+  รายงานการปฏิบัติงานฝึกประสบการณ์วิชาชีพ
   วันที่  : พฤหัสบดีที่ 23 เมษายน 2569
   สัปดาห์ : สัปดาห์ที่ 6
 ════════════════════════════════════════════════════════════════════════
@@ -443,164 +586,4 @@
   แก้ไข : ใช้ username ที่ถูกต้อง: photcharap
 
 ════════════════════════════════════════════════════════════════════════
-  รายงานการปฏิบัติงานฝึกประสบการณ์วิชาชีพ
-  วันที่  : อาทิตย์ที่ 20 เมษายน 2568
-  สัปดาห์ : สัปดาห์ที่ 6
-════════════════════════════════════════════════════════════════════════
-
-■ งานที่ดำเนินการในวันนี้
-────────────────────────────────────────────────────────────────────────
-
-1. วิเคราะห์สาเหตุที่ Web Dashboard ไม่สามารถสั่งรัน main.py บน Docker ได้
-   ─────────────────────────────────────────────────────────────────
-   ทำการวิเคราะห์ระบบ Docker ที่มีอยู่ (Dockerfile, docker-compose.yml,
-   requirements.api.txt) เพื่อหาสาเหตุที่ปุ่ม Start Face Recognition
-   บน Dashboard ไม่สามารถเริ่ม main.py ได้ พบสาเหตุทั้งหมด 4 ประการ:
-
-   สาเหตุที่ 1 — ขาด ML Dependencies
-     Dockerfile ติดตั้งเฉพาะ requirements.api.txt ซึ่งมีแค่
-     FastAPI, uvicorn, opencv-headless เท่านั้น ไม่มี insightface,
-     onnxruntime-gpu, mediapipe, deepface ที่ main.py ต้องการ
-     → main.py crash ทันทีตอน import
-
-   สาเหตุที่ 2 — ไม่มี GPU access ใน Docker
-     docker-compose.yml ไม่ได้กำหนด NVIDIA runtime หรือ deploy
-     resources สำหรับ GPU ทำให้ onnxruntime-gpu ไม่พบ GPU
-
-   สาเหตุที่ 3 — กล้อง USB ไม่ได้ mount เข้า Container
-     ไม่มีการ map /dev/video0 หรือ device กล้องใดๆ เข้า container
-     ทำให้ main.py เปิดกล้อง USB ไม่ได้
-
-   สาเหตุที่ 4 — ไม่มีไฟล์ Model
-     ไม่ได้ mount โฟลเดอร์ InsightFace models (~/.insightface/)
-     และ DeepFace models (~/.deepface/) เข้า container
-
-2. แก้ไข Docker Configuration ให้รัน main.py ได้
-   ─────────────────────────────────────────────────────────────────
-   แก้ไขไฟล์ Docker ทั้งหมดให้รองรับการรัน main.py ภายใน container
-
-   - สร้าง docker/requirements.main.txt
-       • insightface, onnxruntime-gpu — Face recognition
-       • mediapipe — Hand/liveness detection
-       • deepface, tensorflow-cpu — MiniFASNet anti-spoofing
-       • albumentations — Image augmentation สำหรับ deepface
-
-   - แก้ไข docker/requirements.api.txt
-       • เปลี่ยนจาก opencv-python-headless
-         เป็น opencv-contrib-python-headless (superset รองรับ
-         algorithm เพิ่มเติมที่ liveness_engine ใช้)
-
-   - แก้ไข docker/Dockerfile
-       • เพิ่ม libgomp1 ใน system packages (ต้องการโดย onnxruntime)
-       • เพิ่มการติดตั้ง requirements.main.txt แยก layer
-
-   - แก้ไข docker/docker-compose.yml
-       • เพิ่ม deploy.resources.reservations.devices สำหรับ NVIDIA GPU
-       • เพิ่ม devices: /dev/video0 สำหรับกล้อง USB
-       • เพิ่ม volumes mount สำหรับ InsightFace models
-         (~/.insightface:/root/.insightface)
-       • เพิ่ม volumes mount สำหรับ DeepFace models
-         (~/.deepface:/root/.deepface)
-
-3. แก้ปัญหาระหว่าง Docker Build (หลายรอบ)
-   ─────────────────────────────────────────────────────────────────
-   รัน docker compose build และพบ error ต่อเนื่อง 4 รอบ:
-
-   รอบที่ 1 — tensorflow==2.16.2 ไม่มี wheel สำหรับ image นี้
-     แก้ไข: เปลี่ยนเป็น tensorflow-cpu (ไม่มี version pin)
-     เหตุผล: liveness_engine.py บังคับ tensorflow รันบน CPU อยู่แล้ว
-              จึงใช้ tensorflow-cpu แทนได้โดยไม่กระทบการทำงาน
-
-   รอบที่ 2 — apt-get connect ไม่ได้ (deb.debian.org timeout)
-     แก้ไข: เพิ่ม network: host ใน build section ของ docker-compose.yml
-     เหตุผล: Docker bridge network ไม่สามารถเชื่อมต่ออินเตอร์เน็ตได้
-              การใช้ host network ทำให้ apt-get และ pip ใช้ network
-              ของเครื่อง host ได้โดยตรง
-
-   รอบที่ 3 — ReadTimeoutError: nvidia_cudnn_cu12 (706 MB) โหลดไม่ทัน
-     แก้ไข: แยก torch+torchvision เป็น Docker layer ของตัวเอง
-              พร้อมเพิ่ม --timeout 600 (10 นาที)
-     เหตุผล: cudnn wheel ขนาดใหญ่มาก connection หลุดกลางทาง
-              การแยก layer ทำให้ Docker cache ช่วยได้เมื่อ retry
-
-   รอบที่ 4 — ReadTimeoutError เดิมอีกรอบ แม้เพิ่ม timeout แล้ว
-     แก้ไข: ลบ torch+torchvision ออกจาก requirements ทั้งหมด
-              (ไม่ติดตั้งใน Docker)
-     เหตุผล: torch ใน liveness_engine.py ถูก import ภายใต้ try/except
-              เพื่อ patch cuda.is_available เท่านั้น ถ้า import ไม่ได้
-              code ยังทำงานต่อได้ deepface จะใช้ tensorflow-cpu แทน
-              ประหยัด image size ได้ ~3 GB
-
-■ สรุปไฟล์ที่สร้าง / แก้ไข
-────────────────────────────────────────────────────────────────────────
-
-  [ใหม่]  docker/requirements.main.txt
-    → ML dependencies สำหรับ main.py
-      insightface, onnxruntime-gpu, mediapipe, deepface,
-      tensorflow-cpu, albumentations
-
-  [แก้ไข] docker/requirements.api.txt
-    → เปลี่ยน opencv-python-headless → opencv-contrib-python-headless
-
-  [แก้ไข] docker/Dockerfile
-    → เพิ่ม libgomp1 ใน apt-get install
-    → เพิ่ม RUN pip install requirements.main.txt พร้อม --timeout 300
-    → ลบการติดตั้ง torch/torchvision ออก
-
-  [แก้ไข] docker/docker-compose.yml
-    → เพิ่ม build.network: host (แก้ apt-get network ไม่ได้)
-    → เพิ่ม deploy.resources.reservations (NVIDIA GPU)
-    → เพิ่ม devices: /dev/video0 (USB camera)
-    → เพิ่ม volumes: ~/.insightface, ~/.deepface (model files)
-
-■ เทคโนโลยีที่ใช้
-────────────────────────────────────────────────────────────────────────
-
-  - Docker / Docker Compose  — Container build และ service config
-  - NVIDIA Container Toolkit — GPU passthrough ใน Docker
-  - Python / pip             — Package management ใน Docker build
-  - FastAPI (api.py)         — spawn main.py ผ่าน subprocess.Popen
-                               พร้อม env vars (FACE_HEADLESS, CAMERA_URL ฯลฯ)
-
-■ ปัญหาที่พบและแนวทางแก้ไข
-────────────────────────────────────────────────────────────────────────
-
-  ปัญหา : tensorflow==2.16.2 ไม่มี distribution สำหรับ python:3.12-slim
-  แก้ไข : เปลี่ยนเป็น tensorflow-cpu (ไม่ pin version)
-           เหมาะสมกว่าเพราะ liveness_engine.py บังคับ TF รัน CPU อยู่แล้ว
-           เพื่อป้องกัน CUDA conflict กับ onnxruntime-gpu
-
-  ปัญหา : apt-get เชื่อมต่อ deb.debian.org ไม่ได้ใน Docker build
-  แก้ไข : เพิ่ม network: host ใน build section ของ docker-compose.yml
-           ทำให้ container ระหว่าง build ใช้ network ของ host โดยตรง
-
-  ปัญหา : pip download nvidia_cudnn_cu12 (706 MB) timeout ซ้ำหลายรอบ
-           แม้จะเพิ่ม --timeout 600 และแยก layer แล้วก็ยังล้มเหลว
-  แก้ไข : ตัดสินใจไม่ติดตั้ง torch ใน Docker เลย เพราะ torch ถูกใช้
-           เฉพาะ patch CUDA ก่อน deepface load ซึ่งอยู่ใน try/except
-           ไม่จำเป็นต่อการทำงานจริง
-
-■ งานค้างที่จะดำเนินการต่อในวันพรุ่งนี้ [TODO]
-────────────────────────────────────────────────────────────────────────
-
-  ⚠ docker compose build ยังไม่เสร็จสมบูรณ์
-     รอดูผลการ build รอบล่าสุด (หลังลบ torch ออกแล้ว)
-
-  □ 1. ตรวจสอบผล build รอบล่าสุด
-         - ถ้าสำเร็จ → รัน docker compose up และทดสอบ
-           กด Start บน Dashboard ว่า main.py รันได้หรือไม่
-         - ถ้ายังมี error → วิเคราะห์ error ใหม่และแก้ไขต่อ
-
-  □ 2. ทดสอบ Functional ของ Docker
-         - ทดสอบ main.py รันใน container ได้จริง
-         - ทดสอบ GPU ถูกใช้งาน (onnxruntime-gpu)
-         - ทดสอบ face recognition ทำงานได้ปกติ
-         - ทดสอบ MJPEG stream แสดงบน Dashboard
-
-  □ 3. ถ้า build สำเร็จแต่ main.py ยังรันไม่ได้
-         อาจต้องตรวจสอบเพิ่มเติม:
-         - NVIDIA Container Toolkit ติดตั้งถูกต้องบน host
-         - model files มีอยู่ที่ ~/.insightface/ และ ~/.deepface/
-         - encodings.pkl มีอยู่และ format ถูกต้อง
-
-════════════════════════════════════════════════════════════════════════
+ 
