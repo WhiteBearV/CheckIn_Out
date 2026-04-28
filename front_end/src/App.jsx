@@ -5,6 +5,8 @@ import { ThemeProvider } from './context/ThemeContext'
 import Sidebar from './components/Sidebar'
 import LiveCam from './pages/LiveCam'
 import Dashboard from './pages/Dashboard'
+import History from './pages/History'
+import Report from './pages/Report'
 
 function Clock() {
   const [now, setNow] = useState(new Date())
@@ -87,8 +89,8 @@ function Layout() {
           <Route path="/"          element={<LiveCam />} />
           <Route path="/live"      element={<LiveCam />} />
           <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/history"   element={<PlaceholderPage title="ประวัติลงเวลา" />} />
-          <Route path="/reports"   element={<PlaceholderPage title="รายงาน" />} />
+          <Route path="/history"   element={<History />} />
+          <Route path="/reports"   element={<Report />} />
         </Routes>
       </main>
     </div>

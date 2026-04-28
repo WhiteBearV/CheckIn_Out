@@ -13,6 +13,12 @@ export default defineConfig({
         target: 'http://localhost:8000',
         changeOrigin: true,
       },
+      // ใช้ /api prefix แล้ว rewrite ตัดออกก่อน forward — กัน path ชนกับ React Router
+      '/api': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api/, ''),
+      },
       '/stream': {
         target: 'http://localhost:8001',
         changeOrigin: true,

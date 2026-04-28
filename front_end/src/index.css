@@ -130,6 +130,12 @@ body {
 ::-webkit-scrollbar-thumb { background: var(--c-scrollbar); border-radius: 2px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--c-scrollbar-hover); }
 
+/* dark mode: invert ปฏิทิน icon ของ <input type="date"> ให้สว่าง */
+html.dark input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(1) brightness(1.2);
+  cursor: pointer;
+}
+
 /* ─── Layout ───────────────────────────────────────────────────────────────── */
 .app { display: flex; min-height: 100vh; }
 .main { flex: 1; min-width: 0; overflow: auto; }
@@ -462,6 +468,7 @@ body {
 
 .btn-start   { --btn-face: #22c55e; --btn-face-hi: #3ee079; --btn-face-lo: #16a34a; --btn-side: #0b4a22; --btn-ink: #00140a; }
 .btn-stop    { --btn-face: #dc2626; --btn-face-hi: #f23939; --btn-face-lo: #b01e1e; --btn-side: #5a0e0e; --btn-ink: #fff5f5; }
+.btn-blue    { --btn-face: #2563eb; --btn-face-hi: #3b82f6; --btn-face-lo: #1d4ed8; --btn-side: #1e3a8a; --btn-ink: #f0f9ff; }
 .btn-primary { --btn-face: #00cfcf; --btn-face-hi: #1af0f0; --btn-face-lo: #00a3a3; --btn-side: #004747; --btn-ink: #001414; }
 .btn-ghost   { --btn-face: #2a2a2a; --btn-face-hi: #3a3a3a; --btn-face-lo: #1f1f1f; --btn-side: #0a0a0a; --btn-ink: var(--c-text); font-weight: 500; }
 html:not(.dark) .btn-ghost { --btn-face:#e2e2e2; --btn-face-hi:#efefef; --btn-face-lo: #d0d0d0; --btn-side:#a0a0a0; --btn-ink:#333333;}

@@ -65,7 +65,13 @@ async function postAddCamera(body) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
-  if (!r.ok) throw new Error(`HTTP ${r.status}`)
+  if (!r.ok) {
+    // 409 = ซ้ำ, 400 = invalid input — backend ส่ง error message ภาษาไทยเป็น text
+    const msg = await r.text().catch(() => '')
+    const err = new Error(msg || `HTTP ${r.status}`)
+    err.status = r.status
+    throw err
+  }
   return r.json()
 }
 
@@ -452,6 +458,7 @@ function CameraManager({ cameras, onReload }) {
   const [form, setForm]     = useState({ name: '', cam_type: 'usb', url: '', index: '0', flip: false })
 
   const showMsg = (text, ms = 3000) => { setMsg(text); setTimeout(() => setMsg(''), ms) }
+  const showErr = (text) => showMsg(`✗ ${text}`, 6000)   // error แสดงนานกว่า — ผู้ใช้ต้องอ่าน
 
   const reloadMut = useMutation({
     mutationFn: postCamerasReload,
@@ -477,7 +484,7 @@ function CameraManager({ cameras, onReload }) {
       setForm({ name: '', cam_type: 'usb', url: '', index: '0', flip: false })
       setOpen(false)
     },
-    onError: (e) => showMsg(`✗ ${e.message}`),
+    onError: (e) => showErr(e.message),
   })
 
   const delMut = useMutation({
@@ -486,7 +493,7 @@ function CameraManager({ cameras, onReload }) {
       showMsg(`✓ ลบ ${id} แล้ว — restart ระบบเพื่อให้มีผล`)
       qc.invalidateQueries({ queryKey: ['cameras-config'] })
     },
-    onError: (e) => showMsg(`✗ ${e.message}`),
+    onError: (e) => showErr(e.message),
   })
 
   const inp = { fontFamily: 'var(--font-sans)', fontSize: 13, padding: '6px 8px', borderRadius: 'var(--radius-sm)', background: 'var(--c-bg-input)', border: '1px solid var(--c-border)', color: 'var(--c-text)', width: '100%', outline: 'none' }

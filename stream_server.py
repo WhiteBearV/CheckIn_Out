@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Optional
 
 import cv2
-from fastapi import FastAPI, Body
+from fastapi import FastAPI, Body, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response
 from pydantic import BaseModel
@@ -105,6 +105,7 @@ class CameraConfigRequest(BaseModel):
 _lock        = threading.Lock()
 _cam_frames: dict[str, bytes | None]         = {}   # cam_id → latest JPEG
 _cam_counts: dict[str, int]                  = {}   # cam_id → frame counter
+_cam_frame_ts: dict[str, float]              = {}   # cam_id → last frame ts (epoch)
 _cam_states: dict[str, dict]                 = {}   # cam_id → latest state
 _cam_snaps:      dict[str, dict[str, bytes]] = {}   # cam_id → {name: face-crop jpeg}
 _cam_snaps_full: dict[str, dict[str, bytes]] = {}   # cam_id → {name: full-frame jpeg}
@@ -140,6 +141,7 @@ def push_frame(cam_id: str, frame, quality: int = 70):
     with _lock:
         _cam_frames[cam_id] = buf.tobytes()
         _cam_counts[cam_id] = _cam_counts.get(cam_id, 0) + 1
+        _cam_frame_ts[cam_id] = time.time()
 
 
 def push_state(cam_id: str, state: dict):
@@ -222,10 +224,9 @@ async def _mjpeg_gen(cam_id: str):
 
 @app.get('/cameras')
 async def cameras_list():
-    """List camera IDs (in-memory buffer หรือ live_frame files)"""
+    """List camera IDs (in-memory buffer)"""
     with _lock:
         ids = set(_cam_frames.keys())
-    ids.update(_file_active_cams())
     return {"cameras": sorted(ids), "active": _active_cam}
 
 
@@ -259,13 +260,50 @@ async def get_cameras_config():
     return {"cameras": result}
 
 
+def _norm_url(u: str) -> str:
+    """normalize URL สำหรับเทียบซ้ำ: lowercase + ตัด trailing slash + ตัด whitespace"""
+    return (u or "").strip().rstrip("/").lower()
+
+
+def _check_dup(configs: list, req: CameraConfigRequest, exclude_id: str = "") -> str:
+    """
+    ตรวจกล้องซ้ำ — return error message ภาษาไทย ("" = ไม่ซ้ำ)
+    USB: ห้าม name ซ้ำ, ห้าม index ซ้ำ (เทียบเฉพาะกล้อง USB ด้วยกัน)
+    IP : ห้าม name ซ้ำ, ห้าม url ซ้ำ (เทียบเฉพาะกล้อง IP ด้วยกัน)
+    name ตรวจ case-insensitive ข้ามประเภท (USB และ IP จะมี name เดียวกันก็ไม่ได้)
+    """
+    new_name = req.name.strip().lower()
+    is_ip    = (req.cam_type == "ip")
+
+    for c in configs:
+        if c.get("id") == exclude_id:
+            continue
+        # name ห้ามซ้ำ ข้ามประเภท
+        if (c.get("name", "").strip().lower() == new_name):
+            return f"ชื่อกล้อง '{req.name.strip()}' ถูกใช้แล้ว (กล้อง {c.get('id')})"
+        # index ซ้ำ — เฉพาะ USB-USB
+        if not is_ip and "index" in c and c.get("index") == (req.index or 0):
+            return f"USB index {req.index or 0} ถูกใช้โดยกล้อง {c.get('id')} แล้ว"
+        # url ซ้ำ — เฉพาะ IP-IP
+        if is_ip and "url" in c and _norm_url(c.get("url", "")) == _norm_url(req.url or ""):
+            if _norm_url(req.url or ""):   # ถ้า url ว่างเปล่าก็ไม่นับซ้ำ (ให้ name validation จับ)
+                return f"URL นี้ถูกใช้โดยกล้อง {c.get('id')} แล้ว"
+    return ""
+
+
 @app.post('/cameras/config')
 async def add_camera(req: CameraConfigRequest):
     """เพิ่มกล้องใหม่ — ID เรียงต่ออัตโนมัติ (cam1, cam2, ...)"""
     if not req.name.strip():
         return Response(status_code=400, content="ต้องระบุชื่อกล้อง")
+    if req.cam_type == "ip" and not (req.url or "").strip():
+        return Response(status_code=400, content="ต้องระบุ URL ของกล้อง IP")
 
     configs = _load_cam_configs()   # อาจ fallback จาก config.CAMERAS ถ้ายังไม่มี JSON
+
+    dup_err = _check_dup(configs, req)
+    if dup_err:
+        return Response(status_code=409, content=dup_err)
 
     cam_id  = _next_cam_id(configs)
     new_cam: dict = {"id": cam_id, "name": req.name.strip(), "flip": req.flip}
@@ -286,8 +324,15 @@ async def update_camera(cam_id: str, req: CameraConfigRequest):
     """แก้ไข config กล้อง — ต้อง restart ระบบเพื่อให้มีผล"""
     if not req.name.strip():
         return Response(status_code=400, content="ต้องระบุชื่อกล้อง")
+    if req.cam_type == "ip" and not (req.url or "").strip():
+        return Response(status_code=400, content="ต้องระบุ URL ของกล้อง IP")
 
     configs = _load_cam_configs()
+
+    dup_err = _check_dup(configs, req, exclude_id=cam_id)
+    if dup_err:
+        return Response(status_code=409, content=dup_err)
+
     for i, c in enumerate(configs):
         if c.get("id") == cam_id:
             updated: dict = {"id": cam_id, "name": req.name.strip(), "flip": req.flip}
@@ -643,7 +688,9 @@ function showToast(msg, type='ok') {
   t.textContent = msg
   t.className   = `toast ${type}`
   t.style.display = 'block'
-  setTimeout(() => t.style.display='none', 3000)
+  // error อ่านนานกว่า — duplicate message ภาษาไทยอาจยาว
+  const dur = type === 'err' ? 6000 : 3000
+  setTimeout(() => t.style.display='none', dur)
 }
 
 /* ─── Close modal on backdrop click ─── */
@@ -674,13 +721,6 @@ async def stream_cam(cam_id: str):
 
 @app.get('/snapshot/{cam_id}')
 async def snapshot_cam(cam_id: str):
-    # file-based (headless subprocess mode)
-    f = _frame_path(cam_id)
-    if f.exists():
-        try:
-            return Response(content=f.read_bytes(), media_type='image/jpeg')
-        except Exception:
-            pass
     with _lock:
         jpeg = _cam_frames.get(cam_id)
     if jpeg is None:
@@ -690,14 +730,6 @@ async def snapshot_cam(cam_id: str):
 
 @app.get('/state/{cam_id}')
 async def state_cam(cam_id: str):
-    # file-based (headless subprocess mode)
-    sf = _state_path(cam_id)
-    if sf.exists():
-        try:
-            import json as _j
-            return _j.loads(sf.read_text(encoding='utf-8'))
-        except Exception:
-            pass
     with _lock:
         s = dict(_cam_states.get(cam_id, {}))
     return s
@@ -705,10 +737,6 @@ async def state_cam(cam_id: str):
 
 @app.get('/snap/{cam_id}/{name}')
 async def snap_person_cam(cam_id: str, name: str):
-    f = _snap_path(cam_id, name)
-    if f.exists():
-        return Response(content=f.read_bytes(), media_type='image/jpeg',
-                        headers={'Cache-Control': 'no-store'})
     with _lock:
         jpeg = _cam_snaps.get(cam_id, {}).get(name)
     if jpeg is None:
@@ -719,10 +747,6 @@ async def snap_person_cam(cam_id: str, name: str):
 
 @app.get('/snapfull/{cam_id}/{name}')
 async def snapfull_person_cam(cam_id: str, name: str):
-    f = _snapfull_path(cam_id, name)
-    if f.exists():
-        return Response(content=f.read_bytes(), media_type='image/jpeg',
-                        headers={'Cache-Control': 'no-store'})
     with _lock:
         jpeg = _cam_snaps_full.get(cam_id, {}).get(name)
     if jpeg is None:
@@ -731,83 +755,97 @@ async def snapfull_person_cam(cam_id: str, name: str):
                     headers={'Cache-Control': 'no-store'})
 
 
+# ─── Push endpoints (headless main.py → stream_server in-memory cache) ────────
+# ใช้แทนการเขียนไฟล์ live_frame / live_state / live_snap / live_snapfull
+@app.post('/push/frame/{cam_id}')
+async def push_frame_endpoint(cam_id: str, request: Request):
+    body = await request.body()
+    if not body:
+        return Response(status_code=400)
+    with _lock:
+        _cam_frames[cam_id] = body
+        _cam_counts[cam_id] = _cam_counts.get(cam_id, 0) + 1
+        _cam_frame_ts[cam_id] = time.time()
+    return {'ok': True, 'bytes': len(body)}
+
+
+@app.post('/push/state/{cam_id}')
+async def push_state_endpoint(cam_id: str, request: Request):
+    import json as _j
+    try:
+        state = _j.loads((await request.body()).decode('utf-8') or '{}')
+    except Exception:
+        return Response(status_code=400)
+    with _lock:
+        _cam_states[cam_id] = state
+    return {'ok': True}
+
+
+@app.post('/push/snap/{cam_id}/{name}')
+async def push_snap_endpoint(cam_id: str, name: str, request: Request):
+    body = await request.body()
+    if not body:
+        return Response(status_code=400)
+    with _lock:
+        if cam_id not in _cam_snaps:
+            _cam_snaps[cam_id] = {}
+        _cam_snaps[cam_id][name] = body
+    return {'ok': True, 'bytes': len(body)}
+
+
+@app.post('/push/snapfull/{cam_id}/{name}')
+async def push_snapfull_endpoint(cam_id: str, name: str, request: Request):
+    body = await request.body()
+    if not body:
+        return Response(status_code=400)
+    with _lock:
+        if cam_id not in _cam_snaps_full:
+            _cam_snaps_full[cam_id] = {}
+        _cam_snaps_full[cam_id][name] = body
+    return {'ok': True, 'bytes': len(body)}
+
+
 # ─── Cache & System control ───────────────────────────────────────────────────
 
 @app.post('/cache/clear')
 async def cache_clear():
-    """ล้าง snapshot buffer + ไฟล์ snap ทั้งหมด (ไม่ล้าง cam_states เพื่อให้ frontend ยังรู้ว่ากล้อง online)"""
+    """ล้าง snapshot buffer ใน RAM (snap/snapfull เก็บ in-memory ทั้งหมดแล้ว)
+    เก็บกวาดไฟล์ live_snap_*.jpg ที่อาจตกค้างจาก version เก่าด้วย"""
     with _lock:
         _cam_snaps.clear()
         _cam_snaps_full.clear()
-    deleted = 0
+    legacy_deleted = 0
     for pattern in ('live_snap_*.jpg', 'live_snapfull_*.jpg'):
         for f in _ROOT.glob(pattern):
             try:
                 f.unlink()
-                deleted += 1
+                legacy_deleted += 1
             except OSError:
                 pass
-    return {'cleared': True, 'files_deleted': deleted}
+    return {'cleared': True, 'legacy_files_deleted': legacy_deleted}
 
 
 _ROOT      = Path(__file__).parent
 _procs: dict[str, subprocess.Popen] = {}   # 'main' | 'api' → Popen
+_user_intent_started = False  # True หลัง /system/start, False หลัง /system/stop
+                              # ใช้เพื่อให้ /system/status สะท้อน "ผู้ใช้กด Start หรือยัง"
+                              # ไม่ใช่แค่ port probe (เพราะ npm run dev ก็เปิด api ไว้ตลอด)
 
-# ─── File-based paths (headless subprocess mode, จาก deawVersion) ─────────────
-def _frame_path(cam_id: str) -> Path:
-    return _ROOT / f'live_frame_{cam_id}.jpg'
-
-def _state_path(cam_id: str) -> Path:
-    return _ROOT / f'live_state_{cam_id}.json'
-
-def _snap_path(cam_id: str, name: str) -> Path:
-    import re
-    safe = re.sub(r'[^\w\-.]', '_', name)
-    return _ROOT / f'live_snap_{cam_id}_{safe}.jpg'
-
-def _snapfull_path(cam_id: str, name: str) -> Path:
-    import re
-    safe = re.sub(r'[^\w\-.]', '_', name)
-    return _ROOT / f'live_snapfull_{cam_id}_{safe}.jpg'
-
-def _file_fresh(path: Path, max_age: float = 5.0) -> bool:
-    try:
-        return (time.time() - path.stat().st_mtime) < max_age
-    except Exception:
-        return False
-
-def _file_active_cams() -> list:
-    """กล้องที่มี live_frame file อายุ < 5 วิ (headless mode)"""
-    result = []
-    for f in _ROOT.glob('live_frame_*.jpg'):
-        if _file_fresh(f):
-            result.append(f.stem.replace('live_frame_', ''))
-    return result
+# ─── In-memory active-cam detection ──────────────────────────────────────────
+def _mem_active_cams(max_age: float = 5.0) -> list:
+    """กล้องที่ frame ล่าสุดมีอายุ < max_age วินาที"""
+    now = time.time()
+    with _lock:
+        return [cid for cid, ts in _cam_frame_ts.items() if (now - ts) < max_age]
 
 
 async def _hybrid_mjpeg_gen(cam_id: str):
-    """Hybrid MJPEG: file-based (headless) หรือ in-memory (direct mode)
-    ส่ง last frame ทันทีเมื่อ browser เปิด connection ใหม่ — ไม่ดำขณะรอ frame ถัดไป"""
-    frame_file = _frame_path(cam_id)
-    prev_mtime = -1.0
+    """MJPEG generator (in-memory only) — ส่ง last frame ทันทีเมื่อ browser
+    เปิด connection ใหม่ ไม่ดำขณะรอ frame ถัดไป"""
     prev_count = -1
-    first      = True   # ส่ง last frame ทันทีสำหรับ connection ใหม่
+    first      = True
 
     while True:
-        # ── file-based (headless subprocess) ─────────────────────────────────
-        try:
-            if frame_file.exists():
-                mtime = frame_file.stat().st_mtime
-                if first or mtime != prev_mtime:
-                    first      = False
-                    prev_mtime = mtime
-                    jpeg = frame_file.read_bytes()
-                    yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'
-                           + jpeg + b'\r\n')
-                    continue
-        except Exception:
-            pass
-        # ── in-memory buffer (python main.py direct mode) ─────────────────────
         with _lock:
             jpeg  = _cam_frames.get(cam_id)
             count = _cam_counts.get(cam_id, 0)
@@ -824,6 +862,17 @@ def _proc_alive(key: str) -> bool:
     p = _procs.get(key)
     return p is not None and p.poll() is None
 
+def _api_alive() -> bool:
+    """probe port 8000 — เช็คว่ามี API server ตอบสนองไหม
+    ครอบคลุมกรณีรัน uvicorn แยก (เช่น `npm run dev` เปิด api ไว้แล้ว)
+    เพื่อไม่ spawn ซ้ำซ้อน"""
+    import socket
+    try:
+        with socket.create_connection(('127.0.0.1', 8000), timeout=0.3):
+            return True
+    except OSError:
+        return False
+
 def _face_state_fresh() -> bool:
     now = time.time()
     with _lock:
@@ -831,17 +880,24 @@ def _face_state_fresh() -> bool:
 
 def _face_running() -> bool:
     return (_proc_alive('main') or _face_state_fresh()
-            or bool(_file_active_cams()))
+            or bool(_mem_active_cams()))
 
 
 @app.get('/system/status')
 async def system_status():
-    return {'face': _face_running(), 'api': _proc_alive('api')}
+    """badge สีเขียวเฉพาะตอนผู้ใช้สั่ง Start แล้วเท่านั้น
+    (ไม่ใช่แค่ port มี service ตอบ — เช่น npm run dev เปิด api ไว้แม้ไม่ได้กด Start)"""
+    if not _user_intent_started:
+        return {'face': False, 'api': False}
+    return {'face': _face_running(),
+            'api':  _proc_alive('api') or _api_alive()}
 
 
 @app.post('/system/start')
 async def system_start():
     """Start face recognition (subprocess FACE_HEADLESS) + api.py"""
+    global _user_intent_started
+    _user_intent_started = True
     result = {}
 
     # ── face recognition ──────────────────────────────────────────────────────
@@ -871,7 +927,10 @@ async def system_start():
             result['face'] = f'error: {e}'
 
     # ── api.py subprocess ─────────────────────────────────────────────────────
-    if not _proc_alive('api'):
+    if _proc_alive('api') or _api_alive():
+        # มี API ตอบที่ port 8000 อยู่แล้ว (อาจเป็น uvicorn จาก npm run dev) — ไม่ spawn ซ้ำ
+        result['api'] = 'already_running'
+    else:
         try:
             _procs['api'] = subprocess.Popen(
                 [sys.executable, '-m', 'uvicorn', 'api:app',
@@ -881,8 +940,6 @@ async def system_start():
             result['api'] = 'started'
         except Exception as e:
             result['api'] = f'error: {e}'
-    else:
-        result['api'] = 'already_running'
 
     return result
 
@@ -890,6 +947,8 @@ async def system_start():
 @app.post('/system/stop')
 async def system_stop():
     """Stop face recognition + api.py (graceful shutdown → save PicSAVE)"""
+    global _user_intent_started
+    _user_intent_started = False
     result = {}
 
     # หยุด face recognition
@@ -917,16 +976,23 @@ async def system_stop():
     else:
         result['api'] = 'not_running'
 
-    # ล้าง live_frame / live_state ไฟล์ที่ค้างอยู่
-    cleaned = 0
-    for pattern in ('live_frame_*.jpg', 'live_state_*.json'):
+    # ล้าง in-memory buffers ทั้งหมด
+    with _lock:
+        _cam_frames.clear()
+        _cam_counts.clear()
+        _cam_frame_ts.clear()
+        _cam_states.clear()
+    # เก็บกวาดไฟล์ legacy ที่อาจตกค้างจาก version เก่า (ครั้งเดียว)
+    legacy = 0
+    for pattern in ('live_frame_*.jpg', 'live_state_*.json',
+                    'live_snap_*.jpg', 'live_snapfull_*.jpg'):
         for f in _ROOT.glob(pattern):
             try:
                 f.unlink()
-                cleaned += 1
+                legacy += 1
             except OSError:
                 pass
-    result['cleaned_files'] = cleaned
+    result['legacy_files_deleted'] = legacy
 
     return result
 
@@ -1004,7 +1070,8 @@ async def window_toggle():
 # ─── Start (daemon thread) ────────────────────────────────────────────────────
 def start(port: int = 8001):
     def _run():
-        uvicorn.run(app, host='0.0.0.0', port=port, log_level='warning')
+        uvicorn.run(app, host='0.0.0.0', port=port,
+                    log_level='warning', access_log=False)
     t = threading.Thread(target=_run, daemon=True, name='stream-server')
     t.start()
     print(f'[STREAM] Per-cam stream  → http://localhost:{port}/stream/{{cam_id}}')
@@ -1022,4 +1089,5 @@ if __name__ == '__main__':
     print(f'[STREAM] Standalone mode  http://localhost:{port}')
     print(f'[STREAM] Admin page    →  http://localhost:{port}/admin')
     print('[STREAM] กดปุ่ม START ในหน้าเว็บเพื่อเปิดระบบ')
-    _uv.run(app, host='0.0.0.0', port=port, log_level='info')
+    _uv.run(app, host='0.0.0.0', port=port,
+            log_level='warning', access_log=False)

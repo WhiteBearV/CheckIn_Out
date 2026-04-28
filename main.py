@@ -56,58 +56,84 @@ import ui_renderer as ui
 import stream_server
 from pathlib import Path as _pl_mod
 
-# ─── Headless file-writing (deawVersion approach) ────────────────────────────
-# เมื่อ FACE_HEADLESS=1 (spawn จาก stream_server) จะเขียน frame/state ลง disk
-# แทนการ push ลง in-memory buffer ของ stream_server (ที่อยู่คนละ process)
-_ROOT_PATH = _pl_mod(__file__).parent
+# ─── Headless mode — POST ทุกอย่างเข้า stream_server in-memory cache ────────
+# เมื่อ FACE_HEADLESS=1 (spawn จาก stream_server) main.py กับ stream_server
+# คนละ process — สื่อสารผ่าน HTTP POST localhost (ไม่แตะ disk)
 
-def _write_live_frame(cam_id: str, frame_bgr):
-    """เขียน JPEG ลง live_frame_{cam_id}.jpg แบบ atomic"""
-    path = str(_ROOT_PATH / f'live_frame_{cam_id}.jpg')
-    tmp  = path + '.tmp'
+# HTTP client (singleton) — pool ใช้ซ้ำเพื่อลด latency
+_STREAM_BASE = f"http://127.0.0.1:{int(os.environ.get('STREAM_PORT', 8001))}"
+_http_session = None
+
+def _get_http_session():
+    global _http_session
+    if _http_session is None:
+        import requests
+        from requests.adapters import HTTPAdapter
+        _http_session = requests.Session()
+        _http_session.mount('http://', HTTPAdapter(pool_connections=4, pool_maxsize=8))
+    return _http_session
+
+def _post_live_frame(cam_id: str, frame_bgr):
+    """POST JPEG-encoded frame ไปเก็บใน stream_server._cam_frames (in-memory)"""
+    import cv2 as _cv2
     try:
-        import cv2 as _cv2
         ok, buf = _cv2.imencode('.jpg', frame_bgr, [_cv2.IMWRITE_JPEG_QUALITY, 70])
-        if ok:
-            with open(tmp, 'wb') as _fh:
-                _fh.write(buf.tobytes())
-            os.replace(tmp, path)
+        if not ok:
+            return
+        _get_http_session().post(
+            f"{_STREAM_BASE}/push/frame/{cam_id}",
+            data=buf.tobytes(),
+            headers={'Content-Type': 'image/jpeg'},
+            timeout=1.0,
+        )
     except Exception:
         pass
 
-def _write_live_state(cam_id: str, state: dict):
-    """เขียน JSON state ลง live_state_{cam_id}.json"""
+def _post_live_state(cam_id: str, state: dict):
+    """POST JSON state ไปเก็บใน stream_server._cam_states (in-memory)"""
     import json as _j
-    path = str(_ROOT_PATH / f'live_state_{cam_id}.json')
     try:
-        with open(path, 'w', encoding='utf-8') as _f:
-            _j.dump(state, _f, ensure_ascii=False)
+        _get_http_session().post(
+            f"{_STREAM_BASE}/push/state/{cam_id}",
+            data=_j.dumps(state, ensure_ascii=False).encode('utf-8'),
+            headers={'Content-Type': 'application/json'},
+            timeout=1.0,
+        )
     except Exception:
         pass
 
-def _write_live_snap(cam_id: str, name: str, crop):
-    """เขียน face crop thumbnail ลง live_snap_{cam_id}_{name}.jpg"""
-    import re, cv2 as _cv2
-    safe = re.sub(r'[^\w\-.]', '_', name)
-    path = str(_ROOT_PATH / f'live_snap_{cam_id}_{safe}.jpg')
+def _post_live_snap(cam_id: str, name: str, crop):
+    """POST face crop ไปเก็บใน stream_server._cam_snaps (in-memory)
+    ใช้ urllib quote เพื่อให้ name (อาจมี '*' จาก masked PID) เดินผ่าน HTTP path ได้"""
+    from urllib.parse import quote
+    import cv2 as _cv2
     try:
         ok, buf = _cv2.imencode('.jpg', crop, [_cv2.IMWRITE_JPEG_QUALITY, 80])
-        if ok:
-            with open(path, 'wb') as _f:
-                _f.write(buf.tobytes())
+        if not ok:
+            return
+        _get_http_session().post(
+            f"{_STREAM_BASE}/push/snap/{cam_id}/{quote(name, safe='')}",
+            data=buf.tobytes(),
+            headers={'Content-Type': 'image/jpeg'},
+            timeout=1.0,
+        )
     except Exception:
         pass
 
-def _write_live_snapfull(cam_id: str, name: str, frame):
-    """เขียน full frame ลง live_snapfull_{cam_id}_{name}.jpg"""
-    import re, cv2 as _cv2
-    safe = re.sub(r'[^\w\-.]', '_', name)
-    path = str(_ROOT_PATH / f'live_snapfull_{cam_id}_{safe}.jpg')
+def _post_live_snapfull(cam_id: str, name: str, frame):
+    """POST full frame ไปเก็บใน stream_server._cam_snaps_full (in-memory)"""
+    from urllib.parse import quote
+    import cv2 as _cv2
     try:
         ok, buf = _cv2.imencode('.jpg', frame, [_cv2.IMWRITE_JPEG_QUALITY, 75])
-        if ok:
-            with open(path, 'wb') as _f:
-                _f.write(buf.tobytes())
+        if not ok:
+            return
+        _get_http_session().post(
+            f"{_STREAM_BASE}/push/snapfull/{cam_id}/{quote(name, safe='')}",
+            data=buf.tobytes(),
+            headers={'Content-Type': 'image/jpeg'},
+            timeout=1.0,
+        )
     except Exception:
         pass
 
@@ -344,7 +370,7 @@ def run_camera(cam_cfg: dict):
     _HEADLESS      = os.environ.get('FACE_HEADLESS', '').lower() in ('1', 'true', 'yes')
     _ALWAYS_ACTIVE = os.environ.get('FACE_ALWAYS_ACTIVE', '').lower() in ('1', 'true', 'yes')
     if _HEADLESS:
-        print(f'[{cam_id}] Headless mode — writing to live_frame_{cam_id}.jpg', flush=True)
+        print(f'[{cam_id}] Headless mode — POST → {_STREAM_BASE}/push/* (in-memory)', flush=True)
 
     # ─── โหลด face encodings (ArcFace 512d) ───
     if not os.path.exists(cfg.ENCODINGS_FILE):
@@ -562,7 +588,7 @@ def run_camera(cam_cfg: dict):
                         "checkout_done": False, "remaining": 0},
             }
             if _HEADLESS:
-                _write_live_state(cam_id, _idle_state)
+                _post_live_state(cam_id, _idle_state)
             else:
                 stream_server.push_state(cam_id, _idle_state)
 
@@ -570,7 +596,7 @@ def run_camera(cam_cfg: dict):
             idle_panel = np.zeros((frame.shape[0], cfg.PANEL_WIDTH, 3), dtype=np.uint8)
             idle_display = np.hstack([frame, idle_panel])
             if _HEADLESS:
-                _write_live_frame(cam_id, idle_display)
+                _post_live_frame(cam_id, idle_display)
             else:
                 stream_server.push_frame(cam_id, idle_display)
             _imshow(idle_display)
@@ -672,8 +698,8 @@ def run_camera(cam_cfg: dict):
             mkey = mask_pid(name)
             if _HEADLESS:
                 if crop.size > 0:
-                    _write_live_snap(cam_id, mkey, crop)
-                _write_live_snapfull(cam_id, mkey, raw_frame)
+                    _post_live_snap(cam_id, mkey, crop)
+                _post_live_snapfull(cam_id, mkey, raw_frame)
             else:
                 if crop.size > 0:
                     stream_server.push_snapshot(cam_id, mkey, crop)
@@ -827,8 +853,8 @@ def run_camera(cam_cfg: dict):
                            session.liveness, session.persons, now_ts)
 
         if _HEADLESS:
-            _write_live_frame(cam_id, stream_frame)
-            _write_live_state(cam_id, _state)
+            _post_live_frame(cam_id, stream_frame)
+            _post_live_state(cam_id, _state)
         else:
             stream_server.push_frame(cam_id, stream_frame)
             stream_server.push_state(cam_id, _state)
@@ -1457,7 +1483,7 @@ if __name__ == "__main__":
     else:
         # headless mode (spawn จาก stream_server เว็บ):
         # ไม่เปิด stream_server ซ้ำ, ไม่เปิด OpenCV window
-        # camera workers เขียน frame/state ลง live_frame_{cam_id}.jpg แทน
+        # camera workers POST frame/state ไป stream_server (in-memory) แทน
         import signal as _sig
         _sig.signal(_sig.SIGTERM, lambda *_: _stop_event.set())
         start_camera_workers()

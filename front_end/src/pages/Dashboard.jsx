@@ -230,14 +230,17 @@ function FaceModal({ src, name, onClose }) {
 
 // shape: 'square' = สี่เหลี่ยมเต็ม (ใช้ /snapfull/), 'circle' = วงกลม (ใช้ /snap/)
 // cacheBust: ตัวเลขที่เปลี่ยนทุก N วิ → บังคับ browser โหลดรูปใหม่
-function FaceSnap({ perId, activeCams, size = 32, shape = 'circle', onClick, cacheBust = 0 }) {
+function FaceSnap({ perId, displayName, activeCams, size = 32, shape = 'circle', onClick, cacheBust = 0 }) {
   const [idx, setIdx] = useState(0)
   const isSquare = shape === 'square'
   const endpoint = isSquare ? 'snapfull' : 'snap'  // square = full frame, circle = face crop
   const srcs = activeCams.map(id =>
     `${STREAM_BASE}/${endpoint}/${id}/${encodeURIComponent(perId)}?t=${cacheBust}`
   )
-  const initial = (perId[0] || '?').toUpperCase()
+  // initial fallback — perId อาจเป็น masked ("*********6666") → first char = "*"
+  // จึงใช้ displayName ก่อน (ชื่อจริง) ถ้าไม่มีค่อย fall ไป perId
+  const initSrc = displayName?.trim() || perId
+  const initial = (initSrc[0] || '?').toUpperCase()
 
   // reset idx เมื่อ cacheBust เปลี่ยน (รูปใหม่)
   useEffect(() => { setIdx(0) }, [cacheBust, perId])
@@ -320,6 +323,7 @@ function PersonFoundCard({ person, perId, camId, camName, onFaceClick, cacheBust
       >
         <FaceSnap
           perId={perId}
+          displayName={displayName}
           activeCams={[camId]}
           shape="square"
           cacheBust={cacheBust}
