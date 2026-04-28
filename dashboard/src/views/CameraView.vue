@@ -69,7 +69,7 @@
              Feed Area — CSS absolute layout (img ทุกตัวอยู่ใน DOM เสมอ)
              ไม่ใช้ v-if/v-else เพื่อป้องกัน MJPEG ขาด connection
              ════════════════════════════════════════════════════════════ -->
-        <div class="flex-1 relative overflow-hidden" style="min-height: 320px">
+        <div class="flex-1 relative overflow-hidden" :style="`min-height: ${feedMinHeight}px`">
           <div class="absolute inset-0">
 
             <div
@@ -82,9 +82,11 @@
               :title="isThumbnail(cam.id) ? `คลิกเพื่อขยาย ${cam.name}` : (!focusedCamId ? `คลิกเพื่อขยาย ${cam.name}` : '')"
             >
 
-              <!-- ─ เส้นคั่นระหว่างกล้อง (normal mode) ─ -->
-              <div v-if="camIdx > 0 && !focusedCamId"
+              <!-- ─ เส้นคั่น grid (normal mode) ─ -->
+              <div v-if="!focusedCamId && gridLayout[cam.id]?.onPage && gridLayout[cam.id]?.col > 0"
                    class="absolute left-0 inset-y-0 w-px bg-gui-border/50 z-30 pointer-events-none" />
+              <div v-if="!focusedCamId && gridLayout[cam.id]?.onPage && gridLayout[cam.id]?.row > 0"
+                   class="absolute top-0 inset-x-0 h-px bg-gui-border/50 z-30 pointer-events-none" />
 
               <!-- ─ Label + mini status (top-left) ─ -->
               <div class="absolute top-2 left-2 z-20 flex items-center gap-1.5
@@ -196,24 +198,10 @@
         <!-- /Feed Area -->
 
         <!-- Controls: per-camera toggles + fullscreen -->
-        <div class="px-4 py-3 border-t border-gui-border flex items-center gap-3 shrink-0 bg-gui-panel/80 flex-wrap">
+        <div class="border-t border-gui-border shrink-0 bg-gui-panel/80">
 
-          <!-- Per-camera start/stop buttons -->
-          <template v-for="cam in cameras" :key="`ctrl-${cam.id}`">
-            <button
-              @click="toggleFace(cam.id)"
-              :disabled="getCamState(cam.id).isStarting"
-              class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs
-                     transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              :class="isLive(cam.id) ? 'btn-cam-stop' : 'btn-cam-start'"
-            >
-              <span>{{ isLive(cam.id) ? '⏹' : '▶' }}</span>
-              <span class="hidden sm:inline">{{ cam.name }}</span>
-              <span class="sm:hidden">{{ cam.id }}</span>
-              <span v-if="isLive(cam.id) && frameAgeFor(cam.id) !== null"
-                class="text-[10px] opacity-70">{{ frameAgeFor(cam.id) }}s</span>
-            </button>
-          </template>
+          <!-- แถวหลัก -->
+          <div class="px-4 py-3 flex items-center gap-3 flex-wrap">
 
           <!-- Start/Stop all -->
           <button
@@ -227,9 +215,55 @@
             {{ anyLive ? '⏹ หยุดทั้งหมด' : '▶ เปิดทั้งหมด' }}
           </button>
 
+          <!-- Single-cam toggle for 1 camera -->
+          <button
+            v-if="cameras.length === 1"
+            @click="toggleFace(cameras[0].id)"
+            :disabled="getCamState(cameras[0].id).isStarting"
+            class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs
+                   transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            :class="isLive(cameras[0].id) ? 'btn-cam-stop' : 'btn-cam-start'"
+          >
+            <span>{{ isLive(cameras[0].id) ? '⏹' : '▶' }}</span>
+            {{ cameras[0].name }}
+          </button>
+
+          <!-- ปุ่มเปิด/ปิดแสดงปุ่มทีละตัว -->
+          <button
+            v-if="cameras.length > 1"
+            @click="showPerCamControls = !showPerCamControls"
+            class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs
+                   border border-gui-border text-gui-dim hover:text-gui-text
+                   hover:border-gui-in/40 transition-colors"
+            :title="showPerCamControls ? 'ซ่อนปุ่มรายกล้อง' : 'แสดงปุ่มรายกล้อง'"
+          >
+            ☰ รายกล้อง
+            <span class="text-[10px] opacity-60">{{ showPerCamControls ? '▲' : '▼' }}</span>
+          </button>
+
+          <!-- Pagination -->
+          <template v-if="totalPages > 1">
+            <div class="ml-auto flex items-center gap-1">
+              <button @click="prevPage" :disabled="currentPage === 0"
+                class="px-2.5 py-1.5 rounded-lg text-xs border border-gui-border text-gui-dim
+                       hover:text-gui-text hover:border-gui-in/40 transition-colors
+                       disabled:opacity-30 disabled:cursor-not-allowed"
+                title="หน้าก่อนหน้า">‹</button>
+              <span class="text-xs text-gui-dim px-1.5 tabular-nums font-mono">
+                {{ currentPage + 1 }}&thinsp;/&thinsp;{{ totalPages }}
+              </span>
+              <button @click="nextPage" :disabled="currentPage >= totalPages - 1"
+                class="px-2.5 py-1.5 rounded-lg text-xs border border-gui-border text-gui-dim
+                       hover:text-gui-text hover:border-gui-in/40 transition-colors
+                       disabled:opacity-30 disabled:cursor-not-allowed"
+                title="หน้าถัดไป">›</button>
+            </div>
+          </template>
+
           <button
             @click="showCameraManager = true"
-            class="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs
+            :class="totalPages <= 1 ? 'ml-auto' : ''"
+            class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs
                    border border-gui-border text-gui-dim hover:text-gui-text
                    hover:border-gui-in/40 transition-colors"
             title="จัดการกล้อง"
@@ -247,7 +281,31 @@
             ⛶ {{ isFullscreen ? 'ย่อ' : 'ขยาย' }}
             <kbd class="text-[10px] opacity-50 bg-gui-border/30 px-1 rounded">F</kbd>
           </button>
-        </div>
+
+          </div><!-- /แถวหลัก -->
+
+          <!-- แถวปุ่มรายกล้อง (ซ่อน/แสดงได้) -->
+          <div
+            v-show="showPerCamControls && cameras.length > 1"
+            class="px-4 pb-3 flex flex-wrap gap-2 border-t border-gui-border/40 pt-2.5"
+          >
+            <template v-for="cam in cameras" :key="`ctrl-${cam.id}`">
+              <button
+                @click="toggleFace(cam.id)"
+                :disabled="getCamState(cam.id).isStarting"
+                class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs
+                       transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                :class="isLive(cam.id) ? 'btn-cam-stop' : 'btn-cam-start'"
+              >
+                <span>{{ isLive(cam.id) ? '⏹' : '▶' }}</span>
+                <span>{{ cam.name }}</span>
+                <span v-if="isLive(cam.id) && frameAgeFor(cam.id) !== null"
+                  class="text-[10px] opacity-70">{{ frameAgeFor(cam.id) }}s</span>
+              </button>
+            </template>
+          </div>
+
+        </div><!-- /Controls -->
 
       </div>
       <!-- ── /กล้อง ─────────────────────────────────────────────── -->
@@ -272,7 +330,7 @@
 
           <div class="bg-gui-panel border border-gui-border rounded-xl p-4 shrink-0">
             <h3 class="font-semibold text-sm mb-3 text-gui-dim">สถานะระบบ</h3>
-            <div class="space-y-3 text-sm">
+            <div class="space-y-3 text-sm overflow-y-auto" style="max-height: 220px">
               <div
                 v-for="cam in cameras"
                 :key="`status-${cam.id}`"
@@ -637,7 +695,8 @@ async function loadCameras() {
 }
 
 // ── Camera Manager Modal ─────────────────────────────────────────────
-const showCameraManager = ref(false)
+const showCameraManager   = ref(false)
+const showPerCamControls  = ref(false)
 
 async function onCamerasChanged() {
   // รีโหลดรายการกล้องหลังเพิ่ม/ลบ — reset focusedCamId ถ้ากล้องนั้นถูกลบ
@@ -675,44 +734,88 @@ function getCamState(camId) {
   }
 }
 
-// ── Focus Mode (CSS absolute layout — img ไม่ถูก unmount เมื่อสลับ) ────────
-const THUMB_H      = 140          // ความสูง thumbnail strip (px)
-const focusedCamId = ref(null)
+// ── Focus Mode + Grid Pagination ─────────────────────────────────────
+const THUMB_H          = 140
+const CAMERAS_PER_PAGE = 9
+const GRID_COLS        = 3
+const focusedCamId     = ref(null)
+const currentPage      = ref(0)
 
-// คำนวณ style ของแต่ละกล้องตาม focusedCamId (ไม่มี DOM remove/add)
+const totalPages = computed(() =>
+  Math.max(1, Math.ceil(cameras.value.length / CAMERAS_PER_PAGE))
+)
+
+const currentPageCameras = computed(() => {
+  const start = currentPage.value * CAMERAS_PER_PAGE
+  return cameras.value.slice(start, start + CAMERAS_PER_PAGE)
+})
+
+// layout map: camId → { onPage, col, row, cols, rows }
+const gridLayout = computed(() => {
+  const cams = currentPageCameras.value
+  const n    = cams.length
+  const cols = n <= 1 ? 1 : n <= 2 ? 2 : GRID_COLS
+  const rows = Math.ceil(n / cols)
+  const layout = {}
+  cameras.value.forEach(cam => { layout[cam.id] = { onPage: false } })
+  cams.forEach((cam, i) => {
+    layout[cam.id] = { onPage: true, col: i % cols, row: Math.floor(i / cols), cols, rows }
+  })
+  return layout
+})
+
+const feedMinHeight = computed(() => {
+  if (focusedCamId.value) return 320
+  const n = currentPageCameras.value.length
+  const rows = n <= 3 ? 1 : n <= 6 ? 2 : 3
+  return rows * 240
+})
+
+function prevPage() {
+  if (currentPage.value > 0) { currentPage.value--; focusedCamId.value = null }
+}
+function nextPage() {
+  if (currentPage.value < totalPages.value - 1) { currentPage.value++; focusedCamId.value = null }
+}
+
+watch(totalPages, (tp) => {
+  if (currentPage.value >= tp) currentPage.value = Math.max(0, tp - 1)
+})
+
 function cameraStyle(camId) {
-  const n   = cameras.value.length
-  const idx = cameras.value.findIndex(c => c.id === camId)
-  if (n === 0) return ''
+  if (cameras.value.length === 0) return ''
+  const info = gridLayout.value[camId]
+  const hidden = 'top:0;left:0;width:0;height:0;overflow:hidden;pointer-events:none'
 
   if (focusedCamId.value) {
-    const others = cameras.value.filter(c => c.id !== focusedCamId.value)
     if (camId === focusedCamId.value) {
-      const hasThumb = others.length > 0
-      return `top:0;left:0;right:0;bottom:${hasThumb ? THUMB_H : 0}px`
-    } else {
-      const tIdx = others.findIndex(c => c.id === camId)
-      const tN   = others.length
-      return `bottom:0;height:${THUMB_H}px;left:${((tIdx / tN) * 100).toFixed(3)}%;width:${(100 / tN).toFixed(3)}%`
+      const thumbN = currentPageCameras.value.filter(c => c.id !== focusedCamId.value).length
+      return `top:0;left:0;right:0;bottom:${thumbN > 0 ? THUMB_H : 0}px`
     }
+    if (!info?.onPage) return hidden
+    const thumbCams = currentPageCameras.value.filter(c => c.id !== focusedCamId.value)
+    const tIdx = thumbCams.findIndex(c => c.id === camId)
+    if (tIdx === -1) return hidden
+    const tN = thumbCams.length
+    return `bottom:0;height:${THUMB_H}px;left:${((tIdx / tN) * 100).toFixed(3)}%;width:${(100 / tN).toFixed(3)}%`
   }
-  // Normal: แบ่งเท่ากัน
-  return `top:0;bottom:0;left:${((idx / n) * 100).toFixed(3)}%;width:${(100 / n).toFixed(3)}%`
+
+  if (!info?.onPage) return hidden
+  const { col, row, cols, rows } = info
+  return `top:${((row / rows) * 100).toFixed(3)}%;left:${((col / cols) * 100).toFixed(3)}%;width:${(100 / cols).toFixed(3)}%;height:${((1 / rows) * 100).toFixed(3)}%`
 }
 
-// กล้องนี้เป็น thumbnail หรือเปล่า
 function isThumbnail(camId) {
-  return !!focusedCamId.value && camId !== focusedCamId.value
+  return !!focusedCamId.value && camId !== focusedCamId.value && (gridLayout.value[camId]?.onPage ?? false)
 }
 
-// คลิกที่กล้อง
 function onCameraClick(camId) {
+  if (!gridLayout.value[camId]?.onPage && !focusedCamId.value) return
   if (isThumbnail(camId)) {
-    focusedCamId.value = camId   // สลับ focused
+    focusedCamId.value = camId
   } else if (!focusedCamId.value) {
-    focusedCamId.value = camId   // เข้า focus mode
+    focusedCamId.value = camId
   }
-  // คลิกที่ focused cam → ไม่ทำอะไร (ใช้ปุ่ม ✕ เพื่อออก)
 }
 
 // ── Boot Progress ────────────────────────────────────────────────────

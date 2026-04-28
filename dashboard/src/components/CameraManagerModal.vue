@@ -80,10 +80,11 @@
                 v-model="form.name"
                 type="text"
                 placeholder="เช่น กล้องหน้าประตู"
-                class="w-full bg-gui-bg border border-gui-border rounded-lg px-3 py-2 text-sm text-gui-text
-                       placeholder:text-gui-dim/40 focus:outline-none focus:border-gui-in/60
-                       transition-colors"
+                :class="nameDupError ? 'border-gui-fail/60 focus:border-gui-fail' : 'border-gui-border focus:border-gui-in/60'"
+                class="w-full bg-gui-bg border rounded-lg px-3 py-2 text-sm text-gui-text
+                       placeholder:text-gui-dim/40 focus:outline-none transition-colors"
               />
+              <p v-if="nameDupError" class="text-[11px] text-gui-fail mt-1">{{ nameDupError }}</p>
             </div>
 
             <!-- ประเภทกล้อง -->
@@ -118,9 +119,9 @@
                 v-model="form.source"
                 type="text"
                 placeholder="rtsp://admin:pass@192.168.1.x:554/..."
-                class="w-full bg-gui-bg border border-gui-border rounded-lg px-3 py-2 text-sm text-gui-text
-                       placeholder:text-gui-dim/40 focus:outline-none focus:border-gui-in/60 font-mono
-                       transition-colors"
+                :class="sourceDupError ? 'border-gui-fail/60 focus:border-gui-fail' : 'border-gui-border focus:border-gui-in/60'"
+                class="w-full bg-gui-bg border rounded-lg px-3 py-2 text-sm text-gui-text
+                       placeholder:text-gui-dim/40 focus:outline-none font-mono transition-colors"
               />
               <input
                 v-else
@@ -129,11 +130,12 @@
                 min="0"
                 max="99"
                 placeholder="0"
-                class="w-full bg-gui-bg border border-gui-border rounded-lg px-3 py-2 text-sm text-gui-text
-                       placeholder:text-gui-dim/40 focus:outline-none focus:border-gui-in/60 font-mono
-                       transition-colors"
+                :class="sourceDupError ? 'border-gui-fail/60 focus:border-gui-fail' : 'border-gui-border focus:border-gui-in/60'"
+                class="w-full bg-gui-bg border rounded-lg px-3 py-2 text-sm text-gui-text
+                       placeholder:text-gui-dim/40 focus:outline-none font-mono transition-colors"
               />
-              <p class="text-[11px] text-gui-dim/50 mt-1">
+              <p v-if="sourceDupError" class="text-[11px] text-gui-fail mt-1">{{ sourceDupError }}</p>
+              <p v-else class="text-[11px] text-gui-dim/50 mt-1">
                 <template v-if="form.source_type === 'usb'">
                   Webcam ในตัว = 0, กล้องต่อพ่วง = 1, 2, ...
                 </template>
@@ -177,7 +179,7 @@
           </button>
           <button
             @click="submitAdd"
-            :disabled="adding || !form.name.trim() || !form.source.toString().trim()"
+            :disabled="adding || !form.name.trim() || !form.source.toString().trim() || !!nameDupError || !!sourceDupError"
             class="px-5 py-1.5 rounded-lg text-sm font-semibold
                    bg-gui-in/20 text-gui-in border border-gui-in/40
                    hover:bg-gui-in/30 transition-colors
@@ -219,7 +221,7 @@
 </template>
 
 <script setup>
-import { ref, reactive } from 'vue'
+import { ref, reactive, computed } from 'vue'
 
 const props = defineProps({
   cameras: { type: Array, default: () => [] },
@@ -235,14 +237,31 @@ const form = reactive({
   source:      '0',
   flip:        false,
 })
-const adding  = ref(false)
+const adding   = ref(false)
 const addError = ref('')
+
+// ── Duplicate validation (real-time) ─────────────────────────────────
+const nameDupError = computed(() => {
+  const trimmed = form.name.trim().toLowerCase()
+  if (!trimmed) return ''
+  return props.cameras.some(c => c.name.trim().toLowerCase() === trimmed)
+    ? `ชื่อ "${form.name.trim()}" ถูกใช้ไปแล้ว`
+    : ''
+})
+
+const sourceDupError = computed(() => {
+  const trimmed = form.source.toString().trim().toLowerCase()
+  if (!trimmed) return ''
+  return props.cameras.some(c => c.source?.toString().trim().toLowerCase() === trimmed)
+    ? `${form.source_type === 'rtsp' ? 'URL' : 'Port'} นี้ถูกใช้ไปแล้ว`
+    : ''
+})
 
 async function submitAdd() {
   addError.value = ''
-  const name = form.name.trim()
+  const name   = form.name.trim()
   const source = form.source.toString().trim()
-  if (!name || !source) return
+  if (!name || !source || nameDupError.value || sourceDupError.value) return
 
   adding.value = true
   try {
