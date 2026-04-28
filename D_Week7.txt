@@ -1,0 +1,123 @@
+════════════════════════════════════════════════════════════════════════
+  รายงานการปฏิบัติงานฝึกประสบการณ์วิชาชีพ
+  วันที่  : อังคารที่ 28 เมษายน 2569
+  สัปดาห์ : สัปดาห์ที่ 7
+════════════════════════════════════════════════════════════════════════
+
+■ งานที่ดำเนินการในวันนี้
+────────────────────────────────────────────────────────────────────────
+
+1. แก้ปัญหา Loading Overlay ค้างบนหน้ากล้อง (CameraView.vue)
+   ─────────────────────────────────────────────────────────────────
+   เดิม loading overlay ("กำลังดาวน์โหลด...") แสดงค้างอยู่ตลอด
+   แม้กล้องจะเชื่อมต่อสำเร็จและ stream กำลังทำงานปกติ
+
+   สาเหตุ — Vue 3 v-else binding rule
+     ในการแก้ไข z-index ครั้งก่อน มีการย้าย hover highlight div
+     ไปวางระหว่าง <img v-if="..."> และ <div v-else>
+     Vue 3 กำหนดว่า v-else ต้องอยู่ติดกับ v-if โดยไม่มี element คั่น
+     เมื่อมี hover div คั่น v-else จึงไปจับคู่กับ v-if="isThumbnail()"
+     ที่อยู่ถัดมาแทน ทำให้ fallback overlay แสดงตลอดเวลาสำหรับ
+     กล้อง main/focused โดยไม่สนว่า stream จะ live หรือไม่
+
+   แก้ไข:
+     - ย้าย hover highlight divs ทั้งสองตัวไปวางหลัง </div> ปิด v-else block
+     - ให้ <img v-if> กับ <div v-else> อยู่ติดกันไม่มีอะไรคั่น
+     - ลำดับ DOM ใหม่: img (v-if) → fallback (v-else) → hover overlay
+
+2. ปรับปรุง Dashboard หน้าภาพรวม — เพิ่ม 2 Section แยกรายชื่อ
+   ─────────────────────────────────────────────────────────────────
+   เดิม DashboardView.vue มี:
+     - "รายชื่อวันนี้" PersonCard grid (รวม live + DB)
+     - AttendanceFeed แบบตาราง (event log ทั้งหมด)
+
+   เปลี่ยนเป็น 2 sections แยกหน้าที่ชัดเจน:
+
+   Section 1 — "รายชื่อที่พบวันนี้"
+     - ใช้ mergedPersons (live session + DB) เหมือนหน้ากล้อง
+     - แสดง LIVE badge เมื่อ main.py กำลังรัน
+     - legend: ยังอยู่ / ออกแล้ว / กำลังตรวจ
+     - PersonCard ใช้ photoMode="profile"
+       → รูปโปรไฟล์จาก /person-profile/{per_id} (External API)
+     - PersonCard grid 2→3→4→5 คอลัมน์ ตามขนาดหน้าจอ
+
+   Section 2 — "รายชื่อเช็คชื่อเข้าออก"
+     - ใช้ persons จาก DB เท่านั้น (ข้อมูลที่บันทึกแล้ว)
+     - legend: ยังอยู่ / ออกแล้ว
+     - PersonCard ใช้ photoMode="verify"
+       → รูปที่ถ่ายจากกล้องจริงตอนเช็คชื่อ /person-photo/{per_id}?status=IN|OUT
+     - PersonCard grid เดียวกัน
+
+3. ปรับปรุง Camera Grid Layout — จัดเรียงกล้องอัตโนมัติ
+   ─────────────────────────────────────────────────────────────────
+   เดิมการแสดงผลกล้องใช้ GRID_COLS=3 ตายตัว ทำให้:
+     - 4 กล้อง: 3+1 (กล้องสุดท้ายกว้างแค่ 1/3 มีพื้นที่ว่าง 2/3)
+     - 5 กล้อง: 3+2 (แถวล่างกว้างแค่ 1/3 ต่อกล้อง)
+     - 7 กล้อง: 3+3+1 (กล้องสุดท้ายกว้างแค่ 1/3)
+     - 8 กล้อง: 3+3+2 (แถวล่างไม่เต็ม)
+   ทำให้ layout ไม่สวยงามและไม่ใช้พื้นที่ให้เต็มประสิทธิภาพ
+
+   แก้ไข:
+   - เพิ่ม getGridCols(n) function คำนวณ columns ที่เหมาะสมตามจำนวนกล้อง:
+       1 กล้อง → 1 col   (1×1 เต็มจอ)
+       2 กล้อง → 2 cols  (2×1 เคียงข้าง)
+       3 กล้อง → 3 cols  (3×1 แถวเดียว)
+       4 กล้อง → 2 cols  (2×2 สี่เหลี่ยม)
+       5–6    → 3 cols  (3×2)
+       7–8    → 4 cols  (4×2)
+       9      → 3 cols  (3×3)
+
+   - แก้ cameraStyle() ให้กล้องในแถวสุดท้ายยืดเต็มแถวเสมอ:
+       คำนวณ lastRowN = n % cols (จำนวนกล้องในแถวสุดท้าย)
+       ถ้าเป็นแถวสุดท้าย: ใช้ lastRowN เป็น effCols แทน cols
+       ทำให้ 5 กล้อง → แถวล่าง 2 กล้อง แต่ละตัวกว้าง 50% (เต็มแถว)
+       7 กล้อง → แถวล่าง 3 กล้อง แต่ละตัวกว้าง 33.3% (เต็มแถว)
+
+   - แก้ feedMinHeight ให้ใช้ getGridCols() แทน logic เดิม
+
+■ สรุปไฟล์ที่สร้าง / แก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  [แก้ไข] dashboard/src/views/CameraView.vue
+    → ย้าย hover highlight divs ไปหลัง v-else block (แก้ loading overlay ค้าง)
+    → ลบ GRID_COLS constant ออก แทนด้วย getGridCols(n) function
+    → gridLayout computed ใช้ getGridCols() แทน GRID_COLS
+    → cameraStyle() เพิ่ม lastRowN และ effCols เพื่อยืดกล้องแถวสุดท้าย
+    → feedMinHeight computed ใช้ getGridCols() แทน hardcode rows
+
+  [แก้ไข] dashboard/src/views/DashboardView.vue
+    → ลบ AttendanceFeed component และ import ออก
+    → เพิ่ม PersonCard import กลับมา
+    → เปลี่ยน section "รายชื่อวันนี้" → "รายชื่อที่พบวันนี้"
+      ใช้ mergedPersons + photoMode="profile"
+    → เพิ่ม section "รายชื่อเช็คชื่อเข้าออก" ใหม่
+      ใช้ persons (DB) + photoMode="verify"
+
+■ เทคโนโลยีที่ใช้
+────────────────────────────────────────────────────────────────────────
+
+  - Vue 3 / Composition API — v-if/v-else binding rules, computed
+  - Vue 3 Template           — DOM order ที่ถูกต้องสำหรับ v-if/v-else
+  - CSS Absolute Positioning — คำนวณ top/left/width/height% สำหรับ camera grid
+  - JavaScript               — Math.ceil, modulo (%) สำหรับ grid layout
+
+■ ปัญหาที่พบและแนวทางแก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  ปัญหา : Loading overlay ค้างแม้กล้อง stream จะทำงานปกติแล้ว
+  วิเคราะห์: v-else จับคู่กับ v-if="isThumbnail()" แทน v-if ของ <img>
+             เพราะมี hover highlight div คั่นระหว่างทั้งสอง
+             Vue 3 กำหนดว่า v-else ต้องติดกับ v-if ทันที ไม่มี element คั่น
+             ทำให้ fallback div (loading overlay) render เสมอ
+             โดยเฉพาะกล้อง focused ที่ไม่ใช่ thumbnail (isThumbnail = false)
+             → v-else แสดงตลอด แม้ stream จะ live อยู่ก็ตาม
+  แก้ไข : ย้าย hover divs ไปอยู่หลัง v-else block ให้ img และ v-else
+           อยู่ติดกันไม่มีอะไรคั่น
+
+  ปัญหา : Camera grid ไม่เต็มพื้นที่เมื่อจำนวนกล้องไม่เป็นผลคูณของ 3
+  วิเคราะห์: GRID_COLS=3 ตายตัว ทำให้ 4, 5, 7, 8 กล้องมีพื้นที่ว่าง
+             ในแถวสุดท้าย ทำให้ layout ดูไม่สมดุล
+  แก้ไข : คำนวณ optimal cols ตามจำนวนกล้อง และยืดแถวสุดท้ายให้เต็ม
+           โดยใช้ lastRowN เป็น effective cols แทนค่า cols ปกติ
+
+════════════════════════════════════════════════════════════════════════
