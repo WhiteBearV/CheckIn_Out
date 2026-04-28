@@ -9,19 +9,17 @@
   -->
   <div class="min-h-screen flex flex-col">
 
-    <!-- ── Header (clock / title) ─────────────────────── -->
-    <AppHeader />
-
-    <!-- ── Tab Navigation ────────────────────────────── -->
-    <AppNav />
+    <!-- ── Header / Nav / Footer ซ่อนเมื่อ fullscreen ── -->
+    <AppHeader v-show="!isUIFullscreen" />
+    <AppNav    v-show="!isUIFullscreen" />
 
     <!-- ── Page Content ──────────────────────────────── -->
-    <!-- แต่ละหน้า (DashboardView / CameraView) render ที่นี่ -->
-    <RouterView class="flex-1" />
+    <RouterView :class="isUIFullscreen ? 'flex-1 h-screen' : 'flex-1'" />
 
-    <!-- ── Footer ────────────────────────────────────── -->
-    <footer class="text-center text-xs text-gui-dim py-3
-                   border-t border-gui-border shrink-0">
+    <footer
+      v-show="!isUIFullscreen"
+      class="text-center text-xs text-gui-dim py-3 border-t border-gui-border shrink-0"
+    >
       Face Attendance Dashboard
       <span class="ml-2 opacity-50">v1.11.0</span>
     </footer>
@@ -33,4 +31,5 @@
 import { RouterView } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'
 import AppNav    from '@/components/AppNav.vue'
+import { isUIFullscreen } from '@/composables/useUIFullscreen.js'
 </script>

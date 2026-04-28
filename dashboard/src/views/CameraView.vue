@@ -1,20 +1,23 @@
 <template>
-  <div class="p-4 md:p-6 max-w-screen-2xl mx-auto w-full space-y-4">
+  <!-- Fullscreen mode ใช้ position:fixed ครอบ viewport ทั้งหมด
+       เพื่อหลีกเลี่ยงปัญหา flex chain height calculation ใน Firefox -->
+  <div :class="isFullscreen
+    ? 'fixed inset-0 z-[200] flex flex-col bg-[#0a0a0a] overflow-hidden'
+    : 'p-4 md:p-6 max-w-screen-2xl mx-auto w-full space-y-4'">
 
     <!-- ════ FULLSCREEN WRAPPER ════════════════════════════════════════ -->
     <div
       :class="isFullscreen
-        ? 'fixed inset-0 z-50 flex flex-row bg-[#0a0a0a] overflow-hidden'
+        ? 'flex flex-row flex-1 min-h-0 overflow-hidden'
         : 'grid grid-cols-1 lg:grid-cols-3 gap-4'"
       :style="isFullscreen ? undefined : 'min-height: 520px'"
     >
 
       <!-- ── กล้อง (ซ้าย): ทุกกล้องใน box เดียว ─────────────────────── -->
-      <!-- min-height ป้องกัน height collapse ระหว่าง right panel v-if/v-else switch -->
       <div
         class="bg-black flex flex-col overflow-hidden"
         :class="isFullscreen
-          ? 'flex-1 border-r border-gui-border'
+          ? 'flex-1 min-w-0 min-h-0 border-r border-gui-border'
           : 'lg:col-span-2 rounded-xl border border-gui-border'"
         :style="isFullscreen ? undefined : 'min-height: 440px'"
       >
@@ -69,7 +72,7 @@
              Feed Area — CSS absolute layout (img ทุกตัวอยู่ใน DOM เสมอ)
              ไม่ใช้ v-if/v-else เพื่อป้องกัน MJPEG ขาด connection
              ════════════════════════════════════════════════════════════ -->
-        <div class="flex-1 relative overflow-hidden" :style="`min-height: ${feedMinHeight}px`">
+        <div class="flex-1 min-h-0 relative overflow-hidden" :style="isFullscreen ? undefined : `min-height: ${feedMinHeight}px`">
           <div class="absolute inset-0">
 
             <div
@@ -119,24 +122,18 @@
                 @click.stop
               >⛶ <span class="hidden sm:inline">เต็มจอ</span></RouterLink>
 
-              <!-- ─ Hover highlight ─ -->
-              <div class="absolute inset-0 bg-gui-in/0 group-hover:bg-gui-in/8 transition-colors pointer-events-none z-10" />
-              <div v-if="isThumbnail(cam.id)"
-                   class="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-20">
-                <span class="bg-black/70 text-white text-[9px] px-2 py-0.5 rounded-full">ขยาย ⛶</span>
-              </div>
-
-              <!-- ─ LIVE stream (v-if บน img เท่านั้น, ไม่กระทบ sibling img) ─ -->
+              <!-- ─ LIVE stream ─ -->
               <img
                 :key="`stream-${cam.id}-${getCamState(cam.id).streamStartTs}`"
-                v-if="isLive(cam.id) && hasRecentFrame(cam.id)"
+                v-if="isLive(cam.id) && hasRecentFrame(cam.id) && !getCamState(cam.id).streamError"
                 :src="streamUrlFor(cam.id)"
                 alt="Face Recognition Stream"
-                class="w-full h-full object-contain"
+                class="absolute inset-0 w-full h-full object-contain z-[1]"
                 @error="() => onStreamError(cam.id)"
               />
 
-              <!-- ─ OFFLINE / STARTING ─ -->
+              <!-- ─ OFFLINE / STARTING / STREAM ERROR ─
+                   v-else ต้องอยู่ติดกับ v-if ของ img โดยไม่มี element คั่น ─ -->
               <div v-else class="absolute inset-0 flex flex-col items-center justify-center z-10">
 
                 <!-- Oval guide (ซ่อนบน thumbnail) -->
@@ -157,13 +154,22 @@
 
                 <!-- Thumbnail: ข้อความเล็ก -->
                 <div v-if="isThumbnail(cam.id)" class="relative z-20 text-[9px] text-gui-dim/70">
-                  {{ isLive(cam.id) || getCamState(cam.id).isBooting ? 'กำลังดาวน์โหลด...' : 'ออฟไลน์' }}
+                  {{ getCamState(cam.id).streamError ? 'สตรีมขาด' : isLive(cam.id) || getCamState(cam.id).isBooting ? 'กำลังดาวน์โหลด...' : 'ออฟไลน์' }}
                 </div>
 
-                <!-- Normal/focused: ปุ่มเปิด หรือ Downloading -->
+                <!-- Normal/focused: ปุ่มเปิด, Retry หรือ Downloading -->
                 <template v-else>
+                  <!-- Stream error: ปุ่ม retry -->
+                  <div v-if="getCamState(cam.id).streamError"
+                       class="relative z-20 flex flex-col items-center gap-3">
+                    <span class="text-white/40 text-[10px]">สตรีมขาดการเชื่อมต่อ</span>
+                    <button @click.stop="retryStream(cam.id)"
+                      class="btn-cam-start px-5 py-2 rounded-lg text-xs transition-colors"
+                    >↻ รีเฟรชสตรีม</button>
+                  </div>
+
                   <!-- ปุ่มเปิด: เฉพาะเมื่อกล้องดับสนิท ไม่รัน ไม่โหลด -->
-                  <div v-if="!isLive(cam.id) && !getCamState(cam.id).isStarting && !getCamState(cam.id).isBooting"
+                  <div v-else-if="!isLive(cam.id) && !getCamState(cam.id).isStarting && !getCamState(cam.id).isBooting"
                        class="relative z-20 flex flex-col items-center gap-2">
                     <button @click.stop="startFace(cam.id)"
                       class="btn-cam-start px-5 py-2 rounded-lg text-xs transition-colors"
@@ -189,6 +195,13 @@
                   </div>
                 </template>
 
+              </div>
+
+              <!-- ─ Hover highlight (อยู่หลัง v-if/v-else block เสมอ) ─ -->
+              <div class="absolute inset-0 bg-gui-in/0 group-hover:bg-gui-in/8 transition-colors pointer-events-none z-[2]" />
+              <div v-if="isThumbnail(cam.id)"
+                   class="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-20">
+                <span class="bg-black/70 text-white text-[9px] px-2 py-0.5 rounded-full">ขยาย ⛶</span>
               </div>
 
             </div>
@@ -482,7 +495,8 @@
     </div>
     <!-- ════ /FULLSCREEN WRAPPER ════════════════════════════════════ -->
 
-    <!-- ══ แถบสถานะ refresh ════════════════════════════════════════ -->
+    <!-- ══ แถบสถานะ refresh (ซ่อนใน fullscreen) ══════════════════ -->
+    <template v-if="!isFullscreen">
     <div class="flex items-center justify-between gap-3 text-xs">
       <div class="flex items-center gap-2 text-gui-dim">
         <span class="w-2 h-2 rounded-full shrink-0"
@@ -506,6 +520,8 @@
       </div>
     </div>
 
+    </template><!-- /แถบสถานะ refresh -->
+
     <!-- ══ Camera Manager Modal ══════════════════════════════════════ -->
     <CameraManagerModal
       v-if="showCameraManager"
@@ -517,7 +533,7 @@
 
     <!-- ══ Confirm Dialog ════════════════════════════════════════════ -->
     <Teleport to="body">
-      <div v-if="showConfirm" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      <div v-if="showConfirm" class="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 backdrop-blur-sm"
         @click.self="showConfirm = false">
         <div class="bg-gui-panel border border-gui-fail/40 rounded-2xl shadow-2xl p-6 w-full max-w-sm mx-4">
           <h3 class="font-bold text-base mb-1 text-gui-text">ยืนยันการล้างข้อมูล</h3>
@@ -540,84 +556,6 @@
       </div>
     </Teleport>
 
-    <!-- ══ Stat Cards ════════════════════════════════════════════════ -->
-    <section class="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
-      <StatCard label="เช็คอินวันนี้"        :value="stats.totalIn"      icon="✅" color="green"  sub-label="จำนวนครั้ง IN ทั้งหมด"/>
-      <StatCard label="เช็คเอาท์วันนี้"      :value="stats.totalOut"     icon="🚪" color="yellow" sub-label="จำนวนครั้ง OUT ทั้งหมด"/>
-      <StatCard label="ยังอยู่ในที่ทำงาน"    :value="stats.currentlyIn"  icon="👥" color="blue"   sub-label="IN แต่ยังไม่มี OUT วันนี้"/>
-      <StatCard label="พนักงานทั้งหมดวันนี้" :value="persons.length"     icon="🏢" color="red"    sub-label="จำนวนคน (ไม่นับซ้ำ)"/>
-    </section>
-
-    <!-- ══ Chart + Org ════════════════════════════════════════════════ -->
-    <section class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-      <div class="lg:col-span-2"><HourlyChart :hourly="hourly" /></div>
-      <div><OrgBreakdown :by-org="byOrg" /></div>
-    </section>
-
-    <!-- ══ Person Cards ══════════════════════════════════════════════ -->
-    <section>
-      <div class="flex items-center justify-between mb-3">
-        <h2 class="font-semibold text-sm flex items-center gap-2">
-          <span class="text-gui-in">▣</span>
-          รายชื่อที่พบวันนี้
-          <span class="text-xs text-gui-dim font-normal">({{ mergedPersons.length }} คน)</span>
-          <span v-if="!liveStale"
-            class="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-gui-in/15 text-gui-in font-semibold">
-            <span class="w-1.5 h-1.5 rounded-full bg-gui-in animate-pulse"/>LIVE
-          </span>
-        </h2>
-        <div class="flex items-center gap-3 text-xs text-gui-dim">
-          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-gui-in"/> ยังอยู่</span>
-          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-gui-out"/> ออกแล้ว</span>
-          <span v-if="!liveStale" class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-purple-400"/> กำลังตรวจ</span>
-        </div>
-      </div>
-      <div v-if="mergedPersons.length === 0"
-        class="bg-gui-panel border border-gui-border rounded-xl py-12 flex flex-col items-center gap-2 text-gui-dim text-sm">
-        <span class="text-4xl">👁</span>
-        {{ attendLoading ? 'กำลังโหลด...' : 'ยังไม่มีการลงเวลาวันนี้' }}
-      </div>
-      <div v-else class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-        <PersonCard
-          v-for="p in mergedPersons"
-          :key="p.per_id"
-          :person="p"
-          :api-base="API_BASE"
-          @checked-out="onCheckedOut"
-        />
-      </div>
-    </section>
-
-    <!-- ══ รายชื่อเช็คชื่อเข้าออก ══════════════════════════════════════ -->
-    <section>
-      <div class="flex items-center justify-between mb-3">
-        <h2 class="font-semibold text-sm flex items-center gap-2">
-          <span class="text-gui-out">▣</span>
-          รายชื่อเช็คชื่อเข้าออก
-          <span class="text-xs text-gui-dim font-normal">({{ checkedPersons.length }} คน)</span>
-        </h2>
-        <div class="flex items-center gap-3 text-xs text-gui-dim">
-          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-gui-in"/> ยังอยู่</span>
-          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-gui-out"/> ออกแล้ว</span>
-        </div>
-      </div>
-      <div v-if="checkedPersons.length === 0"
-        class="bg-gui-panel border border-gui-border rounded-xl py-12 flex flex-col items-center gap-2 text-gui-dim text-sm">
-        <span class="text-4xl">📋</span>
-        {{ attendLoading ? 'กำลังโหลด...' : 'ยังไม่มีการเช็คชื่อวันนี้' }}
-      </div>
-      <div v-else class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-        <PersonCard
-          v-for="p in checkedPersons"
-          :key="p.per_id"
-          :person="p"
-          :api-base="API_BASE"
-          photo-mode="verify"
-          @checked-out="onCheckedOut"
-        />
-      </div>
-    </section>
-
   </div>
 </template>
 
@@ -625,13 +563,10 @@
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import LiveDetection       from '@/components/LiveDetection.vue'
-import StatCard            from '@/components/StatCard.vue'
-import PersonCard          from '@/components/PersonCard.vue'
-import HourlyChart         from '@/components/HourlyChart.vue'
-import OrgBreakdown        from '@/components/OrgBreakdown.vue'
 import CameraManagerModal  from '@/components/CameraManagerModal.vue'
-import { useAttendance }  from '@/composables/useAttendance.js'
-import { useLiveSession } from '@/composables/useLiveSession.js'
+import { useAttendance }    from '@/composables/useAttendance.js'
+import { useLiveSession }   from '@/composables/useLiveSession.js'
+import { isUIFullscreen }   from '@/composables/useUIFullscreen.js'
 
 // ── Route ───────────────────────────────────────────────────────────
 const route = useRoute()
@@ -737,9 +672,19 @@ function getCamState(camId) {
 // ── Focus Mode + Grid Pagination ─────────────────────────────────────
 const THUMB_H          = 140
 const CAMERAS_PER_PAGE = 9
-const GRID_COLS        = 3
 const focusedCamId     = ref(null)
 const currentPage      = ref(0)
+
+// คำนวณ cols ที่เหมาะสมตามจำนวนกล้อง — ให้แถวสุดท้ายเต็มหรือน้อยกว่าครึ่ง
+function getGridCols(n) {
+  if (n <= 1) return 1
+  if (n <= 2) return 2
+  if (n <= 3) return 3
+  if (n <= 4) return 2  // 2×2
+  if (n <= 6) return 3  // 3×2
+  if (n <= 8) return 4  // 4×2
+  return 3              // 3×3
+}
 
 const totalPages = computed(() =>
   Math.max(1, Math.ceil(cameras.value.length / CAMERAS_PER_PAGE))
@@ -754,7 +699,7 @@ const currentPageCameras = computed(() => {
 const gridLayout = computed(() => {
   const cams = currentPageCameras.value
   const n    = cams.length
-  const cols = n <= 1 ? 1 : n <= 2 ? 2 : GRID_COLS
+  const cols = getGridCols(n)
   const rows = Math.ceil(n / cols)
   const layout = {}
   cameras.value.forEach(cam => { layout[cam.id] = { onPage: false } })
@@ -766,8 +711,9 @@ const gridLayout = computed(() => {
 
 const feedMinHeight = computed(() => {
   if (focusedCamId.value) return 320
-  const n = currentPageCameras.value.length
-  const rows = n <= 3 ? 1 : n <= 6 ? 2 : 3
+  const n    = currentPageCameras.value.length
+  const cols = getGridCols(n)
+  const rows = Math.ceil(n / cols)
   return rows * 240
 })
 
@@ -802,7 +748,12 @@ function cameraStyle(camId) {
 
   if (!info?.onPage) return hidden
   const { col, row, cols, rows } = info
-  return `top:${((row / rows) * 100).toFixed(3)}%;left:${((col / cols) * 100).toFixed(3)}%;width:${(100 / cols).toFixed(3)}%;height:${((1 / rows) * 100).toFixed(3)}%`
+  const n          = currentPageCameras.value.length
+  // กล้องในแถวสุดท้ายอาจมีน้อยกว่า cols → ยืดให้เต็มแถว
+  const lastRowN   = n % cols === 0 ? cols : n % cols
+  const isLastRow  = row === rows - 1
+  const effCols    = isLastRow ? lastRowN : cols
+  return `top:${((row / rows) * 100).toFixed(3)}%;left:${((col / effCols) * 100).toFixed(3)}%;width:${(100 / effCols).toFixed(3)}%;height:${((1 / rows) * 100).toFixed(3)}%`
 }
 
 function isThumbnail(camId) {
@@ -900,6 +851,13 @@ function onStreamError(camId) {
   if (camStates[camId]) camStates[camId].streamError = true
 }
 
+function retryStream(camId) {
+  if (camStates[camId]) {
+    camStates[camId].streamError   = false
+    camStates[camId].streamStartTs = Date.now()
+  }
+}
+
 // ── Status Polling ───────────────────────────────────────────────────
 async function fetchStatus(camId) {
   try {
@@ -920,8 +878,8 @@ async function fetchAllStatuses() {
 
 let pollTimer = null
 
-// ── Fullscreen (CSS pseudo-fullscreen — ไม่ใช้ native browser API) ──────
-// ใช้ fixed inset-0 z-50 แทน requestFullscreen เพื่อหลีกเลี่ยง MJPEG หลุด connection
+// ── Fullscreen — ซ่อน Header/Nav/Footer ผ่าน App.vue (isUIFullscreen) ──────
+// ไม่ใช้ fixed positioning เพื่อหลีกเลี่ยงปัญหา containing block ใน Firefox
 const isFullscreen = ref(false)
 
 function toggleFullscreen() {
@@ -929,8 +887,9 @@ function toggleFullscreen() {
 }
 
 watch(isFullscreen, (val) => {
-  // ล็อก scroll เมื่อ fullscreen, คืนเมื่อย่อ
-  document.body.style.overflow = val ? 'hidden' : ''
+  isUIFullscreen.value                     = val
+  document.documentElement.style.overflow = val ? 'hidden' : ''
+  document.body.style.overflow             = val ? 'hidden' : ''
 })
 
 function onKeyDown(e) {
@@ -942,10 +901,6 @@ function onKeyDown(e) {
   }
 }
 
-// ── Checkout handler ─────────────────────────────────────────────────
-async function onCheckedOut(_perId) {
-  await refresh()
-}
 
 // ── Lifecycle ────────────────────────────────────────────────────────
 let _sysModeTimer = null
@@ -966,12 +921,16 @@ onUnmounted(() => {
   clearInterval(pollTimer)
   clearInterval(_sysModeTimer)
   window.removeEventListener('keydown', onKeyDown)
-  document.body.style.overflow = '' // cleanup เผื่อ unmount ขณะ fullscreen
+  // cleanup scroll lock + shared fullscreen state
+  isFullscreen.value                       = false
+  isUIFullscreen.value                     = false
+  document.documentElement.style.overflow = ''
+  document.body.style.overflow             = ''
 })
 
 // ── Attendance Data ──────────────────────────────────────────────────
 const {
-  stats, byOrg, hourly, persons,
+  persons, stats,
   loading: attendLoading, error: attendError, lastFetch, refresh,
 } = useAttendance()
 
@@ -1005,10 +964,6 @@ const mergedPersons = computed(() => {
   })
 })
 
-// เฉพาะคนที่เช็คชื่อเข้าหรือออกแล้ว (ไม่รวม PENDING)
-const checkedPersons = computed(() =>
-  mergedPersons.value.filter(p => p.status === 'IN' || p.status === 'OUT')
-)
 
 // ── Photo helpers ────────────────────────────────────────────────────
 const failedPhotos = ref(new Set())

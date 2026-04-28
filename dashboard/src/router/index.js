@@ -9,6 +9,7 @@
 
 import { createRouter, createWebHashHistory } from 'vue-router'
 import CameraView       from '@/views/CameraView.vue'
+import DashboardView    from '@/views/DashboardView.vue'
 import SingleCameraView from '@/views/SingleCameraView.vue'
 
 // ── Route definitions ─────────────────────────────────────────────
@@ -18,8 +19,17 @@ const routes = [
     name:      'dashboard',
     component: CameraView,
     meta: {
-      label: 'หน้าหลัก',
+      label: 'กล้อง',
       icon:  '📷',
+    },
+  },
+  {
+    path:      '/overview',
+    name:      'overview',
+    component: DashboardView,
+    meta: {
+      label: 'ภาพรวม',
+      icon:  '📊',
     },
   },
   {
