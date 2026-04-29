@@ -121,3 +121,98 @@
            โดยใช้ lastRowN เป็น effective cols แทนค่า cols ปกติ
 
 ════════════════════════════════════════════════════════════════════════
+
+════════════════════════════════════════════════════════════════════════
+  รายงานการปฏิบัติงานฝึกประสบการณ์วิชาชีพ
+  วันที่  : พุธที่ 29 เมษายน 2569
+  สัปดาห์ : สัปดาห์ที่ 7
+════════════════════════════════════════════════════════════════════════
+
+■ งานที่ดำเนินการในวันนี้
+────────────────────────────────────────────────────────────────────────
+
+1. ย้ายสภาพแวดล้อมการพัฒนาจาก Ubuntu มายัง macOS (Apple Silicon)
+   ─────────────────────────────────────────────────────────────────
+   เปลี่ยนเครื่องพัฒนาจาก Ubuntu (Linux + NVIDIA GPU) มาเป็น MacBook
+   (macOS + Apple Silicon ARM) ทำให้ต้องตั้งค่า environment ใหม่ทั้งหมด
+
+   ปัญหาที่พบระหว่างติดตั้ง Python packages:
+     - CUDA/NVIDIA packages (cuda-bindings, nvidia-*, triton) ไม่รองรับ macOS
+       → กรองออกและแทน onnxruntime-gpu ด้วย onnxruntime (CPU)
+     - torch+cu126 / torchvision+cu126 ไม่มี wheel สำหรับ macOS
+       → ใช้ torch / torchvision เวอร์ชัน CPU แทน
+     - numpy==1.26.4 ขัดกับ opencv-python 4.13 ที่ต้องการ numpy>=2
+       → ปลด version pin ให้ uv resolver เลือกเอง
+     - tensorflow==2.16.2 ต้องการ ml-dtypes~=0.3.1 แต่ jax==0.7.1,
+       keras==3.13.2, onnx==1.20.1 ต้องการ ml-dtypes>=0.5.0
+       → ปลด version pin ของ tensorflow/keras/onnx/ml_dtypes ทั้งหมด
+     - dlib==20.0.0 build ไม่ได้บน macOS SDK ใหม่ (fp.h not found)
+       → ตัด dlib และ face_recognition ออก
+         (โปรเจคใช้ InsightFace ไม่ใช้ face_recognition library)
+     - pip resolver แก้ conflict ไม่ได้ → เปลี่ยนมาใช้ uv แทน
+       → ติดตั้งสำเร็จ 136 packages
+
+2. ทดสอบรันระบบบน macOS — วิเคราะห์ปัญหาที่พบ
+   ─────────────────────────────────────────────────────────────────
+   ทดสอบรัน main.py และ uvicorn api:app พบปัญหาตามลำดับ:
+
+   ปัญหาที่ 1 — EXTERNAL_API_URL ไม่ได้ตั้งค่า
+     api_client.py อ่าน os.environ["EXTERNAL_API_URL"] โดยตรง (ไม่มี default)
+     เมื่อไม่มีไฟล์ .env → KeyError ทันทีตอน import
+     แนวทาง: สร้าง .env หรือเปิด MOCK_MODE = True ใน api_client.py
+
+   ปัญหาที่ 2 — db_config.json ไม่มีในเครื่องใหม่
+     db.py พยายาม open("db_config.json") เมื่อไม่มี DB_HOST env var
+     ไฟล์นี้อยู่ใน .gitignore จึงไม่ถูก commit ตามมาด้วย
+     แนวทาง: สร้างไฟล์ใหม่หรือใช้ DB_HOST env var แทน
+
+   ปัญหาที่ 3 — PostgreSQL ไม่ได้ติดตั้ง และไม่มี Homebrew
+     ระบบใช้ PostgreSQL ผ่าน psycopg ไม่ใช่ SQLite
+     macOS ใหม่ไม่มีทั้ง Homebrew และ PostgreSQL
+
+3. วิเคราะห์แนวทางรันระบบผ่าน Docker บน macOS
+   ─────────────────────────────────────────────────────────────────
+   ตรวจสอบพบว่า:
+     - Docker Desktop ติดตั้งอยู่แล้ว (Docker version 29.4.1)
+     - Image photcharap/face-attendance:latest push ไว้บน Docker Hub แล้ว
+     - docker/ โฟลเดอร์อยู่ใน .gitignore จึงไม่มีในเครื่องใหม่
+
+   แนวทาง: pull image จาก Docker Hub และสร้าง docker-compose.yml ใหม่
+     ข้อดี — ไม่ต้องติดตั้ง PostgreSQL / Homebrew แยก
+             ใช้ environment เดียวกับ production บน Ubuntu
+
+■ สรุปไฟล์ที่สร้าง / แก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  [ไม่มีการแก้ไข source code] — งานวันนี้เป็นการตั้งค่า environment
+  และวิเคราะห์ปัญหาการ migration ระหว่าง OS
+
+■ เทคโนโลยีที่ใช้
+────────────────────────────────────────────────────────────────────────
+
+  - uv              — Python package resolver แทน pip (แก้ conflict ได้ดีกว่า)
+  - Docker          — รันระบบทั้งหมด (API + PostgreSQL) ใน container
+  - macOS ARM64     — Apple Silicon architecture ต่างจาก Linux x86_64
+
+■ ปัญหาที่พบและแนวทางแก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  ปัญหา : CUDA/GPU packages ไม่รองรับ macOS
+  วิเคราะห์: requirements.txt สร้างจาก Linux + NVIDIA GPU environment
+             package อย่าง cuda-bindings, nvidia-*, torch+cu126 ไม่มี
+             wheel สำหรับ macOS ทำให้ pip ติดตั้งไม่ได้
+  แก้ไข : กรอง CUDA packages ออก และใช้ CPU version ของ torch/onnxruntime แทน
+
+  ปัญหา : Dependency conflict ระหว่าง tensorflow กับ jax/keras/onnx
+  วิเคราะห์: tensorflow==2.16.2 ต้องการ ml-dtypes~=0.3.1
+             jax/keras/onnx เวอร์ชันใหม่ต้องการ ml-dtypes>=0.5.0
+             pip resolver ไม่สามารถหา solution ได้
+  แก้ไข : ปลด version pin ของ packages ที่ conflict และใช้ uv แทน pip
+           uv หา compatible version set ได้สำเร็จใน 57ms
+
+  ปัญหา : docker/ โฟลเดอร์หายไปบนเครื่องใหม่
+  วิเคราะห์: docker/ อยู่ใน .gitignore จึงไม่ถูก commit
+             เมื่อ clone/pull โปรเจคบนเครื่องใหม่ไฟล์เหล่านี้จึงหายไป
+  แก้ไข : สร้าง docker-compose.yml ใหม่จากข้อมูลใน db.py และ D_CommandLog.txt
+
+════════════════════════════════════════════════════════════════════════
