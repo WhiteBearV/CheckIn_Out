@@ -1,23 +1,28 @@
 ================================================================================
                   คู่มือติดตั้งและใช้งาน — Face Attendance System
+                          (อัปเดตสำหรับเวอร์ชัน 12)
 ================================================================================
 
 สารบัญ
 -------
   1.  ความต้องการของระบบ
-  2.  ติดตั้ง Dependencies
-  3.  โครงสร้างโปรเจค
-  4.  ตั้งค่า Secrets (.env)
-  5.  ตั้งค่าฐานข้อมูล
-  6.  เพิ่มบุคคลเข้าระบบ
-  7.  สร้าง Face Encodings
-  8.  ตั้งค่ากล้อง
-  9.  ตั้งค่า API
-  10. รันระบบ
-  11. Profiles (สลับโหมดเร็ว)
-  12. Keyboard Shortcuts
-  13. Anti-Spoofing Pipeline
-  14. แก้ปัญหาเบื้องต้น
+  2.  ภาพรวมสถาปัตยกรรม (Backend + Web UI)
+  3.  ติดตั้ง Dependencies (Backend)
+  4.  ติดตั้ง Dependencies (Frontend / Web UI)
+  5.  โครงสร้างโปรเจค
+  6.  ตั้งค่า Secrets (.env)
+  7.  ตั้งค่าฐานข้อมูล PostgreSQL
+  8.  เพิ่มบุคคลเข้าระบบ + สร้าง Encodings
+  9.  ตั้งค่ากล้อง (Single + Multi-Camera)
+  10. ตั้งค่า External API (Mock / Real)
+  11. รันระบบ
+  12. การใช้งานหน้า Web UI
+  13. Profiles (สลับโหมดเร็ว)
+  14. Active Windows (ตารางเวลา)
+  15. PicSAVE — บันทึกรูปถาวร
+  16. Anti-Spoofing Pipeline
+  17. Keyboard Shortcuts
+  18. แก้ปัญหาเบื้องต้น
 
 ================================================================================
 1. ความต้องการของระบบ
@@ -27,20 +32,75 @@
   ----------    ---------------------    -------------------------
   OS            Ubuntu 20.04             Ubuntu 22.04 / 24.04
   Python        3.10                     3.10 - 3.11
+  Node.js       18.x                     20.x LTS (สำหรับ Web UI)
   GPU           (ไม่จำเป็น)              NVIDIA GPU พร้อม CUDA 12+
   RAM           8 GB                     16 GB
-  กล้อง         USB Webcam               IP Camera (RTSP)
+  PostgreSQL    14                       16
+  กล้อง         USB Webcam               IP Camera (RTSP) + USB ผสมได้
 
 หมายเหตุ GPU:
   - ถ้ามี NVIDIA GPU ต้องติดตั้ง NVIDIA Driver + CUDA 12.x ก่อนเสมอ
-  - ถ้าไม่มี GPU สามารถใช้ CPU ได้ แต่ประมวลผลช้ากว่ามาก
-    (ดูวิธีปรับในหัวข้อ 2)
+  - ถ้าไม่มี GPU ใช้ CPU ได้ แต่ประมวลผลช้ากว่ามาก (ดูหัวข้อ 3)
 
 ================================================================================
-2. ติดตั้ง Dependencies
+2. ภาพรวมสถาปัตยกรรม (Backend + Web UI)
 ================================================================================
 
-ขั้นตอนที่ 1 — Clone โปรเจคและเข้าโฟลเดอร์
+ระบบ v12 แยกออกเป็น 3 service ทำงานพร้อมกัน:
+
+   ┌─────────────────────────────────────────────────────────────────┐
+   │  Web UI  (React + Vite)                                         │
+   │  port 5173 (dev)                                                │
+   │  - หน้า LiveCam   — ดูภาพ live + ควบคุม Start/Stop + จัดการกล้อง │
+   │  - หน้า Dashboard — สถิติวันนี้ + ตารางลงเวลา + face snapshots   │
+   │  - หน้า History   — ประวัติย้อนหลัง filter ตามวัน/แผนก/บุคคล/กล้อง │
+   │  - หน้า Report    — สรุป + Export CSV/XLSX/PDF                  │
+   └────────────────┬─────────────────────────────┬──────────────────┘
+                    │                             │
+            (proxy /stream, /state,        (proxy /attendance,
+             /system, /cameras...)          /history, /report...)
+                    │                             │
+   ┌────────────────▼──────────────┐  ┌───────────▼─────────────────┐
+   │  Stream Server                │  │  Attendance API             │
+   │  stream_server.py             │  │  api.py (FastAPI)           │
+   │  port 8001                    │  │  port 8000                  │
+   │                               │  │                             │
+   │  - MJPEG live stream          │  │  - POST /attendance         │
+   │  - JSON state (overlay)       │  │  - GET  /attendance/today   │
+   │  - face crop snapshots        │  │  - GET  /history            │
+   │  - Camera Config CRUD         │  │  - GET  /report/summary     │
+   │  - Start/Stop ระบบ            │  │  - GET  /report/export      │
+   │  - Camera Manager GUI /admin  │  │  - PUT/DELETE (Admin only)  │
+   └────────────────┬──────────────┘  └───────────┬─────────────────┘
+                    │                             │
+                    └──────────┬──────────────────┘
+                               │
+                    ┌──────────▼──────────────────┐
+                    │  Face Recognition Worker    │
+                    │  main.py  (1 thread/cam)    │
+                    │                             │
+                    │  - InsightFace (ArcFace)    │
+                    │  - Anti-Spoofing 7 ด่าน     │
+                    │  - PicSAVE ลงดิสก์           │
+                    │  - บันทึก IN/OUT ผ่าน api.py │
+                    └─────────────────────────────┘
+
+โหมดการทำงาน:
+  • Direct mode    — รัน `python main.py` ตรง: main.py + stream_server.py
+                     อยู่ใน process เดียวกัน (in-process buffer)
+  • Headless mode  — Web UI กดปุ่ม Start: stream_server.py spawn main.py
+                     เป็น subprocess แล้วสื่อสารผ่าน HTTP POST (in-memory)
+                     เปิดด้วย FACE_HEADLESS=1
+
+ฐานข้อมูล PostgreSQL ตาราง `attendance_logs`
+  เก็บประวัติ IN/OUT ทั้งหมด — ข้อมูลพนักงาน (ชื่อ/ตำแหน่ง/หน่วยงาน) ดึงสด
+  จาก External API ทุกครั้ง (ไม่มีตาราง employees อีกต่อไป — ดู migrate_v9.sql)
+
+================================================================================
+3. ติดตั้ง Dependencies (Backend)
+================================================================================
+
+ขั้นตอนที่ 1 — Clone และเข้าโฟลเดอร์
 
     git clone <repo-url>
     cd FaceReg
@@ -49,70 +109,124 @@
 
     python3.10 -m venv venv
 
-    เปิดใช้งาน (Linux/Mac):
-        source venv/bin/activate
+    Linux/Mac:    source venv/bin/activate
+    Windows:      venv\Scripts\activate
 
-    เปิดใช้งาน (Windows):
-        venv\Scripts\activate
-
-ขั้นตอนที่ 3 — ติดตั้ง Packages
+ขั้นตอนที่ 3 — ติดตั้ง Python Packages
 
     pip install -r requirements.txt
 
   [ถ้าใช้ CPU เท่านั้น — ไม่มี GPU]
   ก่อน pip install ให้แก้ requirements.txt
-  เปลี่ยนบรรทัด "onnxruntime-gpu" เป็น "onnxruntime" แล้วค่อย install
+  เปลี่ยน "onnxruntime-gpu" เป็น "onnxruntime"
+
+  [Optional packages สำหรับ Export]
+  pip install openpyxl reportlab        # สำหรับ XLSX และ PDF export
 
 ขั้นตอนที่ 4 — ติดตั้งฟอนต์ภาษาไทย (จำเป็น)
 
-    sudo apt install fonts-tlwg-garuda
+    sudo apt install fonts-tlwg-garuda fonts-thai-tlwg
 
-  หากไม่ติดตั้ง ข้อความภาษาไทยใน UI จะแสดงเป็น ?????
+  หากไม่ติดตั้ง:
+    - ข้อความภาษาไทยใน UI OpenCV จะแสดงเป็น ?????
+    - PDF export ภาษาไทยจะอ่านไม่ออก
 
 ขั้นตอนที่ 5 — ตรวจสอบว่าติดตั้งครบ
 
-    python -c "import insightface, cv2, mediapipe, fastapi; print('OK')"
-
-  ถ้าขึ้น OK แสดงว่าพร้อมใช้งาน
+    python -c "import insightface, cv2, mediapipe, fastapi, psycopg; print('OK')"
 
 ================================================================================
-3. โครงสร้างโปรเจค
+4. ติดตั้ง Dependencies (Frontend / Web UI)
+================================================================================
+
+Web UI อยู่ในโฟลเดอร์ `front_end/` เป็น React + Vite + TailwindCSS
+
+ขั้นตอนที่ 1 — ติดตั้ง Node.js 20 LTS (ถ้ายังไม่มี)
+
+    curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+    sudo apt install -y nodejs
+
+ขั้นตอนที่ 2 — ติดตั้ง npm packages
+
+    cd front_end
+    npm install
+
+ขั้นตอนที่ 3 — ตรวจสอบ
+
+    npm run dev    (กด Ctrl+C เพื่อหยุด — ใช้รันจริงในหัวข้อ 11)
+
+================================================================================
+5. โครงสร้างโปรเจค
 ================================================================================
 
   FaceReg/
-  |
-  |-- main.py                   จุดเริ่มต้นหลัก รันไฟล์นี้เพื่อเปิดระบบ
-  |-- config.py                 ตั้งค่าทุกอย่างในที่เดียว (UI, anti-spoof, กล้อง)
-  |-- api.py                    FastAPI server รับ-ส่งข้อมูลการลงเวลา IN/OUT
-  |-- api_client.py             HTTP client เชื่อม external API + mock สำหรับทดสอบ
-  |-- camera.py                 จัดการการเชื่อมต่อกล้อง (USB และ IP Camera)
-  |-- encode_faces_arcface.py   สร้างไฟล์ encodings.pkl จากรูปในโฟลเดอร์
-  |-- liveness_engine.py        ระบบตรวจจับการปลอมแปลง (Anti-Spoofing)
-  |-- session_manager.py        จัดการ session การเข้า-ออก
-  |-- ui_renderer.py            วาด UI ทั้งหมด (กรอบหน้า, panel, HUD)
-  |-- db.py                     การเชื่อมต่อ PostgreSQL
-  |
-  |-- .env                      [สำคัญ] secrets ทั้งหมด — ห้าม commit
-  |-- .env.example              template .env สำหรับ clone ใหม่
-  |-- db_config.json            [สำคัญ] ตั้งค่าการเชื่อมต่อฐานข้อมูล — ห้าม commit
-  |
-  |-- known_faces/              [สำคัญ] ใส่รูปภาพบุคคลที่นี่
-  |   |-- 6666666666666/        ชื่อโฟลเดอร์ = per_id (เลข 13 หลัก)
-  |   |   |-- photo1.jpg
-  |   |   `-- photo2.jpg
-  |   `-- 7777777777777/
-  |       `-- photo.jpg
-  |
-  |-- profiles/                 โหมดสลับการตั้งค่าเร็ว
-  |   |-- cam_main.py           IP Camera หลัก
-  |   |-- cam_usb.py            USB / Webcam
-  |   `-- test.py               โหมดทดสอบ
-  |
-  |-- encodings.pkl             สร้างอัตโนมัติ — Face embeddings ทุกคน
-  `-- requirements.txt          รายการ packages ที่ต้องติดตั้ง
+  │
+  │── ── ── ── ── ── ── ── ── ── Backend (Python) ── ── ── ── ── ── ── ──
+  │
+  │-- main.py                   Main loop — detect, identify, multi-cam workers
+  │-- stream_server.py          FastAPI port 8001 — MJPEG + state + Camera CRUD
+  │-- api.py                    FastAPI port 8000 — Attendance + History + Report
+  │-- api_client.py             HTTP client (external API) + mock + mask_pid
+  │-- camera.py                 ThreadedCamera (USB/RTSP)
+  │-- session_manager.py        จัดการ session check-in/out + save_snapshots()
+  │-- liveness_engine.py        Anti-spoofing pipeline ทุกด่าน
+  │-- ui_renderer.py            วาด UI overlay (face box, oval guide, panel, HUD)
+  │-- config.py                 ตั้งค่าทั้งหมดในที่เดียว
+  │-- db.py                     เปิด PostgreSQL connection จาก db_config.json
+  │-- attendance_db.py          (legacy / helper) — บันทึกตรงเข้า DB
+  │-- encode_faces_arcface.py   สร้าง encodings.pkl จากรูปใน known_faces/
+  │-- migrate_v9.sql            DB migration v9 — rename + add columns
+  │-- mock_attendance.sql       Sample data สำหรับทดสอบ
+  │
+  │── ── ── ── ── ── ── ── ── ── Configuration ── ── ── ── ── ── ── ── ──
+  │
+  │-- .env                      [สำคัญ] secrets ทั้งหมด — ห้าม commit
+  │-- .env.example              template .env สำหรับ clone ใหม่
+  │-- db_config.json            [สำคัญ] PostgreSQL credentials — ห้าม commit
+  │-- cameras.json              รายการกล้อง (สร้าง/แก้ผ่าน Web UI หรือ /admin)
+  │-- encodings.pkl             (auto-gen) Face embeddings ทุกคน
+  │
+  │-- profiles/                 โหมดสลับการตั้งค่าเร็ว
+  │   |-- cam_main.py           IP Camera หลัก
+  │   |-- cam_usb.py            USB / Webcam
+  │   `-- test.py               โหมดทดสอบ (60 วิ + ไม่ fullscreen)
+  │
+  │-- known_faces/              [สำคัญ] รูปภาพบุคคลที่ enroll ไว้
+  │   |-- 6666666666666/        ชื่อโฟลเดอร์ = per_id (เลข 13 หลัก)
+  │   |   |-- photo1.jpg
+  │   |   `-- photo2.jpg
+  │   `-- 7777777777777/
+  │       `-- photo.jpg
+  │
+  │-- PicSAVE/                  รูปลงเวลาถาวร (auto-gen)
+  │   `-- YYYY/MM/DD/HH-MM-SS_<per_id>_<IN|OUT>.jpg
+  │
+  │-- requirements.txt          Python packages
+  │
+  │── ── ── ── ── ── ── ── ── ── Frontend (React) ── ── ── ── ── ── ── ──
+  │
+  `-- front_end/
+      |-- package.json          npm scripts: dev / build / lint / preview
+      |-- vite.config.js        proxy 8000/8001 → frontend dev server
+      |-- tailwind.config.js
+      |-- index.html
+      |-- src/
+      |   |-- App.jsx           Router + theme + Clock widget
+      |   |-- index.css         Design system (tokens + classes)
+      |   |-- pages/
+      |   |   |-- LiveCam.jsx     หน้ากล้อง live + Start/Stop + Camera Manager
+      |   |   |-- Dashboard.jsx   สถิติวันนี้ + ตารางลงเวลา + face snapshots
+      |   |   |-- History.jsx     ประวัติย้อนหลัง group by date
+      |   |   `-- Report.jsx      สรุปสถิติ + Export CSV/XLSX/PDF
+      |   `-- components/
+      |       |-- Sidebar.jsx     Navigation ขยาย/ย่อได้
+      |       |-- StatCard.jsx    Stat card สำหรับ Dashboard
+      |       |-- AttendanceTable.jsx
+      |       `-- LiveStream.jsx
+      `-- README.md
 
 ================================================================================
-4. ตั้งค่า Secrets (.env)
+6. ตั้งค่า Secrets (.env)
 ================================================================================
 
 ไฟล์ .env เก็บข้อมูลที่ละเอียดอ่อนทั้งหมด — ห้าม commit ขึ้น git เด็ดขาด
@@ -121,70 +235,115 @@
 
     cp .env.example .env
 
-ขั้นตอนที่ 2 — แก้ไขค่าจริงใน .env
+ขั้นตอนที่ 2 — แก้ค่าจริงใน .env
 
     EXTERNAL_API_URL=https://your-api-url.example.com   ← URL ของ external API
     EXTERNAL_API_KEY=YOUR_API_KEY_HERE                  ← API Key ที่ได้รับมา
-    CAMERA_URL=rtsp://admin:password@192.168.x.x:554/path   ← RTSP URL กล้อง
-    ADMIN_API_KEY=YOUR_RANDOM_ADMIN_SECRET              ← key สำหรับ PUT/DELETE endpoint
+    ADMIN_API_KEY=YOUR_RANDOM_ADMIN_SECRET              ← key ของ PUT/DELETE endpoint
+
+    # Ports — เปลี่ยนถ้ามี port ชน
+    STREAM_PORT=8001
+    API_PORT=8000
+    LOCAL_API_URL=http://localhost:8000
+
+    # Camera URL (ถ้ามีกล้องเดียวเป็น IP)
+    CAMERA_URL=rtsp://admin:password@192.168.x.x:554/path
+
+    # ตั้งชื่อ env var แยกตาม cam_id ก็ได้ (ดูหัวข้อ 9)
+    # CAM1=rtsp://admin:password@192.168.1.13:554/Streaming/Channels/101
+    # CAM2=rtsp://...
 
 สร้าง ADMIN_API_KEY แบบสุ่ม:
 
     python -c "import secrets; print(secrets.token_hex(32))"
 
-หมายเหตุ: ไม่ต้องแก้ค่า URL หรือ key ใน config.py หรือ api_client.py โดยตรงอีกต่อไป
+หมายเหตุ: ไม่ต้องแก้ URL หรือ key ใน config.py / api_client.py โดยตรง
           แก้ที่ .env ไฟล์เดียวพอ
 
 ================================================================================
-5. ตั้งค่าฐานข้อมูล
+7. ตั้งค่าฐานข้อมูล PostgreSQL
 ================================================================================
 
-ขั้นตอนที่ 1 — สร้างไฟล์ db_config.json (ในโฟลเดอร์โปรเจค — ห้าม commit)
+ขั้นตอนที่ 1 — สร้างฐานข้อมูล
+
+    sudo -u postgres psql
+
+    -- ใน psql:
+    CREATE DATABASE faceattendance;
+    CREATE USER facereg WITH PASSWORD 'รหัสผ่านของคุณ';
+    GRANT ALL PRIVILEGES ON DATABASE faceattendance TO facereg;
+    \q
+
+ขั้นตอนที่ 2 — สร้างไฟล์ db_config.json (ในโฟลเดอร์โปรเจค — ห้าม commit)
 
     {
       "mode": "production",
       "production": {
-        "host": "localhost",
-        "port": 5432,
+        "host":     "localhost",
+        "port":     5432,
         "database": "faceattendance",
-        "user": "postgres",
+        "user":     "facereg",
         "password": "รหัสผ่านของคุณ"
       }
     }
 
-ขั้นตอนที่ 2 — สร้างฐานข้อมูล PostgreSQL
+ขั้นตอนที่ 3 — สร้างตาราง attendance_logs
 
-    เข้า psql ด้วย:
-        sudo -u postgres psql
+  ระบบใหม่ใช้ตารางเดียว (ลบตาราง employees แล้ว — ข้อมูลพนักงานดึงสดจาก
+  External API ทุกครั้ง)
 
-    แล้วพิมพ์คำสั่ง SQL ดังนี้:
-        CREATE DATABASE faceattendance;
-        CREATE USER facereg WITH PASSWORD 'รหัสผ่าน';
-        GRANT ALL PRIVILEGES ON DATABASE faceattendance TO facereg;
-        \q
+  สร้างตารางครั้งแรก:
+
+      sudo -u postgres psql -d faceattendance <<'EOF'
+      CREATE TABLE attendance_logs (
+          id          SERIAL PRIMARY KEY,
+          per_id      VARCHAR(13) NOT NULL,
+          status      VARCHAR(8)  NOT NULL,
+          camera_name VARCHAR(50),
+          check_time  TIMESTAMP   NOT NULL,
+          name        VARCHAR(200),
+          prename_th  VARCHAR(100),
+          per_name    VARCHAR(100),
+          per_surname VARCHAR(100),
+          posname_th  VARCHAR(200),
+          organize_th VARCHAR(200),
+          organize_id VARCHAR(20)
+      );
+      CREATE INDEX idx_attendance_per_id ON attendance_logs(per_id);
+      CREATE INDEX idx_attendance_date   ON attendance_logs(DATE(check_time));
+      EOF
+
+  ถ้ามาจาก v8 หรือเก่ากว่า — ใช้ migration:
+
+      sudo -u postgres psql -d faceattendance -f migrate_v9.sql
+
+  (เปลี่ยน full_name → name, เพิ่ม columns ที่ขาด, rename employees → backup)
+
+ขั้นตอนที่ 4 — (ตัวเลือก) ใส่ข้อมูลจำลอง
+
+      sudo -u postgres psql -d faceattendance -f mock_attendance.sql
 
 ================================================================================
-6. เพิ่มบุคคลเข้าระบบ
+8. เพิ่มบุคคลเข้าระบบ + สร้าง Encodings
 ================================================================================
 
-โครงสร้างโฟลเดอร์ known_faces/
+โครงสร้าง known_faces/
 
-  - แต่ละโฟลเดอร์ = 1 คน
+  - 1 โฟลเดอร์ = 1 คน
   - ชื่อโฟลเดอร์ต้องเป็น per_id (เลข 13 หลัก) เท่านั้น
-  - แนะนำใส่รูป 3-5 รูปต่อคน ถ่ายหลายมุมและหลายสภาพแสง
+  - ใส่ 3-5 รูปต่อคน หลายมุม หลายแสง
 
-  ตัวอย่าง:
       known_faces/
-      |-- 6666666666666/
-      |   |-- front.jpg
-      |   |-- left.jpg
-      |   `-- right.jpg
-      `-- 7777777777777/
-          `-- photo.jpg
+      ├── 6666666666666/
+      │   ├── front.jpg
+      │   ├── left.jpg
+      │   └── right.jpg
+      └── 7777777777777/
+          └── photo.jpg
 
-เพิ่มข้อมูลบุคคลใน api_client.py (เฉพาะ MOCK_MODE เท่านั้น)
-
-  ถ้าใช้ MOCK_MODE = True เปิดไฟล์ api_client.py และเพิ่ม entry ใน _MOCK_PERSONS:
+[Mock Mode] เพิ่มข้อมูลใน api_client.py
+  ถ้าจะใช้ MOCK_MODE = True ในไฟล์ api_client.py ต้องเพิ่มบุคคลใน
+  _MOCK_PERSONS dict ให้ key (per_id) ตรงกับชื่อโฟลเดอร์ใน known_faces/:
 
       "1234567890123": {
           "per_id":         "1234567890123",
@@ -201,31 +360,22 @@
           "per_picpath":    "",
       },
 
-  *** key ของ dict (เลข 13 หลัก) ต้องตรงกับชื่อโฟลเดอร์ใน known_faces/ ***
+[Real API Mode] ระบบดึงข้อมูลตาม per_id อัตโนมัติ — ไม่ต้องแก้ไฟล์นี้
 
-  ถ้าใช้ MOCK_MODE = False (Production) ไม่ต้องแก้ไฟล์นี้ — ระบบดึงข้อมูลจาก
-  external API โดยอัตโนมัติตาม per_id ที่จำแนกได้จากกล้อง
-
-สำคัญ: ทุกครั้งที่เพิ่มคนใหม่ต้องสร้าง encodings.pkl ใหม่เสมอ (ดูหัวข้อ 7)
-
-================================================================================
-7. สร้าง Face Encodings
-================================================================================
-
-รันคำสั่งนี้เพื่อสร้างไฟล์ encodings.pkl
+สร้าง Face Encodings (จำเป็นทุกครั้งที่เพิ่มคนใหม่):
 
     source venv/bin/activate
 
-    วิธีปกติ (อ่านรูปจาก known_faces/):
-        python encode_faces_arcface.py
+    # ปกติ — อ่านจาก known_faces/
+    python encode_faces_arcface.py
 
-    ถ้าโฟลเดอร์รูปชื่ออื่น:
-        python encode_faces_arcface.py --dir ชื่อโฟลเดอร์
+    # โฟลเดอร์ชื่ออื่น
+    python encode_faces_arcface.py --dir other_faces
 
-    โหลดรูปจาก URL (ระบุในไฟล์ JSON):
-        python encode_faces_arcface.py --urls urls.json
+    # โหลดรูปจาก URL
+    python encode_faces_arcface.py --urls urls.json
 
-รูปแบบไฟล์ urls.json
+รูปแบบ urls.json:
 
     [
       {
@@ -238,127 +388,213 @@
     ]
 
 หมายเหตุ:
-  - ครั้งแรกที่รันจะดาวน์โหลดโมเดล buffalo_l (~300 MB) โดยอัตโนมัติ
-  - ผลลัพธ์คือไฟล์ encodings.pkl ในโฟลเดอร์โปรเจค
-  - ถ้าตรวจไม่พบใบหน้าในรูป จะแจ้งเตือนและข้ามรูปนั้น
+  - ครั้งแรกที่รันจะดาวน์โหลดโมเดล buffalo_l (~300 MB) อัตโนมัติ
+  - ผลลัพธ์: encodings.pkl ในโฟลเดอร์โปรเจค
 
 ================================================================================
-8. ตั้งค่ากล้อง
+9. ตั้งค่ากล้อง (Single + Multi-Camera)
 ================================================================================
 
-CAMERA_URL ตั้งค่าในไฟล์ .env เท่านั้น — ไม่ต้องแก้ config.py โดยตรง
+ระบบ v12 รองรับหลายกล้องพร้อมกัน — แต่ละกล้องมี ID, name, URL/index, flip
+ของตัวเอง บริหารจัดการได้ผ่าน Web UI โดยตรง
 
----- IP Camera (RTSP) ----
+---- วิธีที่ 1 (แนะนำ): จัดการผ่าน Web UI ----
 
-  แก้ใน .env:
-    CAMERA_URL=rtsp://username:password@IP:port/stream_path
+  1. รันระบบ (ดูหัวข้อ 11)
+  2. เปิด http://localhost:5173 (dev) หรือ http://localhost:8001/admin
+  3. กด "+ เพิ่มกล้อง" → กรอก ชื่อ, ประเภท (USB/IP), index/URL, flip
+  4. ระบบจะบันทึก cameras.json ให้อัตโนมัติ
+  5. กด Reload (R) เพื่อ hotload โดยไม่ต้อง restart
 
-  ส่วน CAMERA_FLIP ยังแก้ใน config.py หรือ profiles/ ได้ตามปกติ:
-    CAMERA_FLIP = False
+---- วิธีที่ 2: แก้ cameras.json ตรงๆ ----
 
-  รูปแบบ URL ตามยี่ห้อกล้อง:
+  รูปแบบไฟล์:
 
-    Hikvision:
-        rtsp://admin:pass@192.168.1.13:554/Streaming/Channels/101
+      [
+        {
+          "id":    "cam1",
+          "name":  "CAM_MAIN",
+          "url":   "$CAM1",        ← อ่านค่าจาก env var (ดูด้านล่าง)
+          "flip":  false
+        },
+        {
+          "id":    "cam2",
+          "name":  "CAM_WEB",
+          "index": 1,              ← USB index
+          "flip":  true
+        }
+      ]
 
-    Dahua:
-        rtsp://admin:pass@192.168.1.13:554/cam/realmonitor?channel=1&subtype=0
+  Field:
+    id     — unique ใช้เป็น key สำหรับ /stream/{id}, /state/{id}
+    name   — ชื่อกล้องที่บันทึกใน attendance_logs.camera_name
+    url    — RTSP/HTTP URL (IP camera) — ขึ้นต้น "$" = ชื่อ env var
+    index  — USB index (0, 1, 2 ...) — ใส่อันใดอันหนึ่งระหว่าง url กับ index
+    flip   — กลับซ้าย-ขวา
 
-    UNV / Generic:
-        rtsp://admin:pass@192.168.1.13:554/unicast/c1/s0/live
+  [ความปลอดภัย] วาง credentials ไว้ใน .env ห้ามใส่ใน cameras.json:
 
-  ทดสอบ URL ด้วย VLC:
-    เปิด VLC → Media → Open Network Stream → วาง RTSP URL
+      .env:
+        CAM1=rtsp://admin:secret@192.168.1.13:554/Streaming/Channels/101
+        CAM2=rtsp://admin:secret@192.168.1.14:554/cam/realmonitor
 
----- USB Camera / Webcam ----
+      cameras.json:
+        { "id": "cam1", "name": "CAM_MAIN", "url": "$CAM1", "flip": false }
 
-  แก้ใน .env:
-    CAMERA_URL=        (เว้นว่างไว้ หรือลบบรรทัดนี้ออก — ระบบจะใช้ camera_index แทน)
+---- รูปแบบ RTSP ตามยี่ห้อกล้อง ----
 
-  แก้ใน config.py:
-    CAMERA_FLIP = True    (Webcam ส่วนใหญ่ภาพกลับซ้าย-ขวา)
+  Hikvision:  rtsp://admin:pass@192.168.1.13:554/Streaming/Channels/101
+  Dahua:      rtsp://admin:pass@192.168.1.13:554/cam/realmonitor?channel=1&subtype=0
+  UNV/Generic: rtsp://admin:pass@192.168.1.13:554/unicast/c1/s0/live
 
-  แก้ใน main.py:
-    run_camera(camera_index=0)    0 = กล้อง built-in
-    run_camera(camera_index=1)    1, 2, ... = USB ต่อเพิ่ม
+ทดสอบ URL ด้วย VLC: Media → Open Network Stream → วาง RTSP URL
 
-  ทดสอบว่ากล้องใช้ได้:
-    python -c "import cv2; cap=cv2.VideoCapture(0); print('OK' if cap.isOpened() else 'FAIL')"
+---- USB Camera ----
+
+  ใส่ index (0=built-in, 1=USB ตัวแรก, ...) — ตรวจ index ด้วย:
+
+      python -c "import cv2; cap=cv2.VideoCapture(0); print('OK' if cap.isOpened() else 'FAIL')"
 
 ================================================================================
-9. ตั้งค่า API
+10. ตั้งค่า External API (Mock / Real)
 ================================================================================
 
----- โหมด Mock (ใช้ทดสอบโดยไม่ต้อง external API) ----
+---- Mock Mode (ทดสอบโดยไม่ต้องมี external API) ----
 
-  แก้ใน api_client.py บรรทัดแรก:
+  แก้ใน api_client.py:
     MOCK_MODE = True
 
-  ระบบจะดึงข้อมูลจาก _MOCK_PERSONS dict ในไฟล์เดียวกัน
-  เหมาะสำหรับการพัฒนาและทดสอบ
+  ระบบจะดึงข้อมูลจาก _MOCK_PERSONS dict (ดูหัวข้อ 8)
+  เหมาะสำหรับ dev / demo
 
----- โหมด Real API (Production) ----
+---- Real API Mode (Production) ----
 
-  1. แก้ใน api_client.py:
-       MOCK_MODE = False
+  แก้ใน api_client.py:
+    MOCK_MODE = False
 
-  2. ตั้งค่า URL และ Key ใน .env:
-       EXTERNAL_API_URL=https://service-ps.example.com
-       EXTERNAL_API_KEY=YOUR_API_KEY_HERE
+  ตั้ง URL + Key ใน .env:
+    EXTERNAL_API_URL=https://service-ps.example.com
+    EXTERNAL_API_KEY=YOUR_API_KEY_HERE
 
-  ระบบจะเรียก (Swagger API):
+  ระบบจะเรียก:
     POST {EXTERNAL_API_URL}/api/check-emp
     Header: x-api-key: {EXTERNAL_API_KEY}
     Body:   { "per_cardno": "<per_id>" }
 
-  Response ที่ได้ต้องมี field: per_name, per_surname, prenameth_abbr,
-  prename_th, posname_th, organize_th, organize_id
+  Response ต้องมี: per_name, per_surname, prenameth_abbr,
+                   prename_th, posname_th, organize_th, organize_id
 
----- Admin Key (PUT/DELETE endpoint) ----
+---- Admin Key (PUT/DELETE attendance_logs) ----
 
-  endpoint แก้ไขและลบ attendance record ต้องการ header พิเศษ:
-    X-Admin-Key: <ค่าจาก ADMIN_API_KEY ใน .env>
+  endpoint แก้ไข/ลบ record ต้องการ header:
+    X-Admin-Key: <ค่า ADMIN_API_KEY ใน .env>
 
   ตัวอย่าง:
     curl -X DELETE http://localhost:8000/attendance/5 \
          -H "X-Admin-Key: YOUR_ADMIN_KEY"
 
 ================================================================================
-10. รันระบบ
+11. รันระบบ
 ================================================================================
 
-ต้องเปิด 2 terminal พร้อมกัน
+มี 3 service ที่ต้องรัน — เลือกวิธีใดวิธีหนึ่ง
 
-Terminal ที่ 1 — Local API Server (เปิดทิ้งไว้ตลอด):
+---- วิธีที่ 1 (แนะนำ): one-shot ผ่าน npm run dev ----
 
-    source venv/bin/activate
-    uvicorn api:app --host 0.0.0.0 --port 8000
+  เปิด stream + api + Web UI พร้อมกันใน terminal เดียว:
 
-    ตรวจสอบว่า API ทำงานได้:
-        http://localhost:8000/docs
+      cd front_end
+      npm run dev
 
-Terminal ที่ 2 — ระบบหลัก:
+  จะเห็น log สี 3 ชุด:
+    cyan    [stream] = stream_server.py (port 8001)
+    magenta [api]    = uvicorn api:app  (port 8000)
+    green   [vite]   = Web UI dev       (port 5173)
 
-    source venv/bin/activate
+  เปิด browser: http://localhost:5173
+  → กดปุ่ม Start ในหน้า LiveCam → main.py จะ spawn อัตโนมัติ (headless mode)
 
-    python main.py              รันด้วย default config
-    python main.py cam_main     รันด้วย IP Camera profile
-    python main.py cam_usb      รันด้วย USB Camera profile
-    python main.py test         โหมดทดสอบ (หยุดเองอัตโนมัติ, ไม่ fullscreen)
+---- วิธีที่ 2: รัน main.py ตรงๆ (มีหน้าต่าง OpenCV) ----
+
+  Terminal 1 — Attendance API:
+      source venv/bin/activate
+      uvicorn api:app --host 0.0.0.0 --port 8000
+
+  Terminal 2 — Main loop (รวม stream_server ภายใน):
+      source venv/bin/activate
+      python main.py
+      # หรือใช้ profile:
+      python main.py cam_main
+      python main.py cam_usb
+      python main.py test
+
+  Terminal 3 (ตัวเลือก) — Web UI:
+      cd front_end
+      npm run dev
+
+---- วิธีที่ 3: standalone stream server ----
+
+  ใช้กรณีรัน stream server แยก (ไม่ start main.py ทันที):
+      python stream_server.py
+
+  แล้วเปิด http://localhost:8001/admin → กด Start
 
 สิ่งที่ต้องมีก่อนรัน:
-  - ไฟล์ .env ตั้งค่าครบ (ดูหัวข้อ 4)
-  - ไฟล์ db_config.json ตั้งค่าครบ (ดูหัวข้อ 5)
-  - ไฟล์ encodings.pkl มีอยู่ (ดูหัวข้อ 7)
+  ✓ ไฟล์ .env             (หัวข้อ 6)
+  ✓ ไฟล์ db_config.json   (หัวข้อ 7)
+  ✓ ไฟล์ encodings.pkl    (หัวข้อ 8)
+  ✓ ไฟล์ cameras.json     (หัวข้อ 9 — สร้างได้จาก Web UI)
+  ✓ ฟอนต์ภาษาไทย          (หัวข้อ 3)
 
 ================================================================================
-11. Profiles (สลับโหมดเร็ว)
+12. การใช้งานหน้า Web UI
 ================================================================================
 
-Profile คือไฟล์ Python ในโฟลเดอร์ profiles/ ที่ override ค่าจาก config.py
-ใช้สลับการตั้งค่าได้โดยไม่ต้องแก้ config.py โดยตรง
+URL: http://localhost:5173 (dev mode)
 
-ตัวอย่างเนื้อหาในไฟล์ profiles/cam_usb.py:
+---- หน้า LiveCam (/ หรือ /live) ----
+
+  • Live grid view — ดูภาพ live ของทุกกล้องพร้อมกัน
+  • Discord-style mode — เลือกกล้องหลัก + thumbnail กล้องอื่น
+  • System Controls — ปุ่ม Start/Stop ระบบ Face Recognition
+  • Camera Manager — เพิ่ม/แก้ไข/ลบกล้อง โดยไม่ต้อง restart
+    (กดปุ่ม Reload หลังแก้เพื่อ hotload)
+  • Status badges — face / api ทำงานอยู่หรือไม่
+
+---- หน้า Dashboard (/dashboard) ----
+
+  • Stat Cards — สถิติวันนี้: ลงครบ / เข้าอย่างเดียว / ออกอย่างเดียว
+  • ตาราง Attendance — รายการลงเวลาวันนี้ทั้งหมด พร้อม face crop
+  • Department Chart — กระจายตามหน่วยงาน
+  • Live face snapshots — รูปจาก /snapfull/{cam_id}/{name}
+
+---- หน้า History (/history) ----
+
+  • ประวัติลงเวลาย้อนหลัง group by date
+  • Filter: ช่วงวัน (preset: วันนี้/7วัน/14วัน/เดือนนี้) + แผนก + บุคคล + กล้อง
+  • Limit 5000 records ต่อ query
+
+---- หน้า Report (/reports) ----
+
+  • สรุปสถิติ: ลงครบ / เข้าอย่างเดียว / ออกอย่างเดียว แบบ group by ราย
+    person-day
+  • By department / By date breakdown
+  • Export — กดปุ่ม Print Icon แล้วเลือก format:
+      CSV   — เปิดด้วย Excel ได้ (มี BOM สำหรับภาษาไทย)
+      XLSX  — ต้องติดตั้ง openpyxl
+      PDF   — landscape A4 ภาษาไทย ต้องติดตั้ง reportlab + ฟอนต์ Sarabun/Garuda
+
+---- Theme Toggle ----
+
+  มุมขวาบน — สลับ Light / Dark mode (เก็บใน localStorage)
+
+================================================================================
+13. Profiles (สลับโหมดเร็ว)
+================================================================================
+
+Profile = ไฟล์ Python ใน profiles/ ที่ override ค่าจาก config.py
+
+ตัวอย่าง profiles/cam_usb.py:
 
     CAMERA_URL   = None
     CAMERA_FLIP  = True
@@ -366,51 +602,104 @@ Profile คือไฟล์ Python ในโฟลเดอร์ profiles/ �
     TEST_MODE    = False
 
 วิธีใช้:
-    python main.py cam_usb                      ระบุชื่อ profile เป็น argument
-    FACE_PROFILE=cam_usb python main.py         ระบุผ่าน environment variable
 
-สร้าง profile ใหม่:
-    สร้างไฟล์ profiles/ชื่อprofile.py แล้วใส่เฉพาะค่าที่ต้องการ override
+    python main.py cam_usb                      ← argument
+    FACE_PROFILE=cam_usb python main.py         ← env var
 
-================================================================================
-12. Keyboard Shortcuts (ขณะโปรแกรมทำงาน)
-================================================================================
+profile ที่มากับระบบ:
+  cam_main  — IP Camera หลัก (อ่าน CAMERA_URL จาก .env)
+  cam_usb   — USB / Webcam (CAMERA_URL=None, CAMERA_FLIP=True)
+  test      — โหมดทดสอบ 60 วิ ไม่ fullscreen
 
-  ปุ่ม    ฟังก์ชัน
-  ------  ---------------------
-  q       ออกจากโปรแกรม
-  f       Toggle fullscreen / windowed
-  d       Toggle debug mode (แสดงค่า anti-spoofing)
+สร้าง profile ใหม่: สร้างไฟล์ profiles/<name>.py ใส่เฉพาะค่าที่ต้องการ override
 
 ================================================================================
-13. Anti-Spoofing Pipeline
+14. Active Windows (ตารางเวลา)
 ================================================================================
 
-ระบบตรวจจับการปลอมแปลง 7 ด่านตามลำดับ
-ตั้งค่าเปิด/ปิดแต่ละด่านได้ใน config.py
+ระบบรัน 24/7 แต่ตรวจใบหน้าเฉพาะในช่วง ACTIVE_WINDOWS เท่านั้น
+นอกช่วง → Idle mode: หยุดประมวลผล ประหยัด CPU/GPU
 
-  ด่านที่  ชื่อด่าน          ตัวแปรปิด/เปิด         คำอธิบาย
-  ------  ----------------   --------------------   ------------------------------------
-  1       Landmark Depth     (เปิดตลอด)             ตรวจความลึก 3D จาก 68-point landmark
-  2       Micro-Motion       (เปิดตลอด)             ต้องมีการขยับเล็กน้อย
-  3       Blink Detection    BLINK_ENABLED           ต้องกะพริบตาอย่างน้อย 2 ครั้ง
-  4       Texture Analysis   TEXTURE_ENABLED         ตรวจ LBP + Laplacian + สี
-  5       Screen Border      SCREEN_DETECT_ENABLED   ตรวจขอบหน้าจอ/รูปถ่าย
-  6       Finger Challenge   CHALLENGE_ENABLED       ชูนิ้วตามที่ระบบสั่ง 2 ชุด
-  7       MiniFASNet (AI)    FAS_ENABLED             AI ตรวจ spoof โดยตรง
+แก้ใน config.py:
+
+    from datetime import time as dtime
+
+    ACTIVE_WINDOWS = [
+        (dtime(5, 0), dtime(22, 0)),   # 05:00 - 22:00
+    ]
+
+  รองรับช่วงข้ามเที่ยงคืน เช่น (dtime(23, 0), dtime(1, 0))
+  ใส่ได้หลายช่วง: [ (dtime(7,0), dtime(9,0)), (dtime(16,0), dtime(18,0)) ]
+
+================================================================================
+15. PicSAVE — บันทึกรูปถาวร
+================================================================================
+
+ทุกครั้งที่ลง IN/OUT ระบบจะบันทึกรูปใบหน้าลงดิสก์อัตโนมัติ:
+
+    PicSAVE/YYYY/MM/DD/HH-MM-SS_<per_id>_<IN|OUT>.jpg
+
+  ตัวอย่าง:
+    PicSAVE/2026/04/29/08-15-22_6666666666666_IN.jpg
+    PicSAVE/2026/04/29/17-30-44_6666666666666_OUT.jpg
+
+  - บันทึกโดย session.save_snapshots() ตอนจบ run_camera() loop
+  - ใน headless mode: main.py จะ join camera threads ก่อน exit เพื่อให้ save ทัน
+  - เก็บ per_id เต็ม (ไม่ mask) — ใช้ตามรอย และ audit ได้
+
+ขนาดประมาณ 50-150 KB/รูป — ตรวจ disk usage เป็นระยะ
+
+================================================================================
+16. Anti-Spoofing Pipeline
+================================================================================
+
+ตรวจจับการปลอมแปลง 7 ด่านตามลำดับ — ตั้งค่าเปิด/ปิดได้ใน config.py
+
+  ด่านที่  ชื่อด่าน          ตัวแปรปิด/เปิด           คำอธิบาย
+  ──────  ────────────────   ─────────────────────    ────────────────────────────
+  1       Landmark Depth     (เปิดตลอด)               ตรวจความลึก 3D 68-point
+  2       Micro-Motion       (เปิดตลอด)               ต้องมีการขยับเล็กน้อย
+  3       Blink Detection    BLINK_ENABLED            EAR — กะพริบ ≥ N ครั้ง
+  4       Texture Analysis   TEXTURE_ENABLED          LBP + Laplacian + Chroma
+  5       Screen Border      SCREEN_DETECT_ENABLED    Edge ratio + inner density
+                             FFT_ENABLED              FFT score (ใช้คู่กับ Canny)
+  6       Finger Challenge   CHALLENGE_ENABLED        ชูนิ้วตามที่ระบบสั่ง 2 ชุด
+  7       MiniFASNet (AI)    FAS_ENABLED              AI ตรวจ spoof confidence
 
 ปิดด่านที่ false positive บ่อย:
-  แก้ใน config.py:
-    SCREEN_DETECT_ENABLED = False    ถ้าใช้กล้อง wide-angle / fisheye
-    BLINK_ENABLED         = False    ถ้าสภาพแสงในห้องมืดหรือไม่สม่ำเสมอ
+
+    SCREEN_DETECT_ENABLED = False   ถ้าใช้กล้อง wide-angle / fisheye
+    BLINK_ENABLED         = False   ถ้าสภาพแสงในห้องมืดหรือไม่สม่ำเสมอ
+    FFT_ENABLED           = False   ถ้ากล้องคุณภาพต่ำ noise สูง
+
+ปรับ threshold ให้เข้มขึ้นเมื่อ false negative มาก:
+
+    FAS_THRESHOLD         = 0.90    (default 0.90 — เพิ่มเป็น 0.95 ให้เข้มขึ้น)
+    BLINK_MIN             = 2       (เพิ่มเป็น 3 ถ้าต้องการเข้มขึ้น)
+    CHALLENGE_COUNT       = 2       (เพิ่มเป็น 3 ถ้าต้องการเข้มขึ้น)
 
 ================================================================================
-14. แก้ปัญหาเบื้องต้น
+17. Keyboard Shortcuts
 ================================================================================
 
-ปัญหา: ภาษาไทยในหน้าจอแสดงเป็น ?????
+ในหน้าต่าง OpenCV (รัน python main.py แบบมี GUI):
+
+  ปุ่ม    ฟังก์ชัน
+  ──────  ───────────────────────────
+  q       ออกจากโปรแกรม (save snapshots ก่อน)
+  f       Toggle fullscreen / windowed
+  d       Toggle debug mode (แสดง anti-spoof scores)
+  r       Reload กล้องจาก cameras.json (hotload — เพิ่มกล้องใหม่ทันที)
+  Tab/↓   เลือกกล้องถัดไป (multi-cam)
+  ↑       เลือกกล้องก่อนหน้า
+
+================================================================================
+18. แก้ปัญหาเบื้องต้น
+================================================================================
+
+ปัญหา: ภาษาไทยใน OpenCV หรือ PDF แสดงเป็น ?????
 วิธีแก้:
-    sudo apt install fonts-tlwg-garuda
+    sudo apt install fonts-tlwg-garuda fonts-thai-tlwg
     รีสตาร์ทโปรแกรม
 
 ----
@@ -418,7 +707,7 @@ Profile คือไฟล์ Python ในโฟลเดอร์ profiles/ �
 ปัญหา: กล้อง IP เชื่อมต่อไม่ได้
 วิธีแก้:
     1. ตรวจสอบ IP, username, password ใน RTSP URL
-    2. ทดสอบด้วย VLC: Media > Open Network Stream > วาง URL
+    2. ทดสอบด้วย VLC: Media → Open Network Stream → วาง URL
     3. ตรวจสอบว่ากล้องและเครื่องอยู่ใน Network เดียวกัน
     4. ตรวจสอบ Firewall ว่าไม่ได้บล็อก port 554
 
@@ -434,53 +723,97 @@ Profile คือไฟล์ Python ในโฟลเดอร์ profiles/ �
 วิธีแก้:
     1. เปิด api_client.py
     2. เพิ่ม entry ใน _MOCK_PERSONS dict
-    3. ตรวจสอบว่าชื่อโฟลเดอร์ใน known_faces/ ตรงกับ key ใน dict
+    3. ตรวจว่าชื่อโฟลเดอร์ใน known_faces/ ตรงกับ key
 
 ----
 
-ปัญหา: KeyError: 'EXTERNAL_API_URL' หรือ 'EXTERNAL_API_KEY' หรือ 'CAMERA_URL'
+ปัญหา: KeyError: 'EXTERNAL_API_URL' / 'EXTERNAL_API_KEY'
 วิธีแก้:
-    ยังไม่ได้สร้างไฟล์ .env หรือใส่ค่าไม่ครบ
-    1. ตรวจสอบว่ามีไฟล์ .env ในโฟลเดอร์โปรเจค
-    2. เปรียบเทียบกับ .env.example ว่าครบทุก key หรือยัง
+    ยังไม่สร้างไฟล์ .env หรือใส่ค่าไม่ครบ
+    1. ตรวจว่ามี .env ในโฟลเดอร์โปรเจค
+    2. เปรียบเทียบกับ .env.example ว่าครบทุก key
 
 ----
 
 ปัญหา: PUT/DELETE ขึ้น 403 Forbidden
 วิธีแก้:
-    ต้องส่ง header X-Admin-Key ให้ตรงกับค่า ADMIN_API_KEY ใน .env
+    ส่ง header X-Admin-Key ให้ตรงกับ ADMIN_API_KEY ใน .env
     curl -X DELETE http://localhost:8000/attendance/5 \
          -H "X-Admin-Key: YOUR_ADMIN_KEY"
 
 ----
 
-ปัญหา: API Server ไม่ตอบสนอง
+ปัญหา: Port ถูกใช้แล้ว (8000 / 8001 / 5173)
 วิธีแก้:
-    ตรวจว่า port 8000 ถูกใช้อยู่หรือเปล่า:
-        ss -tlnp | grep 8000
-
-    ถ้าถูกใช้อยู่ เปลี่ยน port:
-        uvicorn api:app --port 8001
-    แล้วแก้ LOCAL_API_URL ใน api_client.py ให้ตรงกัน
+    ss -tlnp | grep -E '8000|8001|5173'
+    kill <PID>   หรือเปลี่ยน port ใน .env (STREAM_PORT, API_PORT)
+    Vite (5173): cd front_end && npm run dev -- --port 5174
 
 ----
 
-ปัญหา: โมเดล InsightFace ดาวน์โหลดช้า หรือล้มเหลว
+ปัญหา: หน้า Web UI โหลดได้แต่กดปุ่ม Start แล้วไม่ขึ้น
 วิธีแก้:
-    ดาวน์โหลดโมเดลด้วยตนเองโดยรัน:
-        python -c "import insightface; insightface.app.FaceAnalysis(name='buffalo_l').prepare(ctx_id=0)"
+    1. เปิด DevTools (F12) → ดู Console / Network
+    2. ตรวจว่า stream_server.py (port 8001) รันอยู่
+    3. ลอง http://localhost:8001/cameras ใน browser ตรงๆ
 
-    หรือดาวน์โหลดไฟล์โมเดลจากภายนอกแล้ววางที่:
+----
+
+ปัญหา: กดปุ่ม Stop แล้วไม่บันทึกรูป PicSAVE
+วิธีแก้:
+    main.py ต้อง join camera threads ก่อน exit — ใช้เวลา ~5-8 วิ
+    อย่ากด Start ซ้อนทันที — รอจน badge เป็นสีเทาก่อน
+
+----
+
+ปัญหา: Face Recognition ทำงานแต่ไม่บันทึก IN/OUT
+วิธีแก้:
+    1. ตรวจว่า api.py (port 8000) รันอยู่
+    2. ตรวจ db_config.json ว่า credentials ถูก
+    3. ดู log: ไม่มี "[API CLIENT] บันทึก IN สำเร็จ" → API ไม่ตอบ
+    4. ลอง: curl http://localhost:8000/attendance/today
+
+----
+
+ปัญหา: Export PDF ไม่ได้ — error reportlab
+วิธีแก้:
+    pip install reportlab
+    sudo apt install fonts-tlwg-garuda    (สำหรับ Sarabun/Garuda)
+
+----
+
+ปัญหา: Export XLSX ไม่ได้ — error openpyxl
+วิธีแก้:
+    pip install openpyxl
+
+----
+
+ปัญหา: โมเดล InsightFace ดาวน์โหลดช้า / ล้มเหลว
+วิธีแก้:
+    python -c "import insightface; insightface.app.FaceAnalysis(name='buffalo_l').prepare(ctx_id=0)"
+
+    หรือดาวน์โหลดเองวางที่:
         ~/.insightface/models/buffalo_l/
 
 ----
 
 ปัญหา: GPU ไม่ถูกใช้งาน (ช้าผิดปกติ)
 วิธีแก้:
-    ตรวจสอบด้วย:
-        python -c "import onnxruntime as ort; print(ort.get_available_providers())"
+    python -c "import onnxruntime as ort; print(ort.get_available_providers())"
 
-    ควรเห็น CUDAExecutionProvider ในรายการ
-    ถ้าไม่เห็น ตรวจสอบการติดตั้ง CUDA และ onnxruntime-gpu อีกครั้ง
+    ควรเห็น CUDAExecutionProvider — ถ้าไม่เห็น:
+    1. ตรวจว่ามี NVIDIA Driver: nvidia-smi
+    2. ติดตั้ง onnxruntime-gpu (ไม่ใช่ onnxruntime)
+    3. main.py จะตั้ง LD_LIBRARY_PATH ของ CUDA libs ใน venv ให้อัตโนมัติ
 
+----
+
+ปัญหา: เพิ่มกล้องใหม่ใน Web UI แล้วไม่ขึ้น
+วิธีแก้:
+    1. กดปุ่ม Reload (R) ใน UI หรือ POST /cameras/reload
+    2. ถ้ายังไม่ขึ้น — Stop แล้ว Start ใหม่
+    3. ตรวจ cameras.json ว่ามี entry ใหม่จริง
+
+================================================================================
+                          จบคู่มือ — Face Attendance System v12
 ================================================================================
