@@ -57,9 +57,18 @@ POST /cameras/reload           → hotload กล้องใหม่ (เห�
 POST /system/start             → เริ่มระบบ (spawn main.py subprocess)
 POST /system/stop              → หยุดระบบ (SIGTERM → save_snapshots → cleanup)
 GET  /system/status            → { face: bool, api: bool }
+GET  /system/watchdog          → สถานะ watchdog + restart history
 POST /cache/clear              → ล้าง snapshot cache (เฉพาะตอน Stop)
 GET  /admin                    → Camera Manager GUI (HTML page)
 ```
+
+## Watchdog / Auto-restart (production)
+2-layer watchdog:
+- **systemd** (`deploy/facereg-stream.service`) — restart `stream_server.py` ถ้า crash
+- **Internal watchdog** (in `stream_server.py`) — respawn `main.py` / `api.py` subprocess ถ้าตายขณะ user สั่ง Start ค้างไว้ (`_user_intent_started=True`)
+- Rate limit: 5 restarts ใน 60 วิ → disable แล้วต้องกด Start ใหม่
+- ติดตั้ง: `sudo bash deploy/install_service.sh`
+- Log: `journalctl -u facereg-stream -f`
 
 ## โหมดการรัน
 ```bash

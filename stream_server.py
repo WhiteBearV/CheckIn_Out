@@ -831,6 +831,18 @@ _user_intent_started = False  # True หลัง /system/start, False หลั
                               # ใช้เพื่อให้ /system/status สะท้อน "ผู้ใช้กด Start หรือยัง"
                               # ไม่ใช่แค่ port probe (เพราะ npm run dev ก็เปิด api ไว้ตลอด)
 
+# ─── Watchdog state ──────────────────────────────────────────────────────────
+# respawn child process (main.py / api.py) ถ้า crash ขณะ user สั่ง Start ค้างไว้
+_watchdog_thread: Optional[threading.Thread] = None
+_watchdog_stop = threading.Event()
+_watchdog_interval = 3.0           # วินาที: ตรวจถี่แค่ไหน
+_watchdog_max_restarts = 5         # restart ได้กี่ครั้งใน window
+_watchdog_window = 60.0            # วินาที: window สำหรับนับ restart
+_watchdog_grace_after_start = 8.0  # วินาที: หลัง spawn ใหม่ ให้เวลา process boot
+_proc_restart_log: dict[str, list] = {'main': [], 'api': []}  # timestamps
+_proc_last_spawn: dict[str, float] = {'main': 0.0, 'api': 0.0}
+_proc_disabled: dict[str, str] = {}  # key → reason (กันลูปไม่จบ)
+
 # ─── In-memory active-cam detection ──────────────────────────────────────────
 def _mem_active_cams(max_age: float = 5.0) -> list:
     """กล้องที่ frame ล่าสุดมีอายุ < max_age วินาที"""
@@ -883,6 +895,126 @@ def _face_running() -> bool:
             or bool(_mem_active_cams()))
 
 
+# ─── Spawn helpers (ใช้ทั้งจาก /system/start และ watchdog) ───────────────────
+def _spawn_main_proc() -> subprocess.Popen:
+    env = {**os.environ,
+           'FACE_HEADLESS':     '1',
+           'FACE_CAMERA_CHILD': '1'}
+    p = subprocess.Popen(
+        [sys.executable, str(_ROOT / 'main.py')],
+        cwd=str(_ROOT),
+        env=env,
+    )
+    _proc_last_spawn['main'] = time.time()
+    return p
+
+
+def _spawn_api_proc() -> subprocess.Popen:
+    p = subprocess.Popen(
+        [sys.executable, '-m', 'uvicorn', 'api:app',
+         '--host', '0.0.0.0', '--port', '8000'],
+        cwd=str(_ROOT),
+    )
+    _proc_last_spawn['api'] = time.time()
+    return p
+
+
+def _record_restart(key: str) -> bool:
+    """เพิ่ม restart timestamp; return False ถ้าเกิน rate limit (ห้าม respawn)"""
+    now = time.time()
+    log = _proc_restart_log.setdefault(key, [])
+    log.append(now)
+    # ตัด timestamp ที่หลุด window
+    log[:] = [t for t in log if (now - t) < _watchdog_window]
+    if len(log) > _watchdog_max_restarts:
+        _proc_disabled[key] = (
+            f'crashed {len(log)} times in {_watchdog_window:.0f}s '
+            f'— watchdog disabled for "{key}", check logs'
+        )
+        print(f'[WATCHDOG] DISABLED "{key}" — {_proc_disabled[key]}')
+        return False
+    return True
+
+
+def _watchdog_loop():
+    """ตรวจสอบ child process ทุก interval วิ ถ้าตายโดยไม่ตั้งใจ → respawn"""
+    print(f'[WATCHDOG] เริ่มตรวจ child process (interval={_watchdog_interval}s, '
+          f'limit={_watchdog_max_restarts}/{_watchdog_window:.0f}s)')
+    while not _watchdog_stop.wait(_watchdog_interval):
+        if not _user_intent_started:
+            continue   # user ยังไม่กด Start หรือกด Stop ไปแล้ว → ไม่ทำอะไร
+
+        # ── main.py ──────────────────────────────────────────────────────────
+        if 'main' not in _proc_disabled:
+            should_run = _start_fn is None  # spawn mode (standalone)
+            if should_run and 'main' in _procs:
+                p = _procs['main']
+                age = time.time() - _proc_last_spawn.get('main', 0)
+                if p.poll() is not None and age > _watchdog_grace_after_start:
+                    code = p.returncode
+                    print(f'[WATCHDOG] main.py died (exit={code}) — respawning')
+                    if _record_restart('main'):
+                        try:
+                            _procs['main'] = _spawn_main_proc()
+                            print('[WATCHDOG] main.py respawned ✓')
+                        except Exception as e:
+                            print(f'[WATCHDOG] respawn main FAILED: {e}')
+
+        # ── api.py ───────────────────────────────────────────────────────────
+        if 'api' not in _proc_disabled and 'api' in _procs:
+            p = _procs['api']
+            age = time.time() - _proc_last_spawn.get('api', 0)
+            if p.poll() is not None and age > _watchdog_grace_after_start:
+                # ก่อน respawn เช็คว่ามี service อื่นมายึด port 8000 หรือยัง
+                if _api_alive():
+                    continue   # มี process อื่นยึดอยู่ ไม่ต้อง spawn ซ้ำ
+                code = p.returncode
+                print(f'[WATCHDOG] api.py died (exit={code}) — respawning')
+                if _record_restart('api'):
+                    try:
+                        _procs['api'] = _spawn_api_proc()
+                        print('[WATCHDOG] api.py respawned ✓')
+                    except Exception as e:
+                        print(f'[WATCHDOG] respawn api FAILED: {e}')
+
+
+def _watchdog_start():
+    global _watchdog_thread
+    if _watchdog_thread and _watchdog_thread.is_alive():
+        return
+    _watchdog_stop.clear()
+    _watchdog_thread = threading.Thread(
+        target=_watchdog_loop, daemon=True, name='watchdog')
+    _watchdog_thread.start()
+
+
+@app.get('/system/watchdog')
+async def system_watchdog_status():
+    """ดูสถานะ watchdog + restart history"""
+    now = time.time()
+    return {
+        'enabled': _watchdog_thread is not None and _watchdog_thread.is_alive(),
+        'user_intent_started': _user_intent_started,
+        'interval_s': _watchdog_interval,
+        'limit': f'{_watchdog_max_restarts}/{_watchdog_window:.0f}s',
+        'main': {
+            'alive':   _proc_alive('main'),
+            'restarts_in_window': len(_proc_restart_log.get('main', [])),
+            'last_spawn_age_s':   round(now - _proc_last_spawn.get('main', 0), 1)
+                                   if _proc_last_spawn.get('main') else None,
+            'disabled': _proc_disabled.get('main'),
+        },
+        'api': {
+            'alive':   _proc_alive('api'),
+            'port_responding': _api_alive(),
+            'restarts_in_window': len(_proc_restart_log.get('api', [])),
+            'last_spawn_age_s':   round(now - _proc_last_spawn.get('api', 0), 1)
+                                   if _proc_last_spawn.get('api') else None,
+            'disabled': _proc_disabled.get('api'),
+        },
+    }
+
+
 @app.get('/system/status')
 async def system_status():
     """badge สีเขียวเฉพาะตอนผู้ใช้สั่ง Start แล้วเท่านั้น
@@ -898,13 +1030,16 @@ async def system_start():
     """Start face recognition (subprocess FACE_HEADLESS) + api.py"""
     global _user_intent_started
     _user_intent_started = True
+    # user สั่ง start ใหม่ → reset watchdog disable + restart counter
+    _proc_disabled.clear()
+    for k in _proc_restart_log:
+        _proc_restart_log[k].clear()
     result = {}
 
     # ── face recognition ──────────────────────────────────────────────────────
     if _start_fn is not None:
         # python main.py รันอยู่แล้ว → restart workers
         try:
-            import asyncio
             await asyncio.to_thread(_start_fn)
             result['face'] = 'restarted'
         except Exception as e:
@@ -912,16 +1047,8 @@ async def system_start():
     elif _face_running():
         result['face'] = 'already_running'
     else:
-        # standalone: spawn main.py subprocess แบบ deawVersion
         try:
-            env = {**os.environ,
-                   'FACE_HEADLESS':      '1',
-                   'FACE_CAMERA_CHILD':  '1'}
-            _procs['main'] = subprocess.Popen(
-                [sys.executable, str(_ROOT / 'main.py')],
-                cwd=str(_ROOT),
-                env=env,
-            )
+            _procs['main'] = _spawn_main_proc()
             result['face'] = 'started'
         except Exception as e:
             result['face'] = f'error: {e}'
@@ -932,15 +1059,12 @@ async def system_start():
         result['api'] = 'already_running'
     else:
         try:
-            _procs['api'] = subprocess.Popen(
-                [sys.executable, '-m', 'uvicorn', 'api:app',
-                 '--host', '0.0.0.0', '--port', '8000', '--reload'],
-                cwd=str(_ROOT),
-            )
+            _procs['api'] = _spawn_api_proc()
             result['api'] = 'started'
         except Exception as e:
             result['api'] = f'error: {e}'
 
+    _watchdog_start()
     return result
 
 
@@ -1083,6 +1207,11 @@ def start(port: int = 8001):
 # ─── Standalone mode ─────────────────────────────────────────────────────────
 # รัน: python stream_server.py
 # จากนั้นเปิด browser แล้วกด START เพื่อสั่งให้ spawn main.py + api.py
+@app.on_event('startup')
+async def _on_startup():
+    _watchdog_start()
+
+
 if __name__ == '__main__':
     import uvicorn as _uv
     port = int(os.environ.get('STREAM_PORT', 8001))
