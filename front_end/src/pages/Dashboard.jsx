@@ -184,7 +184,7 @@ function DeptChart({ depts, total }) {
 
 // ─── FaceModal ─────────────────────────────────────────────────────────────────
 
-function FaceModal({ src, name, onClose }) {
+function FaceModal({ src, name, organize, posname, onClose }) {
   useEffect(() => {
     const onKey = e => { if (e.key === 'Escape') onClose() }
     window.addEventListener('keydown', onKey)
@@ -198,7 +198,7 @@ function FaceModal({ src, name, onClose }) {
       onClick={onClose}
     >
       <div
-        className="relative flex flex-col items-center gap-3"
+        className="relative flex flex-col items-center gap-2"
         onClick={e => e.stopPropagation()}
       >
         <img
@@ -207,8 +207,20 @@ function FaceModal({ src, name, onClose }) {
           className="rounded-lg object-cover"
           style={{ maxWidth: '80vw', maxHeight: '70vh', border: '2px solid var(--c-border)' }}
         />
-        <p className="font-mono text-sm" style={{ color: 'rgba(255,255,255,0.70)' }}>{name}</p>
-        <p className="font-mono text-[10px]" style={{ color: 'rgba(255,255,255,0.25)' }}>
+        <p className="font-mono text-base" style={{ color: 'rgba(255,255,255,0.85)', fontWeight: 600 }}>
+          {name}
+        </p>
+        {organize && (
+          <p className="font-mono text-xs" style={{ color: 'rgba(255,255,255,0.65)' }}>
+            🏢 {organize}
+          </p>
+        )}
+        {posname && (
+          <p className="font-mono text-xs" style={{ color: 'rgba(255,255,255,0.50)' }}>
+            ▸ {posname}
+          </p>
+        )}
+        <p className="font-mono text-[10px] mt-1" style={{ color: 'rgba(255,255,255,0.25)' }}>
           ESC หรือคลิกพื้นหลังเพื่อปิด
         </p>
         <button
@@ -302,11 +314,21 @@ function PersonFoundCard({ person, perId, camId, camName, onFaceClick, cacheBust
 
   const displayName = person.display_name || perId
 
+  // ดึง organize_th / posname_th จาก External API ผ่าน backend (cache 10 นาที)
+  const { data: personInfo } = useQuery({
+    queryKey: ['person', perId],
+    queryFn:  () => fetchPerson(perId),
+    enabled:  !!perId,
+    staleTime: 10 * 60 * 1000,
+  })
+  const organize = personInfo?.organize_th || person.organize_th || ''
+  const posname  = personInfo?.posname_th  || ''
+
   return (
     <div
       className="rounded overflow-hidden flex-shrink-0"
       style={{
-        width:      140,
+        width:      170,
         background: 'var(--c-bg-card)',
         border:     `1px solid var(--c-border)`,
         borderTop:  `2px solid ${color}`,
@@ -315,7 +337,7 @@ function PersonFoundCard({ person, perId, camId, camName, onFaceClick, cacheBust
       {/* รูปเต็มเฟรม */}
       <div
         style={{
-          width: '100%', height: 79,
+          width: '100%', height: 96,
           overflow: 'hidden', position: 'relative',
           background: 'var(--c-bg-deep)',
           borderRadius: '6px 6px 0 0',
@@ -327,15 +349,33 @@ function PersonFoundCard({ person, perId, camId, camName, onFaceClick, cacheBust
           activeCams={[camId]}
           shape="square"
           cacheBust={cacheBust}
-          onClick={src => onFaceClick?.({ src, name: displayName })}
+          onClick={src => onFaceClick?.({ src, name: displayName, organize, posname })}
         />
       </div>
 
       <div className="p-2 space-y-1">
         <div className="font-mono text-[10px] truncate font-medium"
-          style={{ color: 'var(--c-text)' }}>
+          style={{ color: 'var(--c-text)' }}
+          title={displayName}>
           {displayName}
         </div>
+
+        {/* หน่วยงาน / กอง */}
+        <div className="font-mono text-[9px] truncate"
+          style={{ color: 'var(--c-text-3)' }}
+          title={organize || '—'}>
+          🏢 {organize || '—'}
+        </div>
+
+        {/* ตำแหน่ง — ถ้ามี */}
+        {posname && (
+          <div className="font-mono text-[9px] truncate"
+            style={{ color: 'var(--c-text-4)' }}
+            title={posname}>
+            ▸ {posname}
+          </div>
+        )}
+
         <div className="font-mono text-[9px] truncate"
           style={{ color: 'var(--c-accent)' }}>
           📷 {camName || camId}
@@ -397,7 +437,11 @@ function TodayCard({ entry, onFaceClick }) {
     >
       <div className="flex gap-2 items-center" style={{ minWidth: 0 }}>
         <div
-          onClick={hasPhoto ? () => onFaceClick?.({ src: photoUrl, name }) : undefined}
+          onClick={hasPhoto ? () => onFaceClick?.({
+            src: photoUrl, name,
+            organize: personInfo?.organize_th || organize_th,
+            posname:  personInfo?.posname_th  || '',
+          }) : undefined}
           style={{
             width: 44, height: 44, borderRadius: 6, overflow: 'hidden', flexShrink: 0,
             background: 'var(--c-bg-deep)',
@@ -598,7 +642,9 @@ export default function Dashboard() {
   return (
     <>
     {faceModal && (
-      <FaceModal src={faceModal.src} name={faceModal.name} onClose={closeFace} />
+      <FaceModal src={faceModal.src} name={faceModal.name}
+        organize={faceModal.organize} posname={faceModal.posname}
+        onClose={closeFace} />
     )}
     <div className="page">
 

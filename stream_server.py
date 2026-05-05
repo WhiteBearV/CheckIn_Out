@@ -43,11 +43,16 @@ from pathlib import Path
 from typing import Optional
 
 import cv2
-from fastapi import FastAPI, Body, Request
+from dotenv import load_dotenv
+from fastapi import FastAPI, Body, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response
 from pydantic import BaseModel
 import uvicorn
+
+load_dotenv()
+
+import auth as _auth
 
 # ─── cameras.json path ────────────────────────────────────────────────────────
 _CAMERAS_JSON = Path(__file__).parent / "cameras.json"
@@ -194,12 +199,52 @@ def set_active_cam(cam_id: str):
 # ─── FastAPI app ──────────────────────────────────────────────────────────────
 app = FastAPI(title="FaceReg", docs_url=None)
 
+# CORS — อนุญาตเฉพาะ origin ที่ตั้งใน .env (default: localhost vite/preview)
+_cors_env = os.environ.get("CORS_ORIGINS", "http://localhost:5173,http://localhost:4173")
+_cors_origins = [o.strip() for o in _cors_env.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_origins=_cors_origins,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+
+# ─── Auth dependencies ───────────────────────────────────────────────────────
+# ใช้ require_admin ครอบ endpoint mutating ทุกตัว
+require_admin = _auth.require_admin
+get_current_user = _auth.get_current_user
+
+
+# ─── Auth endpoints ──────────────────────────────────────────────────────────
+class _LoginReq(BaseModel):
+    username: str
+    password: str
+
+
+class _ChangePwReq(BaseModel):
+    old_password: str
+    new_password: str
+
+
+@app.post('/auth/login')
+async def auth_login(req: _LoginReq):
+    """username/password → JWT token (exp 8h default)"""
+    return _auth.login(req.username, req.password)
+
+
+@app.get('/auth/me')
+async def auth_me(user: dict = Depends(get_current_user)):
+    """ตรวจ token + คืน user info (frontend ใช้เช็คว่ายัง login อยู่)"""
+    return {"username": user["username"], "role": user["role"]}
+
+
+@app.post('/auth/change-password')
+async def auth_change_password(req: _ChangePwReq,
+                               user: dict = Depends(get_current_user)):
+    _auth.change_password(user["id"], req.old_password, req.new_password)
+    return {"success": True}
 
 
 async def _mjpeg_gen(cam_id: str):
@@ -230,7 +275,7 @@ async def cameras_list():
     return {"cameras": sorted(ids), "active": _active_cam}
 
 
-@app.post('/cameras/{cam_id}/activate')
+@app.post('/cameras/{cam_id}/activate', dependencies=[Depends(require_admin)])
 async def activate_cam(cam_id: str):
     """เปลี่ยนกล้อง active สำหรับ legacy endpoints"""
     global _active_cam
@@ -291,7 +336,7 @@ def _check_dup(configs: list, req: CameraConfigRequest, exclude_id: str = "") ->
     return ""
 
 
-@app.post('/cameras/config')
+@app.post('/cameras/config', dependencies=[Depends(require_admin)])
 async def add_camera(req: CameraConfigRequest):
     """เพิ่มกล้องใหม่ — ID เรียงต่ออัตโนมัติ (cam1, cam2, ...)"""
     if not req.name.strip():
@@ -319,7 +364,7 @@ async def add_camera(req: CameraConfigRequest):
     return {"success": True, "camera": new_cam}
 
 
-@app.put('/cameras/config/{cam_id}')
+@app.put('/cameras/config/{cam_id}', dependencies=[Depends(require_admin)])
 async def update_camera(cam_id: str, req: CameraConfigRequest):
     """แก้ไข config กล้อง — ต้อง restart ระบบเพื่อให้มีผล"""
     if not req.name.strip():
@@ -348,7 +393,7 @@ async def update_camera(cam_id: str, req: CameraConfigRequest):
     return Response(status_code=404, content=f"cam_id '{cam_id}' ไม่พบ")
 
 
-@app.delete('/cameras/config/{cam_id}')
+@app.delete('/cameras/config/{cam_id}', dependencies=[Depends(require_admin)])
 async def delete_camera(cam_id: str):
     """ลบกล้องออกจาก cameras.json — ต้อง restart ระบบเพื่อให้มีผล"""
     configs = _load_cam_configs()
@@ -807,7 +852,7 @@ async def push_snapfull_endpoint(cam_id: str, name: str, request: Request):
 
 # ─── Cache & System control ───────────────────────────────────────────────────
 
-@app.post('/cache/clear')
+@app.post('/cache/clear', dependencies=[Depends(require_admin)])
 async def cache_clear():
     """ล้าง snapshot buffer ใน RAM (snap/snapfull เก็บ in-memory ทั้งหมดแล้ว)
     เก็บกวาดไฟล์ live_snap_*.jpg ที่อาจตกค้างจาก version เก่าด้วย"""
@@ -1025,7 +1070,7 @@ async def system_status():
             'api':  _proc_alive('api') or _api_alive()}
 
 
-@app.post('/system/start')
+@app.post('/system/start', dependencies=[Depends(require_admin)])
 async def system_start():
     """Start face recognition (subprocess FACE_HEADLESS) + api.py"""
     global _user_intent_started
@@ -1068,7 +1113,7 @@ async def system_start():
     return result
 
 
-@app.post('/system/stop')
+@app.post('/system/stop', dependencies=[Depends(require_admin)])
 async def system_stop():
     """Stop face recognition + api.py (graceful shutdown → save PicSAVE)"""
     global _user_intent_started
@@ -1121,7 +1166,7 @@ async def system_stop():
     return result
 
 
-@app.post('/cameras/reload')
+@app.post('/cameras/reload', dependencies=[Depends(require_admin)])
 async def cameras_reload():
     """Hotload กล้องที่เพิ่งเพิ่มใหม่ใน cameras.json โดยไม่ต้อง restart ระบบ
     (เหมือนกดปุ่ม R ที่หลังบ้าน — spawn thread ให้เฉพาะกล้องใหม่)"""
@@ -1183,7 +1228,7 @@ async def window_get():
     return {"show_window": _cv_window}
 
 
-@app.post('/window')
+@app.post('/window', dependencies=[Depends(require_admin)])
 async def window_toggle():
     global _cv_window
     _cv_window = not _cv_window
@@ -1209,6 +1254,7 @@ def start(port: int = 8001):
 # จากนั้นเปิด browser แล้วกด START เพื่อสั่งให้ spawn main.py + api.py
 @app.on_event('startup')
 async def _on_startup():
+    _auth.bootstrap_default_users()
     _watchdog_start()
 
 

@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { fetchPerson } from '../api/attendance'
+import { authFetch } from '../api/client'
+import { useAuth } from '../context/AuthContext'
 import { maskPid } from '../utils/pid'
 
 const STREAM_BASE = import.meta.env.DEV ? 'http://localhost:8001' : ''
@@ -42,28 +44,27 @@ async function fetchSystemStatus() {
 }
 
 async function postSystem(action) {
-  const r = await fetch(`${STREAM_BASE}/system/${action}`, { method: 'POST' })
+  const r = await authFetch(`${STREAM_BASE}/system/${action}`, { method: 'POST' })
   if (!r.ok) throw new Error(`HTTP ${r.status}`)
   return r.json()
 }
 
 async function postCacheClear() {
-  const r = await fetch(`${STREAM_BASE}/cache/clear`, { method: 'POST' })
+  const r = await authFetch(`${STREAM_BASE}/cache/clear`, { method: 'POST' })
   if (!r.ok) throw new Error(`HTTP ${r.status}`)
   return r.json()
 }
 
 async function postCamerasReload() {
-  const r = await fetch(`${STREAM_BASE}/cameras/reload`, { method: 'POST' })
+  const r = await authFetch(`${STREAM_BASE}/cameras/reload`, { method: 'POST' })
   if (!r.ok) throw new Error(`HTTP ${r.status}`)
   return r.json()
 }
 
 async function postAddCamera(body) {
-  const r = await fetch(`${STREAM_BASE}/cameras/config`, {
+  const r = await authFetch(`${STREAM_BASE}/cameras/config`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body,
   })
   if (!r.ok) {
     // 409 = ซ้ำ, 400 = invalid input — backend ส่ง error message ภาษาไทยเป็น text
@@ -76,7 +77,7 @@ async function postAddCamera(body) {
 }
 
 async function deleteCamera(camId) {
-  const r = await fetch(`${STREAM_BASE}/cameras/config/${encodeURIComponent(camId)}`, { method: 'DELETE' })
+  const r = await authFetch(`${STREAM_BASE}/cameras/config/${encodeURIComponent(camId)}`, { method: 'DELETE' })
   if (!r.ok) throw new Error(`HTTP ${r.status}`)
   return r.json()
 }
@@ -137,6 +138,7 @@ function BtnSpinner() {
 
 function SystemControls({ onStart, onClearDone, cameras = [] }) {
   const qc = useQueryClient()
+  const { isAdmin } = useAuth()
   const [cacheMsg, setCacheMsg] = useState('')
 
   const { data: sys = { face: false, api: false } } = useQuery({
@@ -194,13 +196,17 @@ function SystemControls({ onStart, onClearDone, cameras = [] }) {
 
         {/* START / STOP toggle */}
         {sys.face
-          ? <button onClick={() => stopMut.mutate()} disabled={stopMut.isPending} className="btn btn-stop btn-block">
+          ? <button onClick={() => stopMut.mutate()} disabled={stopMut.isPending || !isAdmin}
+              className="btn btn-stop btn-block"
+              title={isAdmin ? '' : 'admin เท่านั้นที่สั่ง STOP ได้'}>
               {stopMut.isPending
                 ? <><BtnSpinner /> กำลังหยุด...</>
                 : <><svg fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="1"/></svg>STOP</>
               }
             </button>
-          : <button onClick={() => startMut.mutate()} disabled={startMut.isPending} className="btn btn-start btn-block">
+          : <button onClick={() => startMut.mutate()} disabled={startMut.isPending || !isAdmin}
+              className="btn btn-start btn-block"
+              title={isAdmin ? '' : 'admin เท่านั้นที่สั่ง START ได้'}>
               {startMut.isPending
                 ? <><BtnSpinner /> กำลังเริ่ม...</>
                 : <><svg fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M5 3l14 9-14 9V3z"/></svg>START</>
@@ -209,8 +215,9 @@ function SystemControls({ onStart, onClearDone, cameras = [] }) {
         }
 
         {/* Clear Cache — ใช้ได้เฉพาะตอน Stop */}
-        <button onClick={() => clearMut.mutate()} disabled={sys.face || clearMut.isPending} className="btn btn-ghost btn-block btn-sm"
-          title={sys.face ? 'หยุดระบบก่อนล้าง cache' : 'ล้าง snapshot cache'}>
+        <button onClick={() => clearMut.mutate()} disabled={sys.face || clearMut.isPending || !isAdmin}
+          className="btn btn-ghost btn-block btn-sm"
+          title={!isAdmin ? 'admin เท่านั้น' : (sys.face ? 'หยุดระบบก่อนล้าง cache' : 'ล้าง snapshot cache')}>
           {clearMut.isPending
             ? <><BtnSpinner /> กำลังล้าง...</>
             : <><svg fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22M8 7V5a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>Clear Cache</>
@@ -453,6 +460,7 @@ function CameraCell({ cam, isOnline, isIdle, isConnecting, onExpand, onSelect })
 
 function CameraManager({ cameras, onReload }) {
   const qc = useQueryClient()
+  const { isAdmin } = useAuth()
   const [open, setOpen]     = useState(false)
   const [msg,  setMsg]      = useState('')
   const [form, setForm]     = useState({ name: '', cam_type: 'usb', url: '', index: '0', flip: false })
@@ -506,17 +514,22 @@ function CameraManager({ cameras, onReload }) {
         <div style={{ display: 'flex', gap: 6 }}>
           <button
             className="sys-btn sys-ghost"
-            style={{ padding: '3px 8px', fontSize: 11, width: 'auto' }}
+            style={{ padding: '3px 8px', fontSize: 11, width: 'auto', opacity: isAdmin ? 1 : 0.4 }}
             onClick={() => reloadMut.mutate()}
-            title="รีเฟรชรายการกล้อง"
+            disabled={!isAdmin}
+            title={isAdmin ? "รีเฟรชรายการกล้อง" : "admin เท่านั้น"}
           >
             <svg viewBox="0 0 24 24" style={{ width: 12, height: 12 }}><path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
             Reload
           </button>
           <button
             className="sys-btn sys-ghost"
-            style={{ padding: '3px 8px', fontSize: 11, width: 'auto', color: open ? 'var(--c-accent)' : undefined }}
+            style={{ padding: '3px 8px', fontSize: 11, width: 'auto',
+                     color: open ? 'var(--c-accent)' : undefined,
+                     opacity: isAdmin ? 1 : 0.4 }}
             onClick={() => setOpen(v => !v)}
+            disabled={!isAdmin}
+            title={isAdmin ? "" : "admin เท่านั้น"}
           >
             {open ? '✕ ปิด' : '+ เพิ่มกล้อง'}
           </button>
@@ -538,11 +551,11 @@ function CameraManager({ cameras, onReload }) {
             </span>
             <button
               onClick={() => { if (confirm(`ลบกล้อง "${cam.name}" (${cam.id})?`)) delMut.mutate(cam.id) }}
-              disabled={delMut.isPending}
-              style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', padding: '2px 4px', opacity: 0.6, lineHeight: 1 }}
-              onMouseEnter={e => e.currentTarget.style.opacity = '1'}
-              onMouseLeave={e => e.currentTarget.style.opacity = '0.6'}
-              title="ลบกล้อง"
+              disabled={delMut.isPending || !isAdmin}
+              style={{ background: 'none', border: 'none', cursor: isAdmin ? 'pointer' : 'not-allowed', color: '#ef4444', padding: '2px 4px', opacity: isAdmin ? 0.6 : 0.25, lineHeight: 1 }}
+              onMouseEnter={e => { if (isAdmin) e.currentTarget.style.opacity = '1' }}
+              onMouseLeave={e => { if (isAdmin) e.currentTarget.style.opacity = '0.6' }}
+              title={isAdmin ? "ลบกล้อง" : "admin เท่านั้น"}
             >
               <svg viewBox="0 0 24 24" style={{ width: 12, height: 12, fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round' }}>
                 <path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22M8 7V5a2 2 0 012-2h4a2 2 0 012 2v2"/>

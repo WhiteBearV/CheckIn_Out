@@ -1,6 +1,7 @@
 import { useRef, useState, useEffect, useCallback } from 'react'
 import { NavLink } from 'react-router-dom'
 import { useTheme } from '../context/ThemeContext'
+import { useAuth } from '../context/AuthContext'
 
 
 const NAV = [
@@ -32,6 +33,7 @@ const DEFAULT_W = 224
 
 export default function Sidebar() {
   const { theme, toggleTheme } = useTheme()
+  const { user, logout } = useAuth()
   const [width, setWidth] = useState(() => {
     const saved = localStorage.getItem('sb-width')
     return saved ? Number(saved) : DEFAULT_W
@@ -93,8 +95,37 @@ export default function Sidebar() {
         ))}
       </nav>
 
-      {/* Theme toggle */}
-      <div className="sb-foot">
+      {/* User + Theme + Logout */}
+      <div className="sb-foot" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {user && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: '8px 10px',
+            borderRadius: 6,
+            background: 'var(--c-accent-bg)',
+            border: '1px solid var(--c-accent-border)',
+            fontSize: 12, color: 'var(--c-text-1)',
+            overflow: 'hidden',
+          }} title={`${user.username} (${user.role})`}>
+            <span style={{
+              width: 7, height: 7, borderRadius: '50%',
+              background: user.role === 'admin' ? 'var(--c-accent)' : '#888',
+              flexShrink: 0,
+            }} />
+            <div style={{
+              display: 'flex', flexDirection: 'column',
+              minWidth: 0, flex: 1,
+            }}>
+              <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {user.username}
+              </span>
+              <span style={{ fontSize: 10, color: 'var(--c-text-3)', textTransform: 'uppercase', letterSpacing: 1 }}>
+                {user.role}
+              </span>
+            </div>
+          </div>
+        )}
+
         <button className="sb-theme" onClick={toggleTheme}>
           {theme === 'dark' ? (
             <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 3v1M12 20v1M3 12h1M20 12h1M5.6 5.6l.7.7M17.7 17.7l.7.7M5.6 18.4l.7-.7M17.7 6.3l.7-.7"/></svg>
@@ -103,6 +134,14 @@ export default function Sidebar() {
           )}
           {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
         </button>
+
+        {user && (
+          <button className="sb-theme" onClick={logout}
+            style={{ color: '#ff8a8a' }}>
+            <svg viewBox="0 0 24 24"><path d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
+            ออกจากระบบ
+          </button>
+        )}
       </div>
 
       {/* Resize handle */}
