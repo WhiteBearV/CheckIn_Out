@@ -20,8 +20,14 @@ export default function Login() {
     setLoading(true)
     try {
       const data = await login(username.trim(), password)
-      setUser({ username: data.username, role: data.role })
-      nav(from, { replace: true })
+      setUser({
+        username:             data.username,
+        role:                 data.role,
+        must_change_password: !!data.must_change_password,
+      })
+      // บังคับเปลี่ยนรหัสครั้งแรก — ไป /change-password แทน destination ปกติ
+      const next = data.must_change_password ? '/change-password' : from
+      nav(next, { replace: true })
     } catch (err) {
       setError(err.message || 'ล็อกอินไม่สำเร็จ')
     } finally {
@@ -106,8 +112,19 @@ export default function Login() {
           {loading ? 'กำลังเข้าสู่ระบบ…' : 'เข้าสู่ระบบ'}
         </button>
 
-        <div style={{ fontSize: 12, color: 'var(--c-text-3)', textAlign: 'center', marginTop: 6 }}>
-          Default: <code>admin / Admin12345</code> หรือ <code>viewer / User12345</code>
+        {/* TODO(production): ลบ block "default credentials" ทั้งก้อนนี้ก่อน deploy
+            — เปิดเผย default creds ในหน้า public ไม่ปลอดภัย */}
+        <div style={{
+          fontSize: 12, color: '#fbbf24',
+          background: 'rgba(251,191,36,0.10)',
+          border: '1px solid rgba(251,191,36,0.35)',
+          borderRadius: 8, padding: '10px 14px',
+          textAlign: 'center', lineHeight: 1.5,
+        }}>
+          ⚠ Dev only — ลบ block นี้ก่อน deploy production
+          <div style={{ marginTop: 4, color: 'var(--c-text-3)' }}>
+            Default: <code>admin / Admin12345</code> หรือ <code>viewer / User12345</code>
+          </div>
         </div>
       </form>
     </div>

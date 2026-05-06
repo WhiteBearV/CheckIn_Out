@@ -5,7 +5,7 @@ import { me, getToken, clearToken } from '../api/client'
 const AuthContext = createContext(null)
 
 export function AuthProvider({ children }) {
-  const [user,    setUser]    = useState(null)   // { username, role } | null
+  const [user,    setUser]    = useState(null)   // { username, role, must_change_password } | null
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -31,7 +31,10 @@ export function AuthProvider({ children }) {
     loading,
     isAdmin:  user?.role === 'admin',
     isViewer: user?.role === 'viewer',
+    mustChangePassword: !!user?.must_change_password,
     setUser,
+    // เรียกหลัง user เปลี่ยน password สำเร็จ — เคลียร์ flag
+    clearMustChange: () => setUser(u => u ? { ...u, must_change_password: false } : u),
     logout: () => {
       clearToken()
       setUser(null)
@@ -49,7 +52,7 @@ export function useAuth() {
 }
 
 export function RequireAuth({ children }) {
-  const { user, loading } = useAuth()
+  const { user, loading, mustChangePassword } = useAuth()
   const loc = useLocation()
 
   if (loading) {
@@ -61,5 +64,9 @@ export function RequireAuth({ children }) {
     )
   }
   if (!user) return <Navigate to="/login" replace state={{ from: loc.pathname }} />
+  // ถ้าต้องบังคับเปลี่ยนรหัส → ไป /change-password ก่อน (block ทุกหน้าอื่น)
+  if (mustChangePassword && loc.pathname !== '/change-password') {
+    return <Navigate to="/change-password" replace />
+  }
   return children
 }

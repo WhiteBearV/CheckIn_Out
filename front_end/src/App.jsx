@@ -9,6 +9,7 @@ import Dashboard from './pages/Dashboard'
 import History from './pages/History'
 import Report from './pages/Report'
 import Login from './pages/Login'
+import ChangePassword from './pages/ChangePassword'
 
 function Clock() {
   const [now, setNow] = useState(new Date())
@@ -107,6 +108,11 @@ export default function App() {
           <AuthProvider>
             <Routes>
               <Route path="/login" element={<Login />} />
+              {/* /change-password อยู่ใน RequireAuth (ต้อง login) แต่ไม่อยู่ใน Layout
+                  — ไม่แสดง sidebar เพราะคนยังต้องบังคับเปลี่ยนรหัสก่อนใช้ระบบ */}
+              <Route path="/change-password" element={
+                <RequireAuth><ChangePassword /></RequireAuth>
+              } />
               <Route path="/*" element={
                 <RequireAuth>
                   <Layout />

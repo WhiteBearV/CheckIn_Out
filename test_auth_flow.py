@@ -107,6 +107,29 @@ acao = r.headers.get('access-control-allow-origin')
 print(f"  ✓ CORS preflight disallowed origin → "
       f"{'BLOCKED (no ACAO)' if not acao else f'LEAK: {acao}'}")
 
+print("\n══ ทดสอบ must_change_password (Phase 1.4) ══\n")
+
+# /auth/login response ต้องมี must_change_password
+r = client.post('/auth/login', json={'username': 'admin', 'password': 'Admin12345'})
+assert r.status_code == 200
+data = r.json()
+assert 'must_change_password' in data, f"login response missing must_change_password: {data}"
+print(f"  ✓ /auth/login response includes must_change_password={data['must_change_password']}")
+
+# /auth/me ต้อง include must_change_password
+admin_token_v2 = data['token']
+r = client.get('/auth/me', headers={'Authorization': f'Bearer {admin_token_v2}'})
+assert r.status_code == 200
+assert 'must_change_password' in r.json(), f"/auth/me missing must_change_password: {r.json()}"
+print(f"  ✓ /auth/me response includes must_change_password={r.json()['must_change_password']}")
+
+# change-password ที่ส่ง newPw ซ้ำกับเดิม → 400
+r = client.post('/auth/change-password',
+                headers={'Authorization': f'Bearer {admin_token_v2}'},
+                json={'old_password': 'Admin12345', 'new_password': 'Admin12345'})
+assert r.status_code == 400, f"expected 400 (same pw), got {r.status_code}"
+print(f"  ✓ change-password new==old → 400: {r.json()['detail']}")
+
 print("\n══ ทดสอบ rate limit /auth/login (Phase 1.3) ══\n")
 
 # reset limiter — test ก่อนหน้าได้ login ไปหลายครั้งแล้ว
@@ -126,6 +149,14 @@ n_429 = sum(1 for c in codes if c == 429)
 assert n_401 == 5, f"expected 5×401 (under limit), got {codes}"
 assert n_429 == 1, f"expected 1×429 (limit exceeded on 6th), got {codes}"
 print(f"  ✓ /auth/login rate limit: 5×401 + 1×429 → {codes}")
+
+# 429 response ต้องเป็น Thai message ตาม custom handler
+r = client.post('/auth/login', json={'username': 'rl_test', 'password': 'wrong'})
+assert r.status_code == 429
+detail = r.json().get('detail', '')
+assert 'ใส่รหัสผิด' in detail and 'ลองใหม่' in detail, \
+    f"429 detail ไม่ใช่ Thai message: {detail!r}"
+print(f"  ✓ 429 detail: {detail}")
 
 # reset อีกครั้งก่อน test ต่อ — ไม่ให้กระทบ section อื่น
 stream_server.limiter.reset()

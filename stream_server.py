@@ -46,9 +46,9 @@ import cv2
 from dotenv import load_dotenv
 from fastapi import FastAPI, Body, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, Response
+from fastapi.responses import StreamingResponse, Response, JSONResponse
 from pydantic import BaseModel
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 import uvicorn
@@ -205,7 +205,38 @@ app = FastAPI(title="FaceReg", docs_url=None)
 # Rate limiter — กัน brute-force ที่ /auth/* (ดู @limiter.limit ที่ endpoint)
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> Response:
+    """แทน default handler ของ slowapi — คืนข้อความภาษาไทยพร้อมเวลาที่ต้องรอ
+    Frontend อ่านจาก response.json().detail (เหมือน 401/403 error อื่น ๆ)"""
+    # inject headers ก่อนเพื่อดึง Retry-After ที่ slowapi คำนวณให้
+    base = JSONResponse(status_code=429, content={})
+    base = limiter._inject_headers(base, request.state.view_rate_limit)
+    retry_s = int(base.headers.get("Retry-After", "60"))
+    wait_text = f"{retry_s} วินาที" if retry_s < 60 else f"{(retry_s + 59) // 60} นาที"
+
+    # อ่าน amount จาก rate-limit item (5 per minute → amount=5)
+    rate_info = request.state.view_rate_limit
+    item = rate_info[0] if isinstance(rate_info, tuple) else rate_info
+    amount = getattr(item, "amount", "?")
+
+    path = request.url.path
+    if path == "/auth/login":
+        detail = (f"คุณใส่รหัสผิด {amount} ครั้งติดต่อกัน "
+                  f"— กรุณาลองใหม่ในอีก {wait_text}")
+    elif path == "/auth/change-password":
+        detail = (f"ขอเปลี่ยนรหัสบ่อยเกินไป (เกิน {amount} ครั้ง/นาที) "
+                  f"— กรุณาลองใหม่ในอีก {wait_text}")
+    else:
+        detail = (f"ส่งคำขอเกินจำนวนที่กำหนด ({amount} ครั้ง) "
+                  f"— กรุณาลองใหม่ในอีก {wait_text}")
+
+    response = JSONResponse(status_code=429, content={"detail": detail})
+    return limiter._inject_headers(response, request.state.view_rate_limit)
+
+
+app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
 
 # CORS — อนุญาตเฉพาะ origin ที่ตั้งใน .env (default: localhost vite/preview)
 _cors_env = os.environ.get("CORS_ORIGINS", "http://localhost:5173,http://localhost:4173")
@@ -245,8 +276,14 @@ async def auth_login(request: Request, req: _LoginReq):
 
 @app.get('/auth/me')
 async def auth_me(user: dict = Depends(get_current_user)):
-    """ตรวจ token + คืน user info (frontend ใช้เช็คว่ายัง login อยู่)"""
-    return {"username": user["username"], "role": user["role"]}
+    """ตรวจ token + คืน user info (frontend ใช้เช็คว่ายัง login อยู่)
+    must_change_password อ่านจาก DB ทุกครั้ง (ไม่เก็บใน JWT — กัน stale state)"""
+    db_user = _auth._get_user_by_name(user["username"])
+    return {
+        "username":             user["username"],
+        "role":                 user["role"],
+        "must_change_password": bool(db_user["must_change_password"]) if db_user else False,
+    }
 
 
 @app.post('/auth/change-password')

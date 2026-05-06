@@ -80,7 +80,7 @@ def decode_token(token: str) -> dict:
 def _get_user_by_name(username: str) -> Optional[dict]:
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT id, username, password_hash, role, last_login "
+            "SELECT id, username, password_hash, role, last_login, must_change_password "
             "FROM users WHERE username = %s",
             (username,),
         )
@@ -88,11 +88,12 @@ def _get_user_by_name(username: str) -> Optional[dict]:
     if not row:
         return None
     return {
-        "id":            row[0],
-        "username":      row[1],
-        "password_hash": row[2],
-        "role":          row[3],
-        "last_login":    row[4],
+        "id":                    row[0],
+        "username":              row[1],
+        "password_hash":         row[2],
+        "role":                  row[3],
+        "last_login":            row[4],
+        "must_change_password":  bool(row[5]),
     }
 
 
@@ -103,19 +104,27 @@ def _touch_last_login(user_id: int) -> None:
 
 
 def login(username: str, password: str) -> dict:
-    """ตรวจ user/pass — คืน {token, username, role} ถ้าผ่าน, ไม่ผ่านโยน 401"""
+    """ตรวจ user/pass — คืน {token, username, role, must_change_password}
+    ถ้าผ่าน, ไม่ผ่านโยน 401"""
     user = _get_user_by_name(username)
     if not user or not verify_password(password, user["password_hash"]):
         # ข้อความเดียวกันทั้งสองกรณี — กัน user enumeration
         raise HTTPException(status_code=401, detail="username หรือ password ไม่ถูกต้อง")
     _touch_last_login(user["id"])
     token = create_token(user["id"], user["username"], user["role"])
-    return {"token": token, "username": user["username"], "role": user["role"]}
+    return {
+        "token":                token,
+        "username":             user["username"],
+        "role":                 user["role"],
+        "must_change_password": user["must_change_password"],
+    }
 
 
 def change_password(user_id: int, old_password: str, new_password: str) -> None:
     if len(new_password) < 6:
         raise HTTPException(status_code=400, detail="password อย่างน้อย 6 ตัวอักษร")
+    if old_password == new_password:
+        raise HTTPException(status_code=400, detail="password ใหม่ต้องไม่ซ้ำกับเดิม")
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute("SELECT password_hash FROM users WHERE id = %s", (user_id,))
         row = cur.fetchone()
@@ -124,19 +133,22 @@ def change_password(user_id: int, old_password: str, new_password: str) -> None:
         if not verify_password(old_password, row[0]):
             raise HTTPException(status_code=401, detail="password เดิมไม่ถูกต้อง")
         cur.execute(
-            "UPDATE users SET password_hash = %s WHERE id = %s",
+            "UPDATE users SET password_hash = %s, must_change_password = FALSE "
+            "WHERE id = %s",
             (hash_password(new_password), user_id),
         )
         conn.commit()
 
 
 def set_password(username: str, new_password: str) -> None:
-    """admin reset password — ไม่ต้องตรวจ password เดิม (ใช้จาก CLI)"""
+    """admin reset password — ไม่ต้องตรวจ password เดิม (ใช้จาก CLI)
+    set must_change_password=TRUE เพื่อบังคับให้ user เปลี่ยนหลัง login ครั้งถัดไป"""
     if len(new_password) < 6:
         raise ValueError("password อย่างน้อย 6 ตัวอักษร")
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
-            "UPDATE users SET password_hash = %s WHERE username = %s",
+            "UPDATE users SET password_hash = %s, must_change_password = TRUE "
+            "WHERE username = %s",
             (hash_password(new_password), username),
         )
         if cur.rowcount == 0:
@@ -145,13 +157,15 @@ def set_password(username: str, new_password: str) -> None:
 
 
 def add_user(username: str, password: str, role: str) -> None:
+    """สร้าง user ใหม่ — must_change_password=TRUE ทุกครั้ง (admin ต้องส่ง initial pw)"""
     if role not in ("admin", "viewer"):
         raise ValueError("role ต้องเป็น 'admin' หรือ 'viewer'")
     if len(password) < 6:
         raise ValueError("password อย่างน้อย 6 ตัวอักษร")
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO users (username, password_hash, role) VALUES (%s, %s, %s)",
+            "INSERT INTO users (username, password_hash, role, must_change_password) "
+            "VALUES (%s, %s, %s, TRUE)",
             (username, hash_password(password), role),
         )
         conn.commit()
@@ -168,20 +182,22 @@ def delete_user(username: str) -> None:
 def list_users() -> list:
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT id, username, role, created_at, last_login "
+            "SELECT id, username, role, created_at, last_login, must_change_password "
             "FROM users ORDER BY id"
         )
         rows = cur.fetchall()
     return [
         {"id": r[0], "username": r[1], "role": r[2],
-         "created_at": r[3].isoformat() if r[3] else None,
-         "last_login": r[4].isoformat() if r[4] else None}
+         "created_at":           r[3].isoformat() if r[3] else None,
+         "last_login":           r[4].isoformat() if r[4] else None,
+         "must_change_password": bool(r[5])}
         for r in rows
     ]
 
 
 def bootstrap_default_users() -> None:
-    """ตอน boot ถ้าตาราง users ว่าง → seed admin + viewer"""
+    """ตอน boot ถ้าตาราง users ว่าง → seed admin + viewer พร้อม must_change_password=TRUE
+    เพื่อบังคับให้เปลี่ยนรหัสตอน login ครั้งแรก"""
     try:
         with get_connection() as conn, conn.cursor() as cur:
             cur.execute("SELECT COUNT(*) FROM users")
@@ -190,12 +206,12 @@ def bootstrap_default_users() -> None:
                 return
             for username, password, role in _DEFAULT_USERS:
                 cur.execute(
-                    "INSERT INTO users (username, password_hash, role) "
-                    "VALUES (%s, %s, %s)",
+                    "INSERT INTO users (username, password_hash, role, must_change_password) "
+                    "VALUES (%s, %s, %s, TRUE)",
                     (username, hash_password(password), role),
                 )
             conn.commit()
-            print(f"[AUTH] seed default users: "
+            print(f"[AUTH] seed default users (must change password on first login): "
                   f"{', '.join(u for u, _, _ in _DEFAULT_USERS)}")
     except Exception as e:
         print(f"[AUTH] bootstrap failed: {e}")
