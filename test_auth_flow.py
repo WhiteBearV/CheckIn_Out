@@ -107,6 +107,59 @@ acao = r.headers.get('access-control-allow-origin')
 print(f"  ✓ CORS preflight disallowed origin → "
       f"{'BLOCKED (no ACAO)' if not acao else f'LEAK: {acao}'}")
 
+print("\n══ ทดสอบ stream_server image/state guards (Phase 1.2) ══\n")
+
+# ใช้ admin token ตัวล่าสุด (หลัง revert password)
+r2 = client.post('/auth/login', json={'username': 'admin', 'password': 'Admin12345'})
+admin_token = r2.json()['token']
+
+GUARDED_ENDPOINTS = [
+    ('GET',  '/cameras'),
+    ('GET',  '/cameras/config'),
+    ('GET',  '/state/cam1'),
+    ('GET',  '/snapshot/cam1'),
+    ('GET',  '/snap/cam1/test'),
+    ('GET',  '/snapfull/cam1/test'),
+    # /stream/cam1 และ /stream ใช้ MJPEG infinite generator → TestClient block
+    # → ทดสอบเฉพาะ no-token (ก่อน enter generator) ด้านล่างแยกต่างหาก
+    ('GET',  '/state'),
+    ('GET',  '/snapshot'),
+    ('GET',  '/status'),
+    ('GET',  '/snap/test'),
+    ('GET',  '/window'),
+    ('GET',  '/system/watchdog'),
+]
+
+for method, path in GUARDED_ENDPOINTS:
+    # 1. no-token → 401
+    r = client.request(method, path)
+    assert r.status_code == 401, f"{method} {path} expected 401, got {r.status_code}"
+    # 2. valid token → ไม่ใช่ 401 (อาจ 200, 404, 503 ก็ได้ — แค่ auth ผ่าน)
+    r = client.request(method, path, headers={'Authorization': f'Bearer {admin_token}'})
+    assert r.status_code != 401, f"{method} {path} with valid token got 401"
+    print(f"  ✓ {method} {path}: no-token=401, with-token={r.status_code}")
+
+# admin-only endpoint guard ที่เพิ่มใน Phase 1.2
+r = client.get('/admin')
+assert r.status_code == 401, f"GET /admin expected 401, got {r.status_code}"
+r = client.get('/admin', headers={'Authorization': f'Bearer {viewer_token}'})
+assert r.status_code == 403, f"GET /admin viewer expected 403, got {r.status_code}"
+r = client.get('/admin', headers={'Authorization': f'Bearer {admin_token}'})
+assert r.status_code == 200
+print(f"  ✓ GET /admin: no-token=401, viewer=403, admin=200")
+
+# /stream/cam1 และ /stream — ทดสอบเฉพาะ no-token (auth dep raise ก่อน enter MJPEG generator)
+r = client.get('/stream/cam1')
+assert r.status_code == 401, f"GET /stream/cam1 expected 401, got {r.status_code}"
+r = client.get('/stream')
+assert r.status_code == 401
+print(f"  ✓ GET /stream/cam1, /stream: no-token=401 (MJPEG guard works)")
+
+# /system/status ต้อง public (UI เช็คก่อน login)
+r = client.get('/system/status')
+assert r.status_code == 200
+print(f"  ✓ GET /system/status: public (200)")
+
 print("\n══ ทดสอบ api.py JWT migration (Phase 1.1) ══\n")
 
 import api as api_mod

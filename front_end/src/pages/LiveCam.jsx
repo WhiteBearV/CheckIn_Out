@@ -11,7 +11,7 @@ const STREAM_BASE = import.meta.env.DEV ? 'http://localhost:8001' : ''
 
 async function fetchCameras() {
   try {
-    const r = await fetch(`${STREAM_BASE}/cameras/config`, { signal: AbortSignal.timeout(3000) })
+    const r = await authFetch(`${STREAM_BASE}/cameras/config`, { signal: AbortSignal.timeout(3000) })
     if (!r.ok) return []
     const data = await r.json()
     return Array.isArray(data) ? data : (data.cameras || [])
@@ -20,7 +20,7 @@ async function fetchCameras() {
 
 async function fetchCamState(camId) {
   try {
-    const r = await fetch(`${STREAM_BASE}/state/${camId}`, {
+    const r = await authFetch(`${STREAM_BASE}/state/${camId}`, {
       cache: 'no-store', signal: AbortSignal.timeout(1500),
     })
     if (!r.ok) return null
@@ -99,7 +99,7 @@ function CamStream({ camId, style, className }) {
     ;(async () => {
       while (aliveRef.current) {
         try {
-          const r = await fetch(
+          const r = await authFetch(
             `${STREAM_BASE}/snapshot/${camId}?_=${Date.now()}`,
             { signal: AbortSignal.timeout(1200), cache: 'no-store' }
           )

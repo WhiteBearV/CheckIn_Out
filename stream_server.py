@@ -267,7 +267,7 @@ async def _mjpeg_gen(cam_id: str):
 
 # ─── Per-camera endpoints ─────────────────────────────────────────────────────
 
-@app.get('/cameras')
+@app.get('/cameras', dependencies=[Depends(get_current_user)])
 async def cameras_list():
     """List camera IDs (in-memory buffer)"""
     with _lock:
@@ -290,9 +290,10 @@ async def activate_cam(cam_id: str):
 
 # ─── Camera Config CRUD ───────────────────────────────────────────────────────
 
-@app.get('/cameras/config')
+@app.get('/cameras/config', dependencies=[Depends(get_current_user)])
 async def get_cameras_config():
-    """รายการกล้องทั้งหมดจาก cameras.json (รวมสถานะ active, URL masked)"""
+    """รายการกล้องทั้งหมดจาก cameras.json (รวมสถานะ active, URL masked)
+    เปิดให้ viewer ดูได้เพราะ response ไม่ leak credentials (URL masked แล้ว)"""
     configs = _load_cam_configs()
     with _lock:
         active_ids = set(_cam_frames.keys())
@@ -405,7 +406,7 @@ async def delete_camera(cam_id: str):
     return {"success": True, "deleted": cam_id}
 
 
-@app.get('/admin', response_class=Response)
+@app.get('/admin', response_class=Response, dependencies=[Depends(require_admin)])
 async def admin_page():
     """หน้า GUI จัดการกล้อง — http://localhost:8001/admin"""
     html = r"""<!DOCTYPE html>
@@ -756,7 +757,7 @@ loadCameras()
     return Response(content=html, media_type="text/html; charset=utf-8")
 
 
-@app.get('/stream/{cam_id}')
+@app.get('/stream/{cam_id}', dependencies=[Depends(get_current_user)])
 async def stream_cam(cam_id: str):
     return StreamingResponse(
         _hybrid_mjpeg_gen(cam_id),
@@ -764,7 +765,7 @@ async def stream_cam(cam_id: str):
     )
 
 
-@app.get('/snapshot/{cam_id}')
+@app.get('/snapshot/{cam_id}', dependencies=[Depends(get_current_user)])
 async def snapshot_cam(cam_id: str):
     with _lock:
         jpeg = _cam_frames.get(cam_id)
@@ -773,14 +774,14 @@ async def snapshot_cam(cam_id: str):
     return Response(content=jpeg, media_type='image/jpeg')
 
 
-@app.get('/state/{cam_id}')
+@app.get('/state/{cam_id}', dependencies=[Depends(get_current_user)])
 async def state_cam(cam_id: str):
     with _lock:
         s = dict(_cam_states.get(cam_id, {}))
     return s
 
 
-@app.get('/snap/{cam_id}/{name}')
+@app.get('/snap/{cam_id}/{name}', dependencies=[Depends(get_current_user)])
 async def snap_person_cam(cam_id: str, name: str):
     with _lock:
         jpeg = _cam_snaps.get(cam_id, {}).get(name)
@@ -790,7 +791,7 @@ async def snap_person_cam(cam_id: str, name: str):
                     headers={'Cache-Control': 'no-store'})
 
 
-@app.get('/snapfull/{cam_id}/{name}')
+@app.get('/snapfull/{cam_id}/{name}', dependencies=[Depends(get_current_user)])
 async def snapfull_person_cam(cam_id: str, name: str):
     with _lock:
         jpeg = _cam_snaps_full.get(cam_id, {}).get(name)
@@ -802,6 +803,8 @@ async def snapfull_person_cam(cam_id: str, name: str):
 
 # ─── Push endpoints (headless main.py → stream_server in-memory cache) ────────
 # ใช้แทนการเขียนไฟล์ live_frame / live_state / live_snap / live_snapfull
+# TODO(security): /push/* ยังไม่ guard — ถ้า bind 0.0.0.0 จะเปิดให้ใครใน LAN
+# push frame ปลอมได้ ควรเพิ่ม INTERNAL_PUSH_TOKEN (.env) + ตรวจใน header
 @app.post('/push/frame/{cam_id}')
 async def push_frame_endpoint(cam_id: str, request: Request):
     body = await request.body()
@@ -1033,7 +1036,7 @@ def _watchdog_start():
     _watchdog_thread.start()
 
 
-@app.get('/system/watchdog')
+@app.get('/system/watchdog', dependencies=[Depends(get_current_user)])
 async def system_watchdog_status():
     """ดูสถานะ watchdog + restart history"""
     now = time.time()
@@ -1182,7 +1185,7 @@ async def cameras_reload():
 
 # ─── Legacy single-cam endpoints (→ cam1) ────────────────────────────────────
 
-@app.get('/stream')
+@app.get('/stream', dependencies=[Depends(get_current_user)])
 async def stream():
     return StreamingResponse(
         _mjpeg_gen(_active_cam),
@@ -1190,7 +1193,7 @@ async def stream():
     )
 
 
-@app.get('/snapshot')
+@app.get('/snapshot', dependencies=[Depends(get_current_user)])
 async def snapshot():
     with _lock:
         jpeg = _cam_frames.get(_active_cam)
@@ -1199,7 +1202,7 @@ async def snapshot():
     return Response(content=jpeg, media_type='image/jpeg')
 
 
-@app.get('/status')
+@app.get('/status', dependencies=[Depends(get_current_user)])
 async def status():
     with _lock:
         jpeg  = _cam_frames.get(_active_cam)
@@ -1207,14 +1210,14 @@ async def status():
     return {"ready": jpeg is not None, "frames_pushed": count}
 
 
-@app.get('/state')
+@app.get('/state', dependencies=[Depends(get_current_user)])
 async def state_endpoint():
     with _lock:
         s = dict(_cam_states.get(_active_cam, {}))
     return s
 
 
-@app.get('/snap/{name}')
+@app.get('/snap/{name}', dependencies=[Depends(get_current_user)])
 async def snap_person(name: str):
     with _lock:
         jpeg = _cam_snaps.get(_active_cam, {}).get(name)
@@ -1223,7 +1226,7 @@ async def snap_person(name: str):
     return Response(content=jpeg, media_type='image/jpeg')
 
 
-@app.get('/window')
+@app.get('/window', dependencies=[Depends(get_current_user)])
 async def window_get():
     return {"show_window": _cv_window}
 

@@ -3,6 +3,7 @@ import { useMemo, useState, useEffect, useCallback, useRef } from 'react'
 import StatCard from '../components/StatCard'
 import AttendanceTable from '../components/AttendanceTable'
 import { fetchAttendanceToday, fetchPerson } from '../api/attendance'
+import { authFetch } from '../api/client'
 import { maskPid } from '../utils/pid'
 
 const REFRESH_INTERVAL  = 30_000
@@ -53,7 +54,7 @@ function elapsedSec(timeStr) {
 
 async function fetchActiveCams() {
   try {
-    const r = await fetch(`${STREAM_BASE}/cameras`, { signal: AbortSignal.timeout(2000) })
+    const r = await authFetch(`${STREAM_BASE}/cameras`, { signal: AbortSignal.timeout(2000) })
     if (!r.ok) return []
     const d = await r.json()
     return d.cameras || []
@@ -62,7 +63,7 @@ async function fetchActiveCams() {
 
 async function fetchCamConfigs() {
   try {
-    const r = await fetch(`${STREAM_BASE}/cameras/config`, { signal: AbortSignal.timeout(2000) })
+    const r = await authFetch(`${STREAM_BASE}/cameras/config`, { signal: AbortSignal.timeout(2000) })
     if (!r.ok) return []
     const d = await r.json()
     return (Array.isArray(d) ? d : d.cameras || [])
@@ -71,7 +72,7 @@ async function fetchCamConfigs() {
 
 async function fetchCamState(camId) {
   try {
-    const r = await fetch(`${STREAM_BASE}/state/${camId}`, {
+    const r = await authFetch(`${STREAM_BASE}/state/${camId}`, {
       cache: 'no-store', signal: AbortSignal.timeout(1500),
     })
     if (!r.ok) return null
@@ -185,11 +186,41 @@ function DeptChart({ depts, total }) {
 // ─── FaceModal ─────────────────────────────────────────────────────────────────
 
 function FaceModal({ src, name, organize, posname, onClose }) {
+  // โหลด blob ถ้า src ชี้ไปยัง stream_server (guarded endpoint) — ไม่งั้น render ตรง
+  // (photoUrl จาก external API ใช้ src ตรงได้, /snap & /snapfull ต้องผ่าน authFetch)
+  const [displaySrc, setDisplaySrc] = useState(src)
+
   useEffect(() => {
     const onKey = e => { if (e.key === 'Escape') onClose() }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
+
+  useEffect(() => {
+    let cancelled = false
+    let blobObjUrl = ''
+    setDisplaySrc(src)
+
+    // heuristic: URL ที่ต้องผ่าน authFetch = STREAM_BASE หรือ relative path เริ่ม /snap, /snapfull
+    const needsAuth = src.startsWith(STREAM_BASE) && !src.startsWith('blob:')
+    if (!needsAuth) return
+
+    ;(async () => {
+      try {
+        const r = await authFetch(src, { signal: AbortSignal.timeout(5000) })
+        if (!r.ok || cancelled) return
+        const blob = await r.blob()
+        if (cancelled) return
+        blobObjUrl = URL.createObjectURL(blob)
+        setDisplaySrc(blobObjUrl)
+      } catch {}
+    })()
+
+    return () => {
+      cancelled = true
+      if (blobObjUrl) URL.revokeObjectURL(blobObjUrl)
+    }
+  }, [src])
 
   return (
     <div
@@ -202,7 +233,7 @@ function FaceModal({ src, name, organize, posname, onClose }) {
         onClick={e => e.stopPropagation()}
       >
         <img
-          src={src}
+          src={displaySrc}
           alt={name}
           className="rounded-lg object-cover"
           style={{ maxWidth: '80vw', maxHeight: '70vh', border: '2px solid var(--c-border)' }}
@@ -242,20 +273,56 @@ function FaceModal({ src, name, organize, posname, onClose }) {
 
 // shape: 'square' = สี่เหลี่ยมเต็ม (ใช้ /snapfull/), 'circle' = วงกลม (ใช้ /snap/)
 // cacheBust: ตัวเลขที่เปลี่ยนทุก N วิ → บังคับ browser โหลดรูปใหม่
+// โหลดผ่าน authFetch + blob เพราะ /snap, /snapfull guard ด้วย JWT (ใส่ Authorization header ใน <img> ไม่ได้)
 function FaceSnap({ perId, displayName, activeCams, size = 32, shape = 'circle', onClick, cacheBust = 0 }) {
-  const [idx, setIdx] = useState(0)
+  const [blobUrl, setBlobUrl] = useState('')
+  const [rawUrl,  setRawUrl]  = useState('')   // URL ดิบ — ส่งให้ FaceModal โหลด blob เอง
+  const [exhausted, setExhausted] = useState(false)
   const isSquare = shape === 'square'
-  const endpoint = isSquare ? 'snapfull' : 'snap'  // square = full frame, circle = face crop
-  const srcs = activeCams.map(id =>
-    `${STREAM_BASE}/${endpoint}/${id}/${encodeURIComponent(perId)}?t=${cacheBust}`
-  )
+  const endpoint = isSquare ? 'snapfull' : 'snap'
   // initial fallback — perId อาจเป็น masked ("*********6666") → first char = "*"
   // จึงใช้ displayName ก่อน (ชื่อจริง) ถ้าไม่มีค่อย fall ไป perId
   const initSrc = displayName?.trim() || perId
   const initial = (initSrc[0] || '?').toUpperCase()
 
-  // reset idx เมื่อ cacheBust เปลี่ยน (รูปใหม่)
-  useEffect(() => { setIdx(0) }, [cacheBust, perId])
+  const camsKey = activeCams.join(',')
+
+  // โหลด blob ทีละ cam จนเจอ — replace <img onError> chain pattern เดิม
+  useEffect(() => {
+    let cancelled = false
+    let cleanup   = ''
+
+    const tryCam = async (idx) => {
+      if (cancelled || idx >= activeCams.length) {
+        if (!cancelled) setExhausted(true)
+        return
+      }
+      const camId = activeCams[idx]
+      const url   = `${STREAM_BASE}/${endpoint}/${camId}/${encodeURIComponent(perId)}?t=${cacheBust}`
+      try {
+        const r = await authFetch(url, { signal: AbortSignal.timeout(3000) })
+        if (!r.ok)        return tryCam(idx + 1)
+        const blob   = await r.blob()
+        if (cancelled)    return
+        const objUrl = URL.createObjectURL(blob)
+        cleanup = objUrl
+        setBlobUrl(objUrl)
+        setRawUrl(url)
+      } catch {
+        if (!cancelled) tryCam(idx + 1)
+      }
+    }
+
+    setBlobUrl('')
+    setRawUrl('')
+    setExhausted(false)
+    tryCam(0)
+
+    return () => {
+      cancelled = true
+      if (cleanup) URL.revokeObjectURL(cleanup)
+    }
+  }, [camsKey, perId, cacheBust, endpoint])
 
   const placeholder = (
     <div
@@ -275,12 +342,11 @@ function FaceSnap({ perId, displayName, activeCams, size = 32, shape = 'circle',
     </div>
   )
 
-  if (!srcs.length || idx >= srcs.length) return placeholder
+  if (!blobUrl || exhausted) return placeholder
 
   return (
     <img
-      key={srcs[idx]}
-      src={srcs[idx]}
+      src={blobUrl}
       alt=""
       className="object-cover flex-shrink-0"
       style={{
@@ -290,8 +356,7 @@ function FaceSnap({ perId, displayName, activeCams, size = 32, shape = 'circle',
         border:       '1px solid var(--c-border)',
         cursor:       onClick ? 'zoom-in' : 'default',
       }}
-      onError={() => setIdx(i => i + 1)}
-      onClick={() => onClick?.(srcs[idx])}
+      onClick={() => onClick?.(rawUrl)}
     />
   )
 }
