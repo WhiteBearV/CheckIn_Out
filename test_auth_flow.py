@@ -214,6 +214,50 @@ r = client.get('/system/status')
 assert r.status_code == 200
 print(f"  ✓ GET /system/status: public (200)")
 
+print("\n══ ทดสอบ audit log (Phase 1.5) ══\n")
+
+# /audit/logs guard
+r = client.get('/audit/logs')
+assert r.status_code == 401
+print(f"  ✓ GET /audit/logs no-token → 401")
+
+r = client.get('/audit/logs', headers={'Authorization': f'Bearer {viewer_token}'})
+assert r.status_code == 403
+print(f"  ✓ GET /audit/logs viewer → 403")
+
+# trigger event ใหม่ (cache/clear) แล้วเช็คว่า audit row โผล่
+import audit as _audit_mod
+before = _audit_mod.fetch(limit=1, action="system.cache_clear")
+client.post('/cache/clear', headers={'Authorization': f'Bearer {admin_token}'})
+after  = _audit_mod.fetch(limit=1, action="system.cache_clear")
+if not after:
+    print("  ⚠ audit_logs ว่าง — ยังไม่ได้รัน migrate_v16_audit_logs.sql ?")
+else:
+    assert after and (not before or after[0]['id'] != before[0]['id']), \
+        "expected new system.cache_clear row in audit_logs"
+    row = after[0]
+    assert row['username'] == 'admin'
+    assert row['success'] is True
+    print(f"  ✓ system.cache_clear logged: id={row['id']}, ip={row['ip']}, "
+          f"details={row['details']}")
+
+# /audit/logs admin → 200 + structure ถูก
+r = client.get('/audit/logs?limit=5',
+               headers={'Authorization': f'Bearer {admin_token}'})
+assert r.status_code == 200
+data = r.json()
+assert 'logs' in data and 'count' in data
+print(f"  ✓ GET /audit/logs admin → 200, count={data['count']}")
+
+# auth.login.success / auth.login.fail logged
+r = client.post('/auth/login', json={'username': 'admin', 'password': 'wrong-pw'})
+assert r.status_code == 401
+fail_logs = _audit_mod.fetch(limit=1, action="auth.login.fail")
+if fail_logs:
+    print(f"  ✓ auth.login.fail logged for username={fail_logs[0]['username']}")
+else:
+    print("  ⚠ auth.login.fail ไม่ปรากฏใน audit_logs")
+
 print("\n══ ทดสอบ api.py JWT migration (Phase 1.1) ══\n")
 
 import api as api_mod

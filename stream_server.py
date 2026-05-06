@@ -56,6 +56,7 @@ import uvicorn
 load_dotenv()
 
 import auth as _auth
+import audit as _audit
 
 # ─── cameras.json path ────────────────────────────────────────────────────────
 _CAMERAS_JSON = Path(__file__).parent / "cameras.json"
@@ -271,7 +272,20 @@ class _ChangePwReq(BaseModel):
 @limiter.limit("5/minute")        # กัน brute-force — 5 ครั้ง/นาที/IP
 async def auth_login(request: Request, req: _LoginReq):
     """username/password → JWT token (exp 8h default)"""
-    return _auth.login(req.username, req.password)
+    try:
+        result = _auth.login(req.username, req.password)
+    except Exception:
+        # log failure (ใช้ username ที่ผู้ใช้ส่งมา — ไม่ verify ว่ามีจริงเพื่อกันรั่ว)
+        _audit.log("auth.login.fail",
+                   user={"username": req.username},
+                   request=request, success=False)
+        raise
+    _audit.log("auth.login.success",
+               user={"username": result["username"]},
+               request=request,
+               role=result["role"],
+               must_change_password=result["must_change_password"])
+    return result
 
 
 @app.get('/auth/me')
@@ -290,8 +304,34 @@ async def auth_me(user: dict = Depends(get_current_user)):
 @limiter.limit("10/minute")       # ผ่าน auth แล้ว แต่ยัง limit กัน password guessing
 async def auth_change_password(request: Request, req: _ChangePwReq,
                                user: dict = Depends(get_current_user)):
-    _auth.change_password(user["id"], req.old_password, req.new_password)
+    try:
+        _auth.change_password(user["id"], req.old_password, req.new_password)
+    except Exception:
+        _audit.log("auth.password.change", user=user, request=request, success=False)
+        raise
+    _audit.log("auth.password.change", user=user, request=request)
     return {"success": True}
+
+
+# ─── Audit log query (admin only) ────────────────────────────────────────────
+
+@app.get('/audit/logs')
+async def get_audit_logs(
+    limit:    int           = 100,
+    offset:   int           = 0,
+    action:   Optional[str] = None,
+    user_id:  Optional[int] = None,
+    since:    Optional[str] = None,    # 'YYYY-MM-DD'
+    until:    Optional[str] = None,
+    success:  Optional[bool] = None,
+    _admin:   dict          = Depends(require_admin),
+):
+    """ดู audit log — admin only, ค่า default คืน 100 แถวล่าสุด"""
+    limit = max(1, min(limit, 500))   # cap 500/page
+    rows = _audit.fetch(limit=limit, offset=offset, action=action,
+                        user_id=user_id, since=since, until=until,
+                        success=success)
+    return {"limit": limit, "offset": offset, "count": len(rows), "logs": rows}
 
 
 async def _mjpeg_gen(cam_id: str):
@@ -322,8 +362,9 @@ async def cameras_list():
     return {"cameras": sorted(ids), "active": _active_cam}
 
 
-@app.post('/cameras/{cam_id}/activate', dependencies=[Depends(require_admin)])
-async def activate_cam(cam_id: str):
+@app.post('/cameras/{cam_id}/activate')
+async def activate_cam(cam_id: str, request: Request,
+                       user: dict = Depends(require_admin)):
     """เปลี่ยนกล้อง active สำหรับ legacy endpoints"""
     global _active_cam
     with _lock:
@@ -332,6 +373,7 @@ async def activate_cam(cam_id: str):
         return Response(status_code=404, content=f"cam_id '{cam_id}' ไม่พบ")
     _active_cam = cam_id
     print(f'[STREAM] Active cam → {cam_id}')
+    _audit.log("camera.activate", user=user, target=cam_id, request=request)
     return {"active": _active_cam}
 
 
@@ -384,8 +426,9 @@ def _check_dup(configs: list, req: CameraConfigRequest, exclude_id: str = "") ->
     return ""
 
 
-@app.post('/cameras/config', dependencies=[Depends(require_admin)])
-async def add_camera(req: CameraConfigRequest):
+@app.post('/cameras/config')
+async def add_camera(req: CameraConfigRequest, request: Request,
+                     user: dict = Depends(require_admin)):
     """เพิ่มกล้องใหม่ — ID เรียงต่ออัตโนมัติ (cam1, cam2, ...)"""
     if not req.name.strip():
         return Response(status_code=400, content="ต้องระบุชื่อกล้อง")
@@ -409,11 +452,14 @@ async def add_camera(req: CameraConfigRequest):
     configs.append(new_cam)
     _save_cam_configs(configs)
     print(f"[CAM_MGR] เพิ่มกล้อง {cam_id} ({req.name})")
+    _audit.log("camera.create", user=user, target=cam_id, request=request,
+               name=req.name.strip(), cam_type=req.cam_type, flip=req.flip)
     return {"success": True, "camera": new_cam}
 
 
-@app.put('/cameras/config/{cam_id}', dependencies=[Depends(require_admin)])
-async def update_camera(cam_id: str, req: CameraConfigRequest):
+@app.put('/cameras/config/{cam_id}')
+async def update_camera(cam_id: str, req: CameraConfigRequest, request: Request,
+                        user: dict = Depends(require_admin)):
     """แก้ไข config กล้อง — ต้อง restart ระบบเพื่อให้มีผล"""
     if not req.name.strip():
         return Response(status_code=400, content="ต้องระบุชื่อกล้อง")
@@ -436,20 +482,26 @@ async def update_camera(cam_id: str, req: CameraConfigRequest):
             configs[i] = updated
             _save_cam_configs(configs)
             print(f"[CAM_MGR] แก้ไขกล้อง {cam_id}")
+            _audit.log("camera.update", user=user, target=cam_id, request=request,
+                       name=req.name.strip(), cam_type=req.cam_type, flip=req.flip)
             return {"success": True, "camera": updated}
 
     return Response(status_code=404, content=f"cam_id '{cam_id}' ไม่พบ")
 
 
-@app.delete('/cameras/config/{cam_id}', dependencies=[Depends(require_admin)])
-async def delete_camera(cam_id: str):
+@app.delete('/cameras/config/{cam_id}')
+async def delete_camera(cam_id: str, request: Request,
+                        user: dict = Depends(require_admin)):
     """ลบกล้องออกจาก cameras.json — ต้อง restart ระบบเพื่อให้มีผล"""
     configs = _load_cam_configs()
+    prev = next((c for c in configs if c.get("id") == cam_id), None)
     new_configs = [c for c in configs if c.get("id") != cam_id]
     if len(new_configs) == len(configs):
         return Response(status_code=404, content=f"cam_id '{cam_id}' ไม่พบ")
     _save_cam_configs(new_configs)
     print(f"[CAM_MGR] ลบกล้อง {cam_id}")
+    _audit.log("camera.delete", user=user, target=cam_id, request=request,
+               prev_name=(prev or {}).get("name"))
     return {"success": True, "deleted": cam_id}
 
 
@@ -902,8 +954,8 @@ async def push_snapfull_endpoint(cam_id: str, name: str, request: Request):
 
 # ─── Cache & System control ───────────────────────────────────────────────────
 
-@app.post('/cache/clear', dependencies=[Depends(require_admin)])
-async def cache_clear():
+@app.post('/cache/clear')
+async def cache_clear(request: Request, user: dict = Depends(require_admin)):
     """ล้าง snapshot buffer ใน RAM (snap/snapfull เก็บ in-memory ทั้งหมดแล้ว)
     เก็บกวาดไฟล์ live_snap_*.jpg ที่อาจตกค้างจาก version เก่าด้วย"""
     with _lock:
@@ -917,6 +969,8 @@ async def cache_clear():
                 legacy_deleted += 1
             except OSError:
                 pass
+    _audit.log("system.cache_clear", user=user, request=request,
+               legacy_files_deleted=legacy_deleted)
     return {'cleared': True, 'legacy_files_deleted': legacy_deleted}
 
 
@@ -1120,11 +1174,12 @@ async def system_status():
             'api':  _proc_alive('api') or _api_alive()}
 
 
-@app.post('/system/start', dependencies=[Depends(require_admin)])
-async def system_start():
+@app.post('/system/start')
+async def system_start(request: Request, user: dict = Depends(require_admin)):
     """Start face recognition (subprocess FACE_HEADLESS) + api.py"""
     global _user_intent_started
     _user_intent_started = True
+    _audit.log("system.start", user=user, request=request)
     # user สั่ง start ใหม่ → reset watchdog disable + restart counter
     _proc_disabled.clear()
     for k in _proc_restart_log:
@@ -1163,11 +1218,12 @@ async def system_start():
     return result
 
 
-@app.post('/system/stop', dependencies=[Depends(require_admin)])
-async def system_stop():
+@app.post('/system/stop')
+async def system_stop(request: Request, user: dict = Depends(require_admin)):
     """Stop face recognition + api.py (graceful shutdown → save PicSAVE)"""
     global _user_intent_started
     _user_intent_started = False
+    _audit.log("system.stop", user=user, request=request)
     result = {}
 
     # หยุด face recognition
@@ -1216,8 +1272,8 @@ async def system_stop():
     return result
 
 
-@app.post('/cameras/reload', dependencies=[Depends(require_admin)])
-async def cameras_reload():
+@app.post('/cameras/reload')
+async def cameras_reload(request: Request, user: dict = Depends(require_admin)):
     """Hotload กล้องที่เพิ่งเพิ่มใหม่ใน cameras.json โดยไม่ต้อง restart ระบบ
     (เหมือนกดปุ่ม R ที่หลังบ้าน — spawn thread ให้เฉพาะกล้องใหม่)"""
     if _start_fn is None:
@@ -1225,8 +1281,10 @@ async def cameras_reload():
     try:
         import asyncio as _aio
         result = await _aio.to_thread(_start_fn)
+        _audit.log("camera.reload", user=user, request=request)
         return {'reloaded': True, 'msg': 'reload สำเร็จ'}
     except Exception as e:
+        _audit.log("camera.reload", user=user, request=request, success=False, error=str(e))
         return {'reloaded': False, 'msg': str(e)}
 
 
@@ -1278,11 +1336,13 @@ async def window_get():
     return {"show_window": _cv_window}
 
 
-@app.post('/window', dependencies=[Depends(require_admin)])
-async def window_toggle():
+@app.post('/window')
+async def window_toggle(request: Request, user: dict = Depends(require_admin)):
     global _cv_window
     _cv_window = not _cv_window
     print(f'[STREAM] OpenCV window → {"ON" if _cv_window else "OFF"}')
+    _audit.log("system.window_toggle", user=user, request=request,
+               new_state="ON" if _cv_window else "OFF")
     return {"show_window": _cv_window}
 
 

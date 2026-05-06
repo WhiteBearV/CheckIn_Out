@@ -18,7 +18,7 @@ Endpoints:
 
 import os
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query, Depends, Header
+from fastapi import FastAPI, HTTPException, Query, Depends, Header, Request
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, date
@@ -27,6 +27,7 @@ from db import get_connection
 load_dotenv()
 
 import auth as _auth   # ต้อง import หลัง load_dotenv (auth อ่าน JWT_SECRET ตอน import time)
+import audit as _audit
 
 app = FastAPI(title="Face Attendance API", version="2.1.0")
 
@@ -263,8 +264,9 @@ def attendance_by_person(
     ]
 
 
-@app.put("/attendance/{log_id}", dependencies=[Depends(_require_admin)])
-def update_attendance(log_id: int, req: AttendanceUpdateRequest):
+@app.put("/attendance/{log_id}")
+def update_attendance(log_id: int, req: AttendanceUpdateRequest, request: Request,
+                      user: dict = Depends(_require_admin)):
     """แก้ไข record ลงเวลา — ส่งเฉพาะ field ที่ต้องการเปลี่ยน"""
     if req.status and req.status not in ("IN", "OUT"):
         raise HTTPException(status_code=400, detail="status ต้องเป็น 'IN' หรือ 'OUT'")
@@ -286,11 +288,14 @@ def update_attendance(log_id: int, req: AttendanceUpdateRequest):
                 raise HTTPException(status_code=404, detail="Attendance record not found")
         conn.commit()
 
+    _audit.log("attendance.update", user=user, target=f"log_id={log_id}",
+               request=request, fields=list(fields.keys()))
     return {"success": True, "id": log_id, "updated": fields}
 
 
-@app.delete("/attendance/{log_id}", dependencies=[Depends(_require_admin)])
-def delete_attendance(log_id: int):
+@app.delete("/attendance/{log_id}")
+def delete_attendance(log_id: int, request: Request,
+                      user: dict = Depends(_require_admin)):
     """ลบ record ลงเวลา (ลบถาวร)"""
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -299,6 +304,8 @@ def delete_attendance(log_id: int):
                 raise HTTPException(status_code=404, detail="Attendance record not found")
         conn.commit()
 
+    _audit.log("attendance.delete", user=user, target=f"log_id={log_id}",
+               request=request)
     return {"success": True, "id": log_id}
 
 
