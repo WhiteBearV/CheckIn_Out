@@ -48,6 +48,9 @@ from fastapi import FastAPI, Body, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response
 from pydantic import BaseModel
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 import uvicorn
 
 load_dotenv()
@@ -199,6 +202,11 @@ def set_active_cam(cam_id: str):
 # ─── FastAPI app ──────────────────────────────────────────────────────────────
 app = FastAPI(title="FaceReg", docs_url=None)
 
+# Rate limiter — กัน brute-force ที่ /auth/* (ดู @limiter.limit ที่ endpoint)
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 # CORS — อนุญาตเฉพาะ origin ที่ตั้งใน .env (default: localhost vite/preview)
 _cors_env = os.environ.get("CORS_ORIGINS", "http://localhost:5173,http://localhost:4173")
 _cors_origins = [o.strip() for o in _cors_env.split(",") if o.strip()]
@@ -229,7 +237,8 @@ class _ChangePwReq(BaseModel):
 
 
 @app.post('/auth/login')
-async def auth_login(req: _LoginReq):
+@limiter.limit("5/minute")        # กัน brute-force — 5 ครั้ง/นาที/IP
+async def auth_login(request: Request, req: _LoginReq):
     """username/password → JWT token (exp 8h default)"""
     return _auth.login(req.username, req.password)
 
@@ -241,7 +250,8 @@ async def auth_me(user: dict = Depends(get_current_user)):
 
 
 @app.post('/auth/change-password')
-async def auth_change_password(req: _ChangePwReq,
+@limiter.limit("10/minute")       # ผ่าน auth แล้ว แต่ยัง limit กัน password guessing
+async def auth_change_password(request: Request, req: _ChangePwReq,
                                user: dict = Depends(get_current_user)):
     _auth.change_password(user["id"], req.old_password, req.new_password)
     return {"success": True}

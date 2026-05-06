@@ -107,6 +107,29 @@ acao = r.headers.get('access-control-allow-origin')
 print(f"  ✓ CORS preflight disallowed origin → "
       f"{'BLOCKED (no ACAO)' if not acao else f'LEAK: {acao}'}")
 
+print("\n══ ทดสอบ rate limit /auth/login (Phase 1.3) ══\n")
+
+# reset limiter — test ก่อนหน้าได้ login ไปหลายครั้งแล้ว
+try:
+    stream_server.limiter.reset()
+except Exception as e:
+    print(f"  ⚠ limiter.reset() failed: {e}")
+
+# ส่ง login ผิด 6 ครั้ง — 5 แรกควร 401, ครั้งที่ 6+ ควร 429
+codes = []
+for i in range(6):
+    r = client.post('/auth/login', json={'username': 'rl_test', 'password': 'wrong'})
+    codes.append(r.status_code)
+
+n_401 = sum(1 for c in codes if c == 401)
+n_429 = sum(1 for c in codes if c == 429)
+assert n_401 == 5, f"expected 5×401 (under limit), got {codes}"
+assert n_429 == 1, f"expected 1×429 (limit exceeded on 6th), got {codes}"
+print(f"  ✓ /auth/login rate limit: 5×401 + 1×429 → {codes}")
+
+# reset อีกครั้งก่อน test ต่อ — ไม่ให้กระทบ section อื่น
+stream_server.limiter.reset()
+
 print("\n══ ทดสอบ stream_server image/state guards (Phase 1.2) ══\n")
 
 # ใช้ admin token ตัวล่าสุด (หลัง revert password)
