@@ -26,13 +26,34 @@ from db import get_connection
 
 load_dotenv()
 
-app = FastAPI(title="Face Attendance API", version="2.0.0")
+import auth as _auth   # ต้อง import หลัง load_dotenv (auth อ่าน JWT_SECRET ตอน import time)
+
+app = FastAPI(title="Face Attendance API", version="2.1.0")
 
 _ADMIN_KEY = os.environ.get("ADMIN_API_KEY", "")
 
-def _require_admin(x_admin_key: str = Header(...)):
-    if not _ADMIN_KEY or x_admin_key != _ADMIN_KEY:
-        raise HTTPException(status_code=403, detail="Forbidden")
+
+def _require_admin(
+    authorization: Optional[str] = Header(None),
+    x_admin_key:   Optional[str] = Header(None),
+) -> dict:
+    """Admin guard — รับได้ทั้ง 2 ทาง:
+      1. Authorization: Bearer <JWT>  (role=admin)        — แนะนำ
+      2. X-Admin-Key: <ADMIN_API_KEY>                     — legacy fallback
+    """
+    if authorization:
+        user = _auth.get_current_user(authorization)
+        if user.get("role") != "admin":
+            raise HTTPException(status_code=403, detail="admin เท่านั้น")
+        return user
+
+    if _ADMIN_KEY and x_admin_key == _ADMIN_KEY:
+        return {"id": 0, "username": "legacy_admin_key", "role": "admin"}
+
+    raise HTTPException(
+        status_code=401,
+        detail="ต้องส่ง Authorization: Bearer <token> หรือ X-Admin-Key",
+    )
 
 
 # ─── Schemas ────────────────────────────────────────────────────────────────

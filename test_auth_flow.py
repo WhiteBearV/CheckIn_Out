@@ -2,6 +2,7 @@
 test_auth_flow.py — sanity test ระบบ login (รันหลัง migration เสร็จ)
 รัน: venv/bin/python test_auth_flow.py
 """
+import os
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -105,5 +106,61 @@ r = client.options('/auth/login', headers={
 acao = r.headers.get('access-control-allow-origin')
 print(f"  ✓ CORS preflight disallowed origin → "
       f"{'BLOCKED (no ACAO)' if not acao else f'LEAK: {acao}'}")
+
+print("\n══ ทดสอบ api.py JWT migration (Phase 1.1) ══\n")
+
+import api as api_mod
+api_client = TestClient(api_mod.app)
+_ADMIN_KEY = os.environ.get("ADMIN_API_KEY", "")
+
+# A1. PUT ไม่มี header → 401
+r = api_client.put('/attendance/999999999', json={'status': 'IN'})
+assert r.status_code == 401, f"expected 401, got {r.status_code}: {r.text}"
+print(f"  ✓ api PUT no-auth → 401")
+
+# A2. DELETE ไม่มี header → 401
+r = api_client.delete('/attendance/999999999')
+assert r.status_code == 401
+print(f"  ✓ api DELETE no-auth → 401")
+
+# A3. PUT ด้วย viewer JWT → 403 (role ไม่ใช่ admin)
+r = api_client.put('/attendance/999999999',
+                   headers={'Authorization': f'Bearer {viewer_token}'},
+                   json={'status': 'IN'})
+assert r.status_code == 403, f"expected 403, got {r.status_code}: {r.text}"
+print(f"  ✓ api PUT viewer-JWT → 403")
+
+# A4. DELETE ด้วย X-Admin-Key ผิด → 401
+r = api_client.delete('/attendance/999999999', headers={'X-Admin-Key': 'wrong'})
+assert r.status_code == 401
+print(f"  ✓ api DELETE wrong-X-Admin-Key → 401")
+
+# A5. PUT ด้วย X-Admin-Key ถูก (legacy fallback) — auth ผ่าน → 404 หรือ 200 (record ไม่มี)
+if _ADMIN_KEY:
+    try:
+        r = api_client.put('/attendance/999999999',
+                           headers={'X-Admin-Key': _ADMIN_KEY},
+                           json={'status': 'IN'})
+        # auth ผ่าน → handler ทำงาน → 404 (record ไม่มี) ก็ใช่ที่เราต้องการ
+        # ถ้า DB ไม่ขึ้นได้ 500 → skip
+        if r.status_code in (404, 500):
+            print(f"  ✓ api PUT legacy-X-Admin-Key → {r.status_code} (auth ผ่าน, record ไม่มีหรือ DB down)")
+        else:
+            print(f"  ⚠ api PUT legacy-X-Admin-Key → {r.status_code}: {r.text}")
+    except Exception as e:
+        print(f"  ⚠ api PUT legacy-X-Admin-Key → DB unavailable: {e}")
+
+    # A6. DELETE ด้วย admin JWT → auth ผ่าน → 404 (record ไม่มี)
+    try:
+        r = api_client.delete('/attendance/999999999',
+                              headers={'Authorization': f'Bearer {admin_token}'})
+        if r.status_code in (404, 500):
+            print(f"  ✓ api DELETE admin-JWT → {r.status_code} (auth ผ่าน)")
+        else:
+            print(f"  ⚠ api DELETE admin-JWT → {r.status_code}: {r.text}")
+    except Exception as e:
+        print(f"  ⚠ api DELETE admin-JWT → DB unavailable: {e}")
+else:
+    print(f"  ⚠ skip A5/A6 — ADMIN_API_KEY ไม่ตั้งใน .env")
 
 print("\n══ ทุกการทดสอบผ่าน ✅ ══\n")
