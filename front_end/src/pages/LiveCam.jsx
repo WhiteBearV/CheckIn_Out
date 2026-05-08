@@ -708,20 +708,20 @@ function PersonPanelCard({ camId, camName, name, person, onFaceClick }) {
       <div className="info">
         <div className="pname">{displayName}</div>
         <div className="pmeta">
-          <span style={{ color: st.color }}>• {st.label}</span>
-          <span>📷 {camName || camId}</span>
-        </div>
-      </div>
-      {(person.first_seen && person.first_seen !== '-') && (
-        <div className="ptime" style={{ textAlign: 'right', lineHeight: 1.2 }}>
-          <div>{person.first_seen.slice(0, 5)}</div>
-          {hasLast && (
-            <div style={{ fontSize: 9, color: 'var(--c-text-4)', fontFamily: 'var(--font-mono)' }}>
-              last {person.last_seen.slice(0, 5)}
+          <div style={{ color: st.color }}>• {st.label}</div>
+          <div>📷 {camName || camId}</div>
+          {(person.first_seen && person.first_seen !== '-') && (
+            <div className="ptime">
+              {person.first_seen.slice(0, 5)}
+              {hasLast && (
+                <span style={{ fontSize: 9, color: 'var(--c-text-4)', marginLeft: 6 }}>
+                  last {person.last_seen.slice(0, 5)}
+                </span>
+              )}
             </div>
           )}
         </div>
-      )}
+      </div>
     </div>
   )
 }

@@ -15,3 +15,4 @@ WHERE  username IN ('admin', 'viewer');
 COMMIT;
 
 SELECT username, role, must_change_password FROM users ORDER BY id;
+

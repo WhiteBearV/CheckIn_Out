@@ -2,17 +2,18 @@ import { useRef, useState, useEffect, useCallback } from 'react'
 import { NavLink } from 'react-router-dom'
 import { useTheme } from '../context/ThemeContext'
 import { useAuth } from '../context/AuthContext'
+import Logo from './Logo'
 
 
 const NAV = [
   {
     to: '/',
-    label: 'Live Cam',
+    label: 'กล้องสด',
     icon: <svg viewBox="0 0 24 24"><path d="M15 10l4.553-2.069A1 1 0 0121 8.876V15.124a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"/></svg>,
   },
   {
     to: '/dashboard',
-    label: 'Dashboard',
+    label: 'แดชบอร์ด',
     icon: <svg viewBox="0 0 24 24"><path d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2"/></svg>,
   },
   {
@@ -76,7 +77,7 @@ export default function Sidebar() {
     <aside className="sidebar" style={{ width }}>
       {/* Logo */}
       <div className="sb-logo">
-        <img src="/logo-mark.svg" alt="" style={{ width: 28, height: 28, flexShrink: 0 }} />
+        <Logo size={28} />
         <div className="wm">Face Attendance</div>
       </div>
 
@@ -99,16 +100,16 @@ export default function Sidebar() {
       <div className="sb-foot" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {user && (
           <div style={{
-            display: 'flex', alignItems: 'center', gap: 8,
-            padding: '8px 10px',
+            display: 'flex', alignItems: 'center', gap: 10,
+            padding: '12px 14px',
             borderRadius: 6,
             background: 'var(--c-accent-bg)',
             border: '1px solid var(--c-accent-border)',
-            fontSize: 12, color: 'var(--c-text-1)',
+            fontSize: 15, color: 'var(--c-text-1)',
             overflow: 'hidden',
           }} title={`${user.username} (${user.role})`}>
             <span style={{
-              width: 7, height: 7, borderRadius: '50%',
+              width: 10, height: 10, borderRadius: '50%',
               background: user.role === 'admin' ? 'var(--c-accent)' : '#888',
               flexShrink: 0,
             }} />
@@ -116,10 +117,10 @@ export default function Sidebar() {
               display: 'flex', flexDirection: 'column',
               minWidth: 0, flex: 1,
             }}>
-              <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <span style={{ fontWeight: 600, fontSize: 15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {user.username}
               </span>
-              <span style={{ fontSize: 10, color: 'var(--c-text-3)', textTransform: 'uppercase', letterSpacing: 1 }}>
+              <span style={{ fontSize: 12, color: 'var(--c-text-3)', textTransform: 'uppercase', letterSpacing: 1 }}>
                 {user.role}
               </span>
             </div>

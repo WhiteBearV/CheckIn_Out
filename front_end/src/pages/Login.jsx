@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { login } from '../api/client'
 import { useAuth } from '../context/AuthContext'
+import Logo from '../components/Logo'
 
 export default function Login() {
   const [username, setUsername] = useState('')
@@ -50,19 +51,19 @@ export default function Login() {
         display: 'flex', flexDirection: 'column', gap: 22,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 12 }}>
-          <img src="/logo-mark.svg" alt="" style={{ width: 48, height: 48 }} />
+          <Logo size={48} />
           <div>
             <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--c-text-1)' }}>
               Face Attendance
             </div>
-            <div style={{ fontSize: 13, color: 'var(--c-text-3)', letterSpacing: 1.5, textTransform: 'uppercase' }}>
+            <div style={{ fontSize: 20, color: 'var(--c-text-3)', letterSpacing: 1.5, textTransform: 'uppercase' }}>
               Sign in
             </div>
           </div>
         </div>
 
         <label style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <span style={{ fontSize: 14, color: 'var(--c-text-2)' }}>Username</span>
+          <span style={{ fontSize: 24, color: 'var(--c-text-2)' }}>Username</span>
           <input
             type="text"
             value={username}
@@ -75,7 +76,7 @@ export default function Login() {
         </label>
 
         <label style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <span style={{ fontSize: 14, color: 'var(--c-text-2)' }}>Password</span>
+          <span style={{ fontSize: 24, color: 'var(--c-text-2)' }}>Password</span>
           <input
             type="password"
             value={password}
@@ -88,7 +89,7 @@ export default function Login() {
 
         {error && (
           <div style={{
-            fontSize: 14, color: '#ff6b6b',
+            fontSize: 24, color: '#ff6b6b',
             background: 'rgba(255,107,107,0.10)',
             border: '1px solid rgba(255,107,107,0.30)',
             borderRadius: 8, padding: '10px 14px',
@@ -103,7 +104,7 @@ export default function Login() {
           style={{
             padding: '14px 22px', borderRadius: 10,
             background: 'var(--c-accent)', color: '#000',
-            border: 'none', fontWeight: 600, fontSize: 16,
+            border: 'none', fontWeight: 600, fontSize: 24,
             cursor: loading ? 'wait' : 'pointer',
             opacity: (loading || !username || !password) ? 0.55 : 1,
             marginTop: 4,
@@ -137,6 +138,6 @@ const inputStyle = {
   border: '1px solid var(--c-border)',
   borderRadius: 8,
   color: 'var(--c-text-1)',
-  fontSize: 15,
+  fontSize: 24,
   outline: 'none',
 }

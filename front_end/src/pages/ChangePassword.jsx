@@ -73,26 +73,26 @@ export default function ChangePassword() {
         )}
 
         <label style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <span style={{ fontSize: 14, color: 'var(--c-text-2)' }}>รหัสเดิม</span>
+          <span style={{ fontSize: 24, color: 'var(--c-text-2)' }}>รหัสเดิม</span>
           <input type="password" value={oldPw} onChange={e => setOldPw(e.target.value)}
                  autoFocus required style={inputStyle} />
         </label>
 
         <label style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <span style={{ fontSize: 14, color: 'var(--c-text-2)' }}>รหัสใหม่</span>
+          <span style={{ fontSize: 24, color: 'var(--c-text-2)' }}>รหัสใหม่</span>
           <input type="password" value={newPw} onChange={e => setNewPw(e.target.value)}
                  required minLength={6} style={inputStyle} />
         </label>
 
         <label style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <span style={{ fontSize: 14, color: 'var(--c-text-2)' }}>ยืนยันรหัสใหม่</span>
+          <span style={{ fontSize: 24, color: 'var(--c-text-2)' }}>ยืนยันรหัสใหม่</span>
           <input type="password" value={confirm} onChange={e => setConfirm(e.target.value)}
                  required minLength={6} style={inputStyle} />
         </label>
 
         {error && (
           <div style={{
-            fontSize: 14, color: '#ff6b6b',
+            fontSize: 24, color: '#ff6b6b',
             background: 'rgba(255,107,107,0.10)',
             border: '1px solid rgba(255,107,107,0.30)',
             borderRadius: 8, padding: '10px 14px',
@@ -105,7 +105,7 @@ export default function ChangePassword() {
           style={{
             padding: '14px 22px', borderRadius: 10,
             background: 'var(--c-accent)', color: '#000',
-            border: 'none', fontWeight: 600, fontSize: 16,
+            border: 'none', fontWeight: 600, fontSize: 24,
             cursor: loading ? 'wait' : 'pointer',
             opacity: (loading || !oldPw || !newPw || !confirm) ? 0.55 : 1,
             marginTop: 4,
@@ -145,6 +145,6 @@ const inputStyle = {
   border: '1px solid var(--c-border)',
   borderRadius: 8,
   color: 'var(--c-text-1)',
-  fontSize: 15,
+  fontSize: 24,
   outline: 'none',
 }
