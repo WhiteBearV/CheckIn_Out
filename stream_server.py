@@ -57,6 +57,8 @@ load_dotenv()
 
 import auth as _auth
 import audit as _audit
+import offline_queue as _oq
+import sync_worker as _sync_worker
 
 # ─── cameras.json path ────────────────────────────────────────────────────────
 _CAMERAS_JSON = Path(__file__).parent / "cameras.json"
@@ -1366,6 +1368,19 @@ def start(port: int = 8001):
 async def _on_startup():
     _auth.bootstrap_default_users()
     _watchdog_start()
+    try:
+        _oq.init_db()
+        _sync_worker.start()
+    except Exception as e:
+        print(f'[STARTUP] sync_worker init failed: {e}')
+
+
+@app.on_event('shutdown')
+async def _on_shutdown():
+    try:
+        _sync_worker.stop(timeout=3.0)
+    except Exception as e:
+        print(f'[SHUTDOWN] sync_worker stop failed: {e}')
 
 
 if __name__ == '__main__':
