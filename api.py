@@ -28,6 +28,7 @@ load_dotenv()
 
 import auth as _auth   # ต้อง import หลัง load_dotenv (auth อ่าน JWT_SECRET ตอน import time)
 import audit as _audit
+import offline_queue as _oq   # offline fallback (Phase 2)
 
 app = FastAPI(title="Face Attendance API", version="2.1.0")
 
@@ -185,36 +186,70 @@ def check_attendance_today(
 
 @app.get("/attendance/today")
 def attendance_today():
-    """รายการลงเวลาวันนี้ทั้งหมด (สำหรับ Dashboard)"""
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT id, per_id, name, prename_th, per_name, per_surname,
-                       posname_th, organize_th, organize_id,
-                       status, camera_name, check_time
-                FROM attendance_logs
-                WHERE DATE(check_time) = CURRENT_DATE
-                ORDER BY check_time DESC
-            """)
-            rows = cur.fetchall()
+    """รายการลงเวลาวันนี้ทั้งหมด (สำหรับ Dashboard)
 
-    return [
-        {
-            "id":          r[0],
-            "per_id":      r[1],
-            "name":        r[2],
-            "prename_th":  r[3],
-            "per_name":    r[4],
-            "per_surname": r[5],
-            "posname_th":  r[6],
-            "organize_th": r[7],
-            "organize_id": r[8],
-            "status":      r[9],
-            "camera_name": r[10],
-            "check_time":  r[11].isoformat() if r[11] else None,
-        }
-        for r in rows
-    ]
+    Fallback: ถ้า PG ดับ → อ่านจาก offline_queue.attendance_buf แทน
+    (offline mode B — Phase 2) เพื่อให้ Dashboard ยัง render วันนี้ได้
+    """
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id, per_id, name, prename_th, per_name, per_surname,
+                           posname_th, organize_th, organize_id,
+                           status, camera_name, check_time
+                    FROM attendance_logs
+                    WHERE DATE(check_time) = CURRENT_DATE
+                    ORDER BY check_time DESC
+                """)
+                rows = cur.fetchall()
+
+        return [
+            {
+                "id":          r[0],
+                "per_id":      r[1],
+                "name":        r[2],
+                "prename_th":  r[3],
+                "per_name":    r[4],
+                "per_surname": r[5],
+                "posname_th":  r[6],
+                "organize_th": r[7],
+                "organize_id": r[8],
+                "status":      r[9],
+                "camera_name": r[10],
+                "check_time":  r[11].isoformat() if r[11] else None,
+                "source":      "pg",
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        # PG ดับ → fallback ไป attendance_buf
+        print(f"[API] /attendance/today PG error: {e} — falling back to attendance_buf")
+        try:
+            buf_rows = _oq.list_today()
+        except Exception as buf_err:
+            print(f"[API] attendance_buf fallback also failed: {buf_err}")
+            raise HTTPException(status_code=503,
+                                detail=f"PG down และ buffer อ่านไม่ได้: {buf_err}")
+        return [
+            {
+                "id":          -int(r['id']),  # negative to signal buf origin
+                "per_id":      r['per_id'],
+                "name":        r['name'],
+                "prename_th":  r['prename_th'],
+                "per_name":    r['per_name'],
+                "per_surname": r['per_surname'],
+                "posname_th":  r['posname_th'],
+                "organize_th": r['organize_th'],
+                "organize_id": r['organize_id'],
+                "status":      r['status'],
+                "camera_name": r['camera_name'],
+                "check_time":  r['check_time'],
+                "source":      "buf",
+                "synced":      bool(r['synced']),
+            }
+            for r in buf_rows
+        ]
 
 
 @app.get("/attendance/{per_id}")

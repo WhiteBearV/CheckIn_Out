@@ -1166,6 +1166,35 @@ async def system_watchdog_status():
     }
 
 
+@app.get('/system/offline', dependencies=[Depends(get_current_user)])
+async def system_offline_status():
+    """ดูสถานะ offline_queue + sync_worker — สำหรับ UI badge
+
+    Response shape:
+      {
+        worker_running: bool,
+        pending_count:  int,
+        last_pg_check:  {ok, ts} | None,
+        last_sync:      {ts, drained, transient_failed, permanent_failed, pending_after} | None,
+        last_cache_refresh: {ts, refreshed, failed, skipped} | None,
+        last_error:     str | None,
+      }
+    """
+    try:
+        state = _oq.get_all_state()
+        return {
+            'worker_running': _sync_worker.is_running(),
+            'pending_count':  _oq.pending_count(),
+            'last_pg_check':       state.get('last_pg_check'),
+            'last_sync':           state.get('last_sync'),
+            'last_cache_refresh':  state.get('last_cache_refresh'),
+            'last_error':          state.get('last_error'),
+        }
+    except Exception as e:
+        return JSONResponse(status_code=500,
+                            content={'detail': f'offline_queue error: {e}'})
+
+
 @app.get('/system/status')
 async def system_status():
     """badge สีเขียวเฉพาะตอนผู้ใช้สั่ง Start แล้วเท่านั้น
