@@ -93,3 +93,129 @@
   แก้ไข : [อยู่ระหว่างการ debug — จะดำเนินการต่อในวันถัดไป]
 
 ════════════════════════════════════════════════════════════════════════
+
+════════════════════════════════════════════════════════════════════════
+  รายงานการปฏิบัติงานฝึกประสบการณ์วิชาชีพ
+  วันที่  : พฤหัสบดีที่ 14 พฤษภาคม 2569
+  สัปดาห์ : สัปดาห์ที่ 9
+════════════════════════════════════════════════════════════════════════
+
+■ งานที่ดำเนินการในวันนี้
+────────────────────────────────────────────────────────────────────────
+
+1. พัฒนาระบบ Glorytun Channel Bonding และ Client Router บน Pi 4 (ช่วงเช้า)
+   ─────────────────────────────────────────────────────────────────
+   พัฒนาและตั้งค่าระบบ Channel Bonding ให้สมบูรณ์ โดยแบ่งเป็น 2 ส่วนหลัก
+   ได้แก่ ระบบ Bonding พื้นฐาน และการทำให้ Pi 4 เป็น Router สำหรับ Client
+
+   Phase 1 — Channel Bonding พื้นฐาน:
+     - สร้าง glorytun-pi.service (systemd) พร้อม Restart=always
+       เพื่อให้ service กลับมาอัตโนมัติเมื่อ tunnel ตาย
+     - ตั้ง Policy Routing แยกต่อ interface (eth1 → table 100, eth2 → table 101)
+       เพื่อให้แต่ละ WAN path ออก Internet ตรงด้วย interface ของตัวเอง
+     - ตั้ง rate fixed tx 100m rx 100m บนทุก path
+       (ต้องตั้งทั้ง tx และ rx — ถ้าไม่ตั้ง rx Server จะ TX-RATE = 0 ส่ง reply ไม่ได้)
+     - เพิ่ม Watchdog loop ใน wrapper script ตรวจ ping ทุก 10 วินาที
+       restart ถ้า fail ติดต่อกัน 3 ครั้ง (แก้ปัญหา tunnel หยุดส่งหลัง 60 นาที)
+     - เปลี่ยน source port จาก 5000 → 65000 เพื่อป้องกัน router block
+
+   Phase 2 — Pi 4 เป็น Router สำหรับ Client:
+     - ขยาย gt0 subnet จาก /30 → /24 เพื่อรองรับ Client IPs
+     - ตั้ง eth0 เป็น LAN gateway (10.255.255.254/24) สำหรับ Client
+     - ติดตั้งและตั้งค่า dnsmasq แจก DHCP บน eth0
+       (range 10.255.255.10-200, GW .254, DNS 8.8.8.8)
+     - ตั้ง nftables FORWARD rule: eth0 ↔ gt0 และ MSS clamping
+       สำหรับแก้ปัญหา HTTPS / large packet ผ่าน tunnel
+     - ตั้ง gt0 route metric 200 เพื่อให้ eth0 ชนะ client traffic
+       ป้องกัน ICMP Redirect จาก Server
+     - ตั้ง Server NAT masquerade สำหรับ subnet 10.255.255.0/24
+
+2. ตั้งค่า Dynamic IP / Hot-plug Recovery และทดสอบระบบ (ช่วงบ่าย)
+   ─────────────────────────────────────────────────────────────────
+   เพิ่มความสามารถรองรับ IP เปลี่ยนแบบ dynamic และทดสอบระบบทั้งหมด
+   ผ่าน reboot และการถอด/เสียบสายเน็ต
+
+   Phase 3 — Dynamic IP / Auto-recovery:
+     - สร้าง NetworkManager wan-auto profile แบบ multi-connect
+       (1 profile ใช้ได้กับทุก WAN interface โดยไม่ต้องตั้งค่าเพิ่ม)
+     - สร้าง NM Dispatcher /etc/NetworkManager/dispatcher.d/99-glorytun
+       update policy routing + glorytun path ทันทีเมื่อ IP เปลี่ยน
+     - สร้าง glorytun-sync.timer (OnUnitActiveSec=5s)
+       ตรวจและซ่อม path/routing ที่ไม่ sync อัตโนมัติทุก 5 วินาที
+     - ตั้ง eth0 เป็น unmanaged ถาวรใน NetworkManager
+       ป้องกัน NM ดึง eth0 ไป DHCP ทับ IP ที่ script ตั้งไว้
+     - เพิ่ม dnsmasq systemd override After=glorytun-pi.service
+       ป้องกัน dnsmasq start ก่อน eth0 มี IP (แก้ "unknown interface eth0")
+
+   Phase 4 — ทดสอบ Reboot และ Failover:
+     - ทดสอบ Reboot ครั้งที่ 1: ทุก service ขึ้นอัตโนมัติ
+     - ทดสอบ Reboot ครั้งที่ 2 (หลังแก้ dnsmasq + route metric): ผ่าน 10/10 checks
+     - ทดสอบ Failover: ถอดสายเน็ต WAN → failover อัตโนมัติ, กลับมา bond ภายใน ~5-10s
+     - ผลการทดสอบ Channel Bonding:
+         ปกติ 2 เส้น : eth1 ~36-42 Mbps + eth2 ~36-42 Mbps = รวม ~72-83 Mbps
+         ถอดสาย eth1 : eth2 ~53-61 Mbps (failover อัตโนมัติ ไม่หลุด connection)
+         เสียบสายคืน : กลับมา bond ได้ ~64-84 Mbps อัตโนมัติ
+
+■ สรุปไฟล์ที่สร้าง / แก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  Pi 4 (Raspberry Pi OS):
+    /etc/systemd/system/glorytun-pi.service             — systemd service หลัก
+    /usr/local/bin/glorytun-start.sh                    — wrapper script + watchdog
+    /etc/NetworkManager/dispatcher.d/99-glorytun        — update path เมื่อ IP เปลี่ยน
+    /usr/local/bin/glorytun-sync.sh                     — sync script (รัน timer ทุก 5s)
+    /etc/systemd/system/glorytun-sync.timer             — timer สำหรับ sync script
+    /etc/NetworkManager/conf.d/unmanaged-eth0.conf      — ล็อก eth0 ไม่ให้ NM จัดการ
+    /etc/NetworkManager/conf.d/wan-auto.nmconnection    — WAN profile แบบ multi-connect
+    /etc/systemd/system/dnsmasq.service.d/              — override After=glorytun-pi
+    /etc/nftables.conf                                  — FORWARD + MSS clamping rules
+
+■ เทคโนโลยีที่ใช้
+────────────────────────────────────────────────────────────────────────
+
+  - Glorytun 0.3.4        — Channel Bonding ผ่าน UDP tunnel (chacha20poly1305)
+  - systemd               — Service management + timer สำหรับ sync
+  - NetworkManager        — จัดการ WAN interface แบบ dynamic + dispatcher
+  - dnsmasq               — DHCP Server บน eth0 สำหรับ Client
+  - nftables              — Firewall FORWARD + MSS clamping
+  - iproute2              — Policy Routing (ip route, ip rule, routing table)
+  - Bash                  — Wrapper script + watchdog loop + sync script
+
+■ ปัญหาที่พบและแนวทางแก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  ปัญหา : glorytun process หายหลัง reboot
+  วิเคราะห์: ยังไม่มี systemd service ทำให้ process ไม่ถูก start อัตโนมัติ
+  แก้ไข : สร้าง glorytun-pi.service พร้อม Restart=always และ WantedBy=multi-user.target
+
+  ปัญหา : mud->window = 0 ทำให้ส่ง data ไม่ได้ และ Server TX-RATE = 0 reply ไม่ได้
+  วิเคราะห์: glorytun ใช้ค่า rx ที่ฝั่ง Client ตั้งเป็น server's tx rate
+             ถ้าไม่ตั้ง rx rate → Server เห็น rate = 0 → ส่ง reply ไม่ได้
+  แก้ไข : ต้องตั้งทั้ง rate fixed tx 100m rx 100m ทุกครั้งที่ add path
+
+  ปัญหา : glorytun หยุดส่ง data หลังผ่านไปประมาณ 60 นาที (kxtimeout)
+  วิเคราะห์: kxtimeout ทำให้ session หมดอายุ แต่ process ยังทำงานอยู่
+  แก้ไข : เพิ่ม watchdog loop ใน wrapper script ตรวจ ping ทุก 10s
+             kill + restart service อัตโนมัติเมื่อ fail ติดต่อกัน 3 ครั้ง
+
+  ปัญหา : Client ping gateway ไม่ได้ — Server ส่ง ICMP Redirect กลับมา
+  วิเคราะห์: gt0 และ eth0 อยู่บน subnet 10.255.255.0/24 เหมือนกัน metric เท่ากัน
+             kernel เลือก gt0 ส่ง reply ของ Client → Server ส่ง ICMP Redirect กลับ
+  แก้ไข : ตั้ง gt0 route metric 200 ให้ eth0 (metric 0) ชนะ client traffic เสมอ
+             Server tunnel IP (.1) ยังเข้าถึงได้ผ่าน host route metric 1
+
+  ปัญหา : NetworkManager ดึง eth0 ไป DHCP ทับ IP ที่ script ตั้งไว้
+  วิเคราะห์: wan-auto profile แบบ multi-connect จับ eth0 ไปด้วย
+  แก้ไข : สร้าง /etc/NetworkManager/conf.d/unmanaged-eth0.conf
+             (unmanaged-devices=interface-name:eth0)
+
+  ปัญหา : dnsmasq fail หลัง reboot ด้วย error "unknown interface eth0"
+  วิเคราะห์: dnsmasq start ก่อน glorytun-start.sh สร้าง IP บน eth0
+  แก้ไข : สร้าง systemd override ให้ dnsmasq มี After=glorytun-pi.service
+
+  ปัญหา : WAN IP เปลี่ยนระหว่าง runtime ทำให้ path degraded
+  วิเคราะห์: NM dispatcher trigger ไม่ครบทุก event (เช่น DHCP renew)
+  แก้ไข : สร้าง glorytun-sync.timer ทุก 5s ตรวจ IP จริงบน interface
+             เทียบกับ rule ที่ register ไว้ — ถ้าไม่ตรงให้ update อัตโนมัติ
+
+════════════════════════════════════════════════════════════════════════
