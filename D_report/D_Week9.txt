@@ -1,0 +1,95 @@
+════════════════════════════════════════════════════════════════════════
+  รายงานการปฏิบัติงานฝึกประสบการณ์วิชาชีพ
+  วันที่  : อังคารที่ 12 พฤษภาคม 2569
+  สัปดาห์ : สัปดาห์ที่ 9
+════════════════════════════════════════════════════════════════════════
+
+■ งานที่ดำเนินการในวันนี้
+────────────────────────────────────────────────────────────────────────
+
+1. ปรับ Architecture และตั้งค่า Network Paths บน Raspberry Pi 4 (ช่วงเช้า)
+   ─────────────────────────────────────────────────────────────────
+   ปรับแผน MVP Channel Bonding จากแผนเดิมที่ใช้ M8550 2 ตัวผ่าน USB-Eth
+   เป็น WiFi hotspot (iPhone) + eth0 (M8550 #1) เพื่อให้สามารถทดสอบ
+   Channel Bonding จริงได้ด้วยอุปกรณ์ที่มีอยู่
+
+   ขั้นตอนการดำเนินการ:
+     1. ตั้งค่า 2 Network Paths บน Pi 4
+        - Path 1 : wlan0 (WiFi hotspot iPhone) — IP 172.20.10.2, Gateway 172.20.10.1
+        - Path 2 : eth0 (M8550 5G)            — IP 192.168.1.4,  Gateway 192.168.1.1
+        - ตรวจสอบ Public IP ของแต่ละ path ออก Internet คนละทางจริง
+
+     2. ตั้งค่า Policy Routing
+        - สร้างไฟล์ /etc/iproute2/rt_tables พร้อม default content
+          (ไม่มีมาก่อนใน Pi OS minimal)
+        - สร้าง routing table wifi (100) และ m8550 (200)
+        - กำหนด rules: source IP → routing table ที่เหมาะสม
+        - ทดสอบยืนยัน Public IP ออกคนละทางจริงด้วย curl --interface
+
+2. ติดตั้งและทดสอบ Glorytun Client บน Pi 4 (ช่วงบ่าย)
+   ─────────────────────────────────────────────────────────────────
+   ค้นหา syntax ที่ถูกต้องของ Glorytun version 0.3.4-51-g32267e8
+   และทดสอบ handshake กับ Server ที่มี Public IP จริง
+
+   ขั้นตอนการดำเนินการ:
+     1. ค้นพบ syntax ของ Glorytun 0.3.4 ที่ถูกต้อง
+        - เอกสาร MVP เก่าระบุ glorytun connect → ไม่มีใน version นี้
+        - syntax ที่ใช้ได้จริง: glorytun bind ... from port 0 to addr ... port ...
+        - ศึกษา glorytun path สำหรับเพิ่ม/จัดการ multi-path
+
+     2. ตั้งค่า Tunnel
+        - สร้าง interface gt0 พร้อม Tunnel IP 10.255.255.2/30
+        - เพิ่ม 2 paths: wlan0 (172.20.10.2) และ eth0 (192.168.1.4)
+        - เปิดแต่ละ path ด้วย glorytun path addr <IP> set up
+
+     3. ผลการทดสอบ Handshake
+        - ทั้ง 2 paths STATUS = running
+        - Server เห็น Pi connect มาด้วย Public IP ทั้ง 2 ค่าย
+        - Key ตรงกัน (1982E23F...)
+        - อย่างไรก็ตาม Ping 10.255.255.1 ยัง fail 100% packet loss
+          → ยังไม่ confirm ว่า data flow ผ่าน tunnel จริง
+
+■ สรุปไฟล์ที่สร้าง / แก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  [ไม่มีการแก้ไข source code] — งานวันนี้เป็นการตั้งค่าระบบเครือข่าย
+  Policy Routing และ Glorytun บน Raspberry Pi 4 และ Ubuntu Server
+
+■ เทคโนโลยีที่ใช้
+────────────────────────────────────────────────────────────────────────
+
+  - Raspberry Pi 4        — อุปกรณ์ Client สำหรับ Channel Bonding
+  - Ubuntu Server         — Server ฝั่ง Aggregation (Public IP จริง)
+  - Glorytun 0.3.4        — Software สำหรับ Channel Bonding ผ่าน UDP tunnel
+  - iproute2              — Policy Routing (ip route, ip rule, rt_tables)
+  - M8550 5G Modem        — Network path ที่ 2 ผ่าน eth0
+  - iptables / NAT        — Firewall และ MASQUERADE บน Server
+  - tcpdump               — ตรวจสอบ UDP traffic และ packet flow
+  - sysctl                — เปิด ip_forward บน Pi และ Server
+
+■ ปัญหาที่พบและแนวทางแก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  ปัญหา : Glorytun syntax ในเอกสาร MVP (glorytun connect) ใช้ไม่ได้กับ version 0.3.4
+  วิเคราะห์: เอกสารเขียนสำหรับ Glorytun version เก่า ซึ่ง syntax แตกต่างกัน
+  แก้ไข : อ่าน glorytun help โดยตรง และใช้คำสั่ง bind แทน connect
+
+  ปัญหา : ไฟล์ /etc/iproute2/rt_tables ไม่มีใน Pi OS minimal
+  วิเคราะห์: Pi OS minimal ไม่ pre-install ไฟล์นี้มาให้
+  แก้ไข : สร้างไฟล์เองพร้อม default content (255 local, 254 main, 253 default, 0 unspec)
+
+  ปัญหา : Server อยู่หลัง CGNAT ของ LTE Router ทำให้ packet จาก Pi ไม่ถึง Server
+  วิเคราะห์: ค่ายมือถือใช้ CGNAT — WAN IP ของ Router เป็น private (10.98.247.74)
+             แม้ curl ifconfig.me จะแสดง Public IP แต่ Port Forward ไม่ทำงาน
+  แก้ไข : ย้าย Server ไปต่อ Fiber ที่มี Public IP จริง (61.91.251.238/29 ที่ enp86s0)
+
+  ปัญหา : ip_forward = 0 บน Pi ทำให้ packet ไม่ไหลผ่าน tunnel แม้ handshake สำเร็จ
+  วิเคราะห์: Pi OS ปิด ip_forward ตามค่า default ทำให้ routing ผ่าน tunnel ไม่ทำงาน
+  แก้ไข : sysctl -w net.ipv4.ip_forward=1 และบันทึกถาวรใน /etc/sysctl.conf
+
+  ปัญหา : Ping 10.255.255.1 fail 100% packet loss แม้ Glorytun handshake สำเร็จ
+  วิเคราะห์: STATUS=running หมายถึง handshake สำเร็จเท่านั้น ไม่ได้ confirm data flow
+             ยังไม่ได้ตรวจสอบ tcpdump ทั้ง 2 interfaces บน Server พร้อมกัน
+  แก้ไข : [อยู่ระหว่างการ debug — จะดำเนินการต่อในวันถัดไป]
+
+════════════════════════════════════════════════════════════════════════
