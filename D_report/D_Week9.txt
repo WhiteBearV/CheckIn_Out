@@ -219,3 +219,110 @@
              เทียบกับ rule ที่ register ไว้ — ถ้าไม่ตรงให้ update อัตโนมัติ
 
 ════════════════════════════════════════════════════════════════════════
+
+════════════════════════════════════════════════════════════════════════
+  รายงานการปฏิบัติงานฝึกประสบการณ์วิชาชีพ
+  วันที่  : ศุกร์ที่ 15 พฤษภาคม 2569
+  สัปดาห์ : สัปดาห์ที่ 9
+════════════════════════════════════════════════════════════════════════
+
+■ งานที่ดำเนินการในวันนี้
+────────────────────────────────────────────────────────────────────────
+
+1. จัดทำ MANUAL.txt คู่มือการใช้งานระบบ Glorytun Channel Bonding (ช่วงเช้า)
+   ─────────────────────────────────────────────────────────────────
+   อ่านและทำความเข้าใจไฟล์ในโปรเจกต์ทั้งหมด จากนั้นเขียน MANUAL.txt
+   ครอบคลุม 9 หัวข้อ ได้แก่ ภาพรวมระบบ, ข้อมูลสำคัญ, การใช้งานประจำวัน,
+   checklist ตรวจสถานะ 11 จุด, การแก้ปัญหาพื้นฐาน 5 กรณี,
+   ไฟล์ config สำคัญ, การ Backup, การ Restore, และการติดตั้งใหม่ตั้งแต่ต้น
+
+   ปรับปรุง MANUAL.txt ทั้งหมด 5 รอบ:
+     รอบที่ 1 — รองรับหลาย OS:
+       แยกคำสั่ง backup เป็น Linux/macOS (scp, rsync)
+       และ Windows (scp built-in, WinSCP/FileZilla)
+
+     รอบที่ 2 — ทำให้เป็นกลาง (Generic):
+       แทนข้อมูลเฉพาะระบบทุกจุด (SSH key path, username, Server IP,
+       pre-shared key, local backup path) ด้วย placeholder เช่น
+       <PI_USER>, <PI_IP>, <SERVER_PUBLIC_IP>
+       พร้อมเพิ่ม NOTE อธิบาย placeholder ที่หัว manual
+
+     รอบที่ 3 — แก้ backup path:
+       เปลี่ยน destination จาก /tmp/ (อาจถูกล้างเมื่อ reboot)
+       เป็น /home/<PI_USER>/backups/ ตลอดทั้งไฟล์
+       และเพิ่มคำสั่ง full backup พร้อม --exclude ที่ครบถ้วน
+
+     รอบที่ 4 — แก้ตัวอย่างให้สมจริง:
+       เปลี่ยนบรรทัด "ตัวอย่าง:" ที่ใช้ placeholder เหมือน command จริง
+       เป็นค่าจำลองสมจริง เช่น pi@192.168.1.10, C:\Users\john\backups\
+
+     รอบที่ 5 — ตรวจสอบรอบสุดท้าย:
+       รัน grep ตรวจหา specific reference ที่หลงเหลือ → ไม่พบปัญหา
+
+2. ทำ Backup Pi, จัดระเบียบไฟล์, และสร้าง SETUP_OVERVIEW.txt (ช่วงบ่าย)
+   ─────────────────────────────────────────────────────────────────
+   ทำ backup ระบบ Pi ครั้งแรก จัดระเบียบ folder backup
+   จากนั้นสร้างคู่มือติดตั้งตั้งแต่ต้น (SETUP_OVERVIEW.txt)
+   พร้อมแก้ปัญหา SSH Server และอัปเดต config จากของจริง
+
+   การ Backup Pi:
+     - SSH เข้า Pi (IP ใหม่ 192.168.1.2 หลัง DHCP เปลี่ยน)
+     - รัน full system backup ครอบคลุม / ทั้งหมด
+       ยกเว้น /proc /sys /dev /run /tmp
+       ได้ไฟล์ pi-backup-2026-05-15.tar.gz ขนาด 1.9GB
+     - Copy มาเก็บที่เครื่อง Mac
+     - สร้าง folder /home/dtc/backups/ และย้ายไฟล์ backup เข้า folder
+       (แก้ไข manual ทุกจุดให้สอดคล้องด้วย)
+
+   สร้าง SETUP_OVERVIEW.txt:
+     - SSH เข้า Pi อ่าน config จริงทุกไฟล์ก่อนเขียน
+     - เขียนคู่มือ 6 sections:
+         Section 0: ภาพรวม, prerequisites, hardware, network, subnet
+         Section 1: ติดตั้ง glorytun + สร้าง pre-shared key
+         Section 2: ตั้งค่า Server ทุกขั้นตอน
+         Section 3: ตั้งค่า Pi 12 ขั้นตอน พร้อมเนื้อหาไฟล์ครบ
+         Section 4: ตรวจสอบหลังติดตั้ง, ทดสอบ failover และ reboot
+         Section 5-6: Backup และ Restore (Pi + Server, รองรับทุก OS)
+     - ค้นพบ SSH port เปลี่ยนจาก 22 → 4822 แก้ด้วยการอัปเดต ~/.ssh/config
+     - อัปเดต config ใน SETUP_OVERVIEW.txt ให้ตรงกับของจริงบน Server
+       (glorytun-server.service และ nftables.conf ต่างจากที่เขียนไว้เดิม)
+
+■ สรุปไฟล์ที่สร้าง / แก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  สร้างใหม่:
+    MANUAL.txt                                — คู่มือการใช้งานระบบ (9 sections)
+    SETUP_OVERVIEW.txt                        — คู่มือติดตั้งตั้งแต่ต้น (6 sections)
+
+  แก้ไข:
+    ~/.ssh/config                             — เพิ่ม Port 4822 ให้ Host glorytun-server
+
+  Backup ที่สร้าง:
+    Pi  : /home/dtc/backups/pi-backup-2026-05-15.tar.gz  (1.9GB, full system)
+    Mac : backups/pi-backup-2026-05-15.tar.gz            (1.9GB, สำเนา)
+
+■ เทคโนโลยีที่ใช้
+────────────────────────────────────────────────────────────────────────
+
+  - tar / gzip     — สร้าง full system backup พร้อม --exclude pseudo-filesystems
+  - SSH / SCP      — เชื่อมต่อ Pi และ Server, ถ่ายโอนไฟล์ backup
+  - Bash           — รัน backup script และตรวจสอบไฟล์ด้วย grep
+
+■ ปัญหาที่พบและแนวทางแก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  ปัญหา : SSH เข้า Pi ไม่ได้ — IP เปลี่ยนหลัง DHCP
+  วิเคราะห์: Pi ได้รับ DHCP IP ใหม่ ทำให้ SSH ไปที่ 192.168.1.7 (IP เดิม) timeout
+  แก้ไข : ผู้ใช้แจ้ง IP ใหม่ 192.168.1.2 — SSH เข้าได้ทันที
+
+  ปัญหา : SSH เข้า Server ไม่ได้ — port เปลี่ยนจาก 22 → 4822 โดยไม่รู้ตัว
+  วิเคราะห์: Server เปลี่ยน SSH port แต่ ~/.ssh/config ยังระบุ default port 22
+  แก้ไข : อัปเดต ~/.ssh/config เพิ่ม Port 4822 ใน Host glorytun-server
+             และอัปเดต MANUAL.txt / SETUP_OVERVIEW.txt ให้ใช้ <SERVER_SSH_PORT>
+
+  ปัญหา : Config จริงบน Server ต่างจากที่เขียนใน SETUP_OVERVIEW.txt 2 จุด
+  วิเคราะห์: glorytun-server.service และ nftables.conf ถูกเขียนจาก CLAUDE.md
+             ก่อนที่จะ SSH เข้า Server เพื่ออ่าน config จริงได้
+  แก้ไข : อ่าน config จริงหลัง SSH เข้าได้แล้ว อัปเดตเนื้อหาทั้ง 2 ส่วนให้ตรง
+
+════════════════════════════════════════════════════════════════════════
