@@ -1,5 +1,120 @@
 ════════════════════════════════════════════════════════════════════════
   รายงานการปฏิบัติงานฝึกประสบการณ์วิชาชีพ
+  วันที่  : จันทร์ที่ 11 พฤษภาคม 2569
+  สัปดาห์ : สัปดาห์ที่ 9
+════════════════════════════════════════════════════════════════════════
+
+■ งานที่ดำเนินการในวันนี้
+────────────────────────────────────────────────────────────────────────
+
+1. ติดตั้งและ Patch OpenMPTCProuter บน Ubuntu 22.04 (ช่วงเช้า)
+   ─────────────────────────────────────────────────────────────────
+   พยายามติดตั้ง OpenMPTCProuter (OMR) Server บน Ubuntu 22.04
+   เพื่อใช้เป็น Server สำหรับรับ Channel Bonding จาก Pi 4
+
+   ขั้นตอนการดำเนินการ:
+     1. พบว่า OMR install script เข้าสู่ "Update mode" แทน "Install mode"
+        เนื่องจากมีไฟล์ค้างจากการทดลองติดตั้งบน Ubuntu 24.04 ครั้งก่อน
+        ทำการ cleanup ไฟล์ที่ค้าง ได้แก่ bionic-backports.list,
+        bionic-universe.list, impish-universe.list, openmptcprouter.list
+        และ GPG keys ที่เกี่ยวข้องทั้งหมด จากนั้นรัน script ใหม่
+
+     2. วิเคราะห์ source code ของ OMR script พบว่าบรรทัด 426, 427, 430
+        เป็นตัวเพิ่ม Ubuntu Bionic (18.04) และ Impish (21.10) repos
+        ซึ่งถูกย้ายไป old-releases แล้ว ทำให้ apt update fail ด้วย 404
+        ทำการ patch script ด้วยการ comment out บรรทัดดังกล่าว
+
+     3. หลัง patch แล้ว script รันต่อได้สำเร็จ ติดตั้ง kernel 6.12 (xanmod)
+        และ iproute2 ได้ แต่ติดที่ Shadowsocks ซึ่งต้องการ libmbedcrypto3
+        ที่ Ubuntu 22.04 ไม่มี (มีแต่ libmbedcrypto7 ที่ ABI ไม่ compatible)
+        พยายามหา .deb จาก Debian Bullseye มาลงตรง แต่ URL ก็ 404 เช่นกัน
+
+     4. ประเมินทางเลือกและตัดสินใจเปลี่ยนแผนจาก OMR
+        ไปใช้ Glorytun UDP standalone แทน เนื่องจาก feature ที่สูญเสียไป
+        (Web UI, Shadowsocks, MLVPN, QoS) ไม่กระทบกับ MVP use case หลัก
+
+2. Build Glorytun จาก Source และตั้งค่า Server เบื้องต้น (ช่วงบ่าย)
+   ─────────────────────────────────────────────────────────────────
+   Build Glorytun จาก source code บน Ubuntu 22.04 แล้วตั้งค่า Server
+   ให้พร้อมรับ connection จาก Pi 4
+
+   ขั้นตอนการดำเนินการ:
+     1. ติดตั้ง dependencies และ Build Glorytun
+        - ติดตั้ง build-essential, libsodium-dev, libev-dev,
+          autoconf, automake, libtool
+        - Clone repo จาก GitHub ด้วย --recursive flag
+          เพื่อดึง submodules (argz, mud, aegis256) มาด้วย
+        - Build สำเร็จ ได้ /usr/local/bin/glorytun
+          version 0.3.4-51-g32267e8 พร้อม libsodium 10.3
+
+     2. ค้นพบ syntax ที่ถูกต้องของ Glorytun 0.3.4
+        - ทดสอบ run manual พบว่า syntax ต่างจาก documentation
+        - ใช้ keyword "from" แทน "listener"
+        - ต้องระบุ sub-argument "port" แยก เช่น "from port 65001"
+          ไม่ใช่ "from 0.0.0.0:65001"
+        - ค้นหา syntax ที่ถูกต้องจาก source code ใน bind.c โดยตรง
+
+     3. ตั้งค่า Server
+        - สร้าง systemd service พร้อม ExecStartPre ลบ gt0 เก่าก่อน start
+          และ ExecStartPost flush IP, add IP, link up อัตโนมัติ
+        - Generate pre-shared key สำหรับ tunnel
+        - ตั้ง ip_forward (sysctl) และ iptables MASQUERADE
+          สำหรับ traffic จาก tunnel (10.255.255.0/30) ออก Internet ผ่าน enp86s0
+        - ตั้ง Static IP (192.168.1.100) ผ่าน netplan สำหรับ testing
+        - ตั้ง Port Forward UDP 65001 ที่ router บ้าน
+        - ทดสอบ external access จาก 4G ด้วย nc -zv -u → ผ่านสำเร็จ
+
+■ สรุปไฟล์ที่สร้าง / แก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  Server (Ubuntu 22.04):
+    /usr/local/bin/glorytun              — Glorytun binary (build จาก source)
+    /etc/glorytun/key                    — Pre-shared key
+    /etc/systemd/system/glorytun-server.service  — Systemd service
+    /etc/netplan/...                     — Static IP 192.168.1.100
+    iptables rules                       — MASQUERADE 10.255.255.0/30 → enp86s0
+
+■ เทคโนโลยีที่ใช้
+────────────────────────────────────────────────────────────────────────
+
+  - OpenMPTCProuter (OMR) — ทดลองใช้แล้วเปลี่ยนแผน (dependency hell)
+  - Glorytun 0.3.4        — Channel Bonding ผ่าน UDP tunnel (build จาก source)
+  - libsodium             — Cryptography library (chacha20poly1305)
+  - systemd               — Service management สำหรับ glorytun-server
+  - iptables / NAT        — IP forwarding + MASQUERADE
+  - netplan               — ตั้ง Static IP บน Ubuntu 22.04
+  - GCC / autotools       — Build toolchain สำหรับ compile Glorytun
+
+■ ปัญหาที่พบและแนวทางแก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  ปัญหา : OMR script เข้า "Update mode" แทน "Install mode"
+  วิเคราะห์: มีไฟล์ค้างจากการทดลองติดตั้งบน Ubuntu 24.04 ครั้งก่อน
+  แก้ไข : ลบไฟล์ค้างทั้งหมด (apt lists, openmptcprouter.list, GPG keys) แล้วรันใหม่
+
+  ปัญหา : OMR script เพิ่ม bionic/impish repos ทุกครั้ง ทำให้ apt update 404
+  วิเคราะห์: Ubuntu Bionic (18.04) และ Impish (21.10) ถูกย้ายไป old-releases แล้ว
+             script เพิ่ม repos เหล่านี้ที่บรรทัด 426, 427, 430
+  แก้ไข : Patch script ด้วยการ comment out บรรทัดดังกล่าว
+
+  ปัญหา : OMR ต้องการ libmbedcrypto3 ซึ่งไม่มีใน Ubuntu 22.04 (dependency hell)
+  วิเคราะห์: Ubuntu 22.04 มีเฉพาะ libmbedcrypto7 ซึ่ง ABI ไม่ compatible
+             .deb จาก Debian Bullseye ก็ 404 ไม่มีแล้ว
+  แก้ไข : เปลี่ยนแผนจาก OMR ไปใช้ Glorytun UDP standalone แทน
+
+  ปัญหา : Glorytun syntax ต่างจาก documentation
+  วิเคราะห์: เอกสารและตัวอย่างออนไลน์เขียนสำหรับ version เก่า
+             version 0.3.4 ใช้ keyword และ argument format ต่างออกไป
+  แก้ไข : อ่าน source code ใน bind.c โดยตรงเพื่อหา syntax ที่ถูกต้อง
+
+  ปัญหา : Systemd service file parse ผิดเพราะมี space หลัง backslash
+  วิเคราะห์: backslash สำหรับ multiline ใน ExecStart ต้องไม่มี space ตามหลัง
+  แก้ไข : รวม ExecStart ให้อยู่บรรทัดเดียวแทนการใช้ backslash multiline
+
+════════════════════════════════════════════════════════════════════════
+
+════════════════════════════════════════════════════════════════════════
+  รายงานการปฏิบัติงานฝึกประสบการณ์วิชาชีพ
   วันที่  : อังคารที่ 12 พฤษภาคม 2569
   สัปดาห์ : สัปดาห์ที่ 9
 ════════════════════════════════════════════════════════════════════════
