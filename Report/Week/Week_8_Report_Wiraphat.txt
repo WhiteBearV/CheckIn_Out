@@ -2,7 +2,7 @@
 
 รายงานการฝึกงาน
 
-ประจำสัปดาห์ที่ 8  5 พฤษภาคม 2569 ถึง 8 พฤษภาคม 2569
+ประจำสัปดาห์ที่ 8  5 พฤษภาคม 2569 ถึง 7 พฤษภาคม 2569
 
         วันที่ 5 พฤษภาคม 2569 เข้าร่วมการประชุมสภากาแฟในช่วงเช้า เพื่อฟังการรายงานความคืบหน้าของงานที่ปฏิบัติในช่วงที่ผ่านมา จากนั้นเดินทางไปประจำกองบริการ และลงมือพัฒนาโปรแกรมระบบบันทึกเวลาเข้างาน–ออกงานด้วยการจดจำใบหน้าต่อ โดยที่ในวันนี้เริ่มจากการ Audit สถานะ Production Readiness ของระบบรอบใหม่หลังจาก Version 13 (Watchdog) Merge เสร็จไปแล้ว สรุปประเด็นที่ยังเหลือออกเป็น 3 กลุ่ม กลุ่ม Critical ได้แก่ Authentication และ Authorization ที่ Mutating Endpoint ของ stream_server ทุกตัวยังเปิดให้คนภายใน LAN เรียกได้, การใช้ HTTPS หรือ TLS เพื่อกันรหัส RTSP และ ADMIN_API_KEY รั่วผ่าน HTTP Plain และระบบ Logging ที่ยังใช้ print() อยู่ทั้งหมด กลุ่ม Important ได้แก่ การลบไฟล์ live_snap_*.jpg และ live_snapfull_*.jpg เมื่อกด Stop, การวาง DB Backup กับ PicSAVE Retention Policy, Monitoring/Alerting และการ Deploy Frontend ผ่าน systemd ส่วนกลุ่ม Nice to have เป็นเรื่อง Tests, Config Validation, Docker และ Secrets Management
 
