@@ -1,0 +1,198 @@
+════════════════════════════════════════════════════════════════════════
+  รายงานการปฏิบัติงานฝึกประสบการณ์วิชาชีพ
+  วันที่  : จันทร์ที่ 18 พฤษภาคม 2569
+  สัปดาห์ : สัปดาห์ที่ 10
+════════════════════════════════════════════════════════════════════════
+
+■ งานที่ดำเนินการในวันนี้
+────────────────────────────────────────────────────────────────────────
+
+1. พัฒนาระบบ Login และ Role & Permission สำหรับ Web Dashboard (ช่วงเช้า)
+   ─────────────────────────────────────────────────────────────────
+   ออกแบบและพัฒนาระบบการพิสูจน์ตัวตนและการควบคุมสิทธิ์แบบ Role-Based
+   Access Control (RBAC) สำหรับ Web Dashboard ทั้งหมด เพื่อให้ผู้ใช้
+   แต่ละคนเห็นและใช้งานได้เฉพาะส่วนที่มีสิทธิ์เท่านั้น
+
+   Authentication — JWT Login:
+     - เพิ่มหน้า Login (LoginView.vue) พร้อม form รับ username/password
+     - เมื่อ Login สำเร็จ server สร้าง JWT Token (HS256, อายุ 8 ชั่วโมง)
+       บรรจุ username, role, display_name และ permissions ลงไปใน token
+     - Token เก็บใน localStorage ส่งกลับทุก API request ผ่าน
+       Authorization: Bearer <token>
+     - Router Guard ตรวจ Token ทุกครั้งก่อนเข้าหน้า — ถ้าหมดอายุหรือ
+       ไม่มีสิทธิ์ จะ redirect ไป /login อัตโนมัติ
+
+   ฐานข้อมูล — 2 ตารางใหม่ใน PostgreSQL:
+     dashboard_roles  : id, name, display_name, permissions (JSONB)
+     dashboard_users  : id, username, password_hash, display_name,
+                        role_id (FK), is_active, created_at
+     ระบบสร้าง Role/User เริ่มต้นอัตโนมัติเมื่อ DB ว่างเปล่า:
+       - Role "ผู้ดูแลระบบ" (admin)  → permissions: ["*"] (Superadmin)
+       - Role "ผู้ดูรายงาน" (viewer) → ["attendance.view","cameras.view"]
+       - User "admin"  / "admin1234"  → role: admin
+       - User "viewer" / "viewer1234" → role: viewer
+
+   Permission ที่มีในระบบ (5 สิทธิ์):
+     attendance.view  — เข้าหน้าภาพรวม ดูกราฟและรายชื่อลงเวลา
+     attendance.clear — กดปุ่ม Clear Today ล้างข้อมูลวันนี้
+     cameras.view     — เข้าหน้ากล้อง ดู Live Feed
+     cameras.manage   — Start/Stop กล้อง, เพิ่ม/ลบ/แก้ไขกล้อง
+     users.manage     — เข้าหน้าตั้งค่า จัดการ Users และ Roles
+     * (Superadmin)   — มีสิทธิ์ทุกอย่างโดยอัตโนมัติ
+
+   หน้า Settings (SettingsView.vue) — จัดการได้ผ่าน Web Dashboard:
+     แท็บ Users:
+       - ดูรายชื่อผู้ใช้ทั้งหมด พร้อม Role และสถานะ Active/Inactive
+       - เพิ่ม / แก้ไข / ลบ User, Reset รหัสผ่าน, Active/Inactive บัญชี
+     แท็บ Roles & Permissions:
+       - ดูรายชื่อ Role พร้อม Badge แสดงเฉพาะ Permission ที่ Role มี
+       - เพิ่ม / แก้ไข / ลบ Role กำหนด Permission ได้เอง
+
+   Backend API ที่เพิ่ม:
+     POST /auth/login              — Login คืน JWT Token
+     GET  /auth/me                 — ดึง Permission ล่าสุดจาก DB
+     POST /auth/change-password    — เปลี่ยนรหัสผ่านตัวเอง
+     GET  /admin/permissions       — ดู Permission ทั้งหมดในระบบ
+     CRUD /admin/roles             — จัดการ Roles
+     CRUD /admin/users             — จัดการ Users
+
+2. ซ่อน UI Element ตามสิทธิ์ผู้ใช้ (Permission-based UI Hiding) (ช่วงเช้า)
+   ─────────────────────────────────────────────────────────────────
+   เพิ่มระบบซ่อน/แสดง UI ตามสิทธิ์ของผู้ใช้ที่ Login อยู่
+   เพื่อให้ผู้ใช้ที่ไม่มีสิทธิ์ไม่เห็น UI ที่ไม่เกี่ยวข้องกับตน
+
+   การเปลี่ยนแปลงหลัก:
+
+   AppNav.vue:
+     - เปลี่ยน menuRoutes จาก constant ธรรมดาเป็น computed()
+       เพื่อให้ reactive ตาม auth state
+     - กรองเฉพาะ route ที่ผู้ใช้มีสิทธิ์ (meta.permission)
+       → แท็บที่ไม่มีสิทธิ์จะไม่ปรากฏโดยอัตโนมัติ
+
+   CameraView.vue:
+     - ซ่อนปุ่ม ▶ เปิด/⏹ หยุดทั้งหมด → ต้องมีสิทธิ์ cameras.manage
+     - ซ่อนปุ่ม ▶/⏹ กล้องเดี่ยว (1 กล้อง) → ต้องมีสิทธิ์ cameras.manage
+     - ซ่อนปุ่ม ☰ รายกล้อง และแถวปุ่มควบคุมรายกล้อง → cameras.manage
+     - ซ่อนปุ่ม ⚙ จัดการกล้อง → cameras.manage
+     - ซ่อนปุ่ม ▶ เปิด ที่แสดงกลางหน้าจอกล้อง → cameras.manage
+     - ซ่อนกล่อง "วิธีใช้" (คำแนะนำปุ่ม start/stop) → cameras.manage
+     - ซ่อนปุ่ม 🗑 Clear Today → ต้องมีสิทธิ์ attendance.clear
+
+   DashboardView.vue:
+     - ซ่อนปุ่ม 🗑 Clear Today → ต้องมีสิทธิ์ attendance.clear
+
+3. แก้ปัญหา Permission ไม่อัปเดตหลังแก้ Role (ช่วงเช้า-บ่าย)
+   ─────────────────────────────────────────────────────────────────
+   ปัญหาเดิม: เมื่อผู้ดูแลระบบแก้ Permission ของ Role ใน Settings
+   ผู้ใช้ที่ Login อยู่ยังเห็น UI เดิม เพราะ JWT Token เก็บ
+   Permission เก่าไว้ตั้งแต่ตอน Login
+
+   แนวทางแก้ไข:
+     1. เพิ่ม endpoint GET /auth/me ให้ดึง Permission ล่าสุดจาก DB
+        (ไม่ใช้ Permission จาก Token)
+     2. เพิ่ม refreshPermissions() ใน useAuth.js
+        — เรียก /auth/me แล้ว update user.value ด้วย Permission ใหม่
+     3. เรียก refreshPermissions() ใน App.vue ตอน onMounted
+        — ทุกครั้งที่โหลดแอป Permission จะ sync กับ DB ทันที
+        — AppNav และ v-if ทุกจุด reactive update อัตโนมัติ
+
+4. บังคับให้ต้องมี Superadmin อย่างน้อย 1 Role และ 1 ผู้ใช้ (ช่วงบ่าย)
+   ─────────────────────────────────────────────────────────────────
+   เพิ่ม constraint ป้องกันไม่ให้ระบบไม่มีผู้ดูแลระบบ (Lockout Prevention)
+
+   เพิ่ม helper function _assert_superadmin_survives():
+     - ตรวจว่ายังมี Role ที่มีสิทธิ์ ["*"] อย่างน้อย 1 Role
+     - ตรวจว่าใน Role ดังกล่าวยังมีผู้ใช้ที่ active อย่างน้อย 1 คน
+     - คืน HTTP 400 พร้อม error message ถ้าเงื่อนไขไม่ผ่าน
+
+   Guard ที่เพิ่มใน API endpoints:
+     - PUT  /admin/roles/{id}  — ถ้าเปลี่ยน permissions ออกจาก *
+     - DELETE /admin/roles/{id} — ก่อนลบ Role
+     - PUT  /admin/users/{id}  — ถ้า deactivate หรือเปลี่ยน Role
+                                  ไปยัง Role ที่ไม่มี *
+     - DELETE /admin/users/{id} — ก่อนลบผู้ใช้
+
+5. ปรับปรุง Permission ในระบบ (ช่วงบ่าย)
+   ─────────────────────────────────────────────────────────────────
+   นำ Permission ที่ยังไม่มี UI รองรับออกเพื่อให้ระบบ Permission
+   ในหน้า Settings ตรงกับความเป็นจริง
+
+   ลบ Permission:
+     - attendance.edit  (แก้ไข/ลบรายการลงเวลา) — ยังไม่มี UI
+     - system.manage    (จัดการระบบ)             — ยังไม่มี UI
+
+   ปรับ endpoint ที่เคยใช้ attendance.edit:
+     - POST /attendance/checkout/{per_id}       → เปลี่ยนเป็น attendance.clear
+     - PUT  /attendance/{log_id}                → เปลี่ยนเป็น attendance.clear
+     - DELETE /attendance/{log_id}              → เปลี่ยนเป็น attendance.clear
+
+6. แก้ปัญหา Login ไม่ได้บน Docker (Not Found) (ช่วงบ่าย)
+   ─────────────────────────────────────────────────────────────────
+   พบปัญหา: build Docker แล้ว Login ผ่าน Web Dashboard ขึ้น "Not Found"
+
+   วิเคราะห์:
+     - ใน Dev mode: Vite proxy แปลง /api/auth/login → /auth/login
+       แล้วส่งต่อ FastAPI → ทำงานได้ปกติ
+     - ใน Production (Docker): ไม่มี Vite proxy
+       browser เรียก /api/auth/login ตรงๆ → FastAPI ไม่มี route นี้ → 404
+
+   แก้ไข:
+     - สร้าง dashboard/.env.production พร้อม VITE_API_BASE_URL= (ว่าง)
+     - ใน Production build: BASE_URL = "" → เรียก /auth/login ตรงๆ ✓
+     - ใน Dev mode: VITE_API_BASE_URL ไม่ถูกตั้ง → fallback เป็น /api
+       → Vite proxy ยังทำงานปกติ ✓
+
+■ สรุปไฟล์ที่สร้าง / แก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  Backend:
+    api.py                      — เพิ่ม _assert_superadmin_survives(),
+                                   แก้ /auth/me ดึง permission จาก DB,
+                                   เพิ่ม guard ทุก role/user endpoint,
+                                   ลบ attendance.edit และ system.manage
+
+  Frontend (dashboard/src/):
+    composables/useAuth.js      — เพิ่ม refreshPermissions()
+    composables/App.vue         — เรียก refreshPermissions() ตอน onMounted
+    components/AppNav.vue       — เปลี่ยน menuRoutes เป็น computed()
+                                   กรองแท็บตาม permission
+    views/CameraView.vue        — เพิ่ม v-if hasPermission() บนปุ่มควบคุม
+                                   ทุกปุ่มที่ต้องมีสิทธิ์
+    views/DashboardView.vue     — เพิ่ม v-if hasPermission('attendance.clear')
+                                   บนปุ่ม Clear Today
+
+  สร้างใหม่:
+    dashboard/.env.production   — กำหนด VITE_API_BASE_URL= สำหรับ Docker build
+
+■ เทคโนโลยีที่ใช้
+────────────────────────────────────────────────────────────────────────
+
+  - Vue 3 (Composition API)  — v-if reactive, computed(), onMounted()
+  - Vite                     — .env.production สำหรับ build-time env var
+  - FastAPI                  — เพิ่ม endpoint /auth/me, guard function
+  - JWT (PyJWT)              — Token ยังใช้เดิม, permission ดึงจาก DB แทน
+  - PostgreSQL (JSONB)       — ตรวจ permissions @> '["*"]'::jsonb
+
+■ ปัญหาที่พบและแนวทางแก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  ปัญหา : AppNav แสดงแท็บที่ผู้ใช้ไม่มีสิทธิ์ แม้จะกรองแล้ว
+  วิเคราะห์: menuRoutes เป็น constant ธรรมดา คำนวณครั้งเดียวตอน setup
+             ไม่ reactive ต่อการเปลี่ยนแปลง auth state
+  แก้ไข : เปลี่ยนเป็น computed() เพื่อให้ Vue track user.value
+             และ re-evaluate เมื่อ permission เปลี่ยน
+
+  ปัญหา : Permission ไม่อัปเดตเมื่อผู้ดูแลแก้ Role ใน Settings
+  วิเคราะห์: JWT Token เก็บ permission ตอน Login — ไม่ได้รับ
+             การแก้ไขหลังจากนั้น เว้นแต่ Logout แล้ว Login ใหม่
+  แก้ไข : เพิ่ม /auth/me ดึง permission จาก DB โดยตรง
+             และเรียก refreshPermissions() ทุกครั้งที่โหลดแอป
+
+  ปัญหา : Login บน Docker ขึ้น Not Found
+  วิเคราะห์: Frontend เรียก /api/auth/login แต่ FastAPI ไม่มี /api prefix
+             Vite proxy ใช้ได้เฉพาะ dev mode เท่านั้น
+  แก้ไข : สร้าง .env.production ตั้ง VITE_API_BASE_URL เป็นว่าง
+             ทำให้ production build เรียก /auth/login ตรงๆ
+             โดยไม่กระทบ dev mode
+
+════════════════════════════════════════════════════════════════════════
