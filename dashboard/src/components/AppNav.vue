@@ -29,13 +29,19 @@
 </template>
 
 <script setup>
+import { computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
+import { hasPermission } from '@/composables/useAuth.js'
 
 const router = useRouter()
 const route  = useRoute()
 
-// ดึงเฉพาะ routes ที่มี meta.label (ที่ต้องการแสดงในเมนู)
-const menuRoutes = router.getRoutes().filter(r => r.meta?.label)
+// computed เพื่อให้ reactive ตาม auth state
+const menuRoutes = computed(() =>
+  router.getRoutes().filter(r =>
+    r.meta?.label && (!r.meta.permission || hasPermission(r.meta.permission))
+  )
+)
 
 // ตรวจว่า route นั้น active อยู่หรือเปล่า
 function isActive(r) {

@@ -28,8 +28,14 @@
 </template>
 
 <script setup>
+import { onMounted } from 'vue'
 import { RouterView } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'
 import AppNav    from '@/components/AppNav.vue'
-import { isUIFullscreen } from '@/composables/useUIFullscreen.js'
+import { isUIFullscreen }    from '@/composables/useUIFullscreen.js'
+import { isAuthenticated, refreshPermissions } from '@/composables/useAuth.js'
+
+onMounted(async () => {
+  if (isAuthenticated.value) await refreshPermissions()
+})
 </script>

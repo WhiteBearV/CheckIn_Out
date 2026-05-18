@@ -13,6 +13,7 @@
       </div>
       <div class="flex items-center gap-2">
         <button
+          v-if="hasPermission('attendance.clear')"
           @click="confirmClearToday"
           :disabled="clearing"
           title="ล้างข้อมูลการลงเวลาวันนี้ทั้งหมด + session cache (สำหรับ test เท่านั้น)"
@@ -161,6 +162,7 @@ import OrgBreakdown from '@/components/OrgBreakdown.vue'
 import { useAttendance }  from '@/composables/useAttendance.js'
 import { useLiveSession } from '@/composables/useLiveSession.js'
 import { apiDelete }      from '@/api/attendance.js'
+import { hasPermission }  from '@/composables/useAuth.js'
 
 const {
   stats,

@@ -65,6 +65,28 @@ export function logout() {
   localStorage.removeItem(USER_KEY)
 }
 
+// ── Refresh permissions from DB (เรียกตอนโหลดแอป) ───────────────────────────
+
+export async function refreshPermissions() {
+  if (!token.value) return
+  const BASE = import.meta.env.VITE_API_BASE_URL ?? '/api'
+  try {
+    const res = await fetch(`${BASE}/auth/me`, {
+      headers: { Authorization: `Bearer ${token.value}` },
+    })
+    if (res.status === 401) { logout(); return }
+    if (!res.ok) return
+    const data = await res.json()
+    user.value = {
+      username:     data.username,
+      display_name: data.display_name,
+      role:         data.role,
+      permissions:  data.permissions,
+    }
+    localStorage.setItem(USER_KEY, JSON.stringify(user.value))
+  } catch { /* network error — ใช้ token เดิมไปก่อน */ }
+}
+
 // ── Verify token on app load (check expiry) ───────────────────────────────────
 
 export function checkTokenExpiry() {

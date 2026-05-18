@@ -123,12 +123,10 @@ _bearer = HTTPBearer(auto_error=False)
 
 PERMISSIONS_META = {
     "attendance.view":   "ดูรายการลงเวลา",
-    "attendance.edit":   "แก้ไข/ลบรายการลงเวลา",
     "attendance.clear":  "ล้างข้อมูลวันนี้",
     "cameras.view":      "ดูกล้องและ Live Feed",
     "cameras.manage":    "จัดการกล้อง (เพิ่ม/ลบ/แก้ไข)",
     "users.manage":      "จัดการผู้ใช้และ Roles",
-    "system.manage":     "จัดการระบบ",
 }
 
 
@@ -179,6 +177,34 @@ def _require_admin(user: dict = Depends(_require_auth)):
     if not _has_permission(user, "users.manage"):
         raise HTTPException(status_code=403, detail="ต้องมีสิทธิ์ users.manage")
     return user
+
+
+def _assert_superadmin_survives(cur, exclude_role_id=None, exclude_user_id=None):
+    """ตรวจว่ายังมี Role ที่มี ['*'] และมีผู้ใช้ active อย่างน้อย 1 คนหลังการเปลี่ยนแปลง"""
+    if exclude_role_id is not None:
+        cur.execute(
+            "SELECT id FROM dashboard_roles WHERE permissions @> '[\"*\"]'::jsonb AND id != %s",
+            (exclude_role_id,)
+        )
+    else:
+        cur.execute("SELECT id FROM dashboard_roles WHERE permissions @> '[\"*\"]'::jsonb")
+    super_role_ids = [r[0] for r in cur.fetchall()]
+    if not super_role_ids:
+        raise HTTPException(status_code=400,
+            detail="ต้องมี Role ที่มีสิทธิ์ทั้งหมด (*) อย่างน้อย 1 Role เสมอ")
+    placeholders = ', '.join(['%s'] * len(super_role_ids))
+    params: list = super_role_ids[:]
+    extra = ""
+    if exclude_user_id is not None:
+        extra = " AND id != %s"
+        params.append(exclude_user_id)
+    cur.execute(
+        f"SELECT COUNT(*) FROM dashboard_users WHERE role_id IN ({placeholders}) AND is_active = TRUE{extra}",
+        params
+    )
+    if cur.fetchone()[0] == 0:
+        raise HTTPException(status_code=400,
+            detail="ต้องมีผู้ใช้ที่ active อย่างน้อย 1 คนใน Role ที่มีสิทธิ์ทั้งหมด (*) เสมอ")
 
 
 def _init_auth_tables():
@@ -272,12 +298,24 @@ def auth_login(req: LoginRequest):
 
 @app.get("/auth/me")
 def auth_me(user: dict = Depends(_require_auth)):
-    """ดึงข้อมูล user ปัจจุบัน"""
+    """ดึง permission ล่าสุดจาก DB (ไม่ใช่จาก token) เพื่อให้ frontend sync เสมอ"""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT u.display_name, r.name, r.permissions
+                FROM dashboard_users u
+                JOIN dashboard_roles r ON u.role_id = r.id
+                WHERE u.username = %s AND u.is_active = TRUE
+            """, (user["sub"],))
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=401, detail="ผู้ใช้ถูกระงับหรือไม่มีในระบบ")
+    display_name, role, permissions = row
     return {
         "username":     user["sub"],
-        "display_name": user.get("display_name", user["sub"]),
-        "role":         user.get("role"),
-        "permissions":  user.get("permissions", []),
+        "display_name": display_name,
+        "role":         role,
+        "permissions":  permissions if isinstance(permissions, list) else [],
     }
 
 
@@ -352,6 +390,9 @@ def update_role(role_id: int, body: RoleUpdateBody,
     vals.append(role_id)
     with get_connection() as conn:
         with conn.cursor() as cur:
+            # ถ้าเปลี่ยน permissions และไม่มี * → ตรวจว่ายังมี superadmin role อื่น
+            if body.permissions is not None and '*' not in body.permissions:
+                _assert_superadmin_survives(cur, exclude_role_id=role_id)
             cur.execute(f"UPDATE dashboard_roles SET {', '.join(fields)} WHERE id = %s", vals)
             if cur.rowcount == 0:
                 raise HTTPException(status_code=404, detail="ไม่พบ Role")
@@ -367,6 +408,7 @@ def delete_role(role_id: int, _: dict = Depends(_require_perm("users.manage"))):
             if cur.fetchone()[0] > 0:
                 raise HTTPException(status_code=409,
                     detail="ไม่สามารถลบ Role ที่มีผู้ใช้อยู่ได้ กรุณาเปลี่ยน Role ผู้ใช้ก่อน")
+            _assert_superadmin_survives(cur, exclude_role_id=role_id)
             cur.execute("DELETE FROM dashboard_roles WHERE id = %s", (role_id,))
             if cur.rowcount == 0:
                 raise HTTPException(status_code=404, detail="ไม่พบ Role")
@@ -455,6 +497,23 @@ def update_user(user_id: int, body: UserUpdateBody,
         fields.append("is_active = %s"); vals.append(body.is_active)
     if not fields:
         raise HTTPException(status_code=400, detail="ไม่มีข้อมูลที่ต้องอัพเดต")
+
+    # ตรวจ superadmin constraint ถ้า deactivate หรือเปลี่ยน role
+    if body.is_active is False or body.role_id is not None:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                if body.role_id is not None:
+                    # เปลี่ยน role → ตรวจว่า role ใหม่มี * หรือเปล่า
+                    cur.execute("SELECT permissions FROM dashboard_roles WHERE id = %s", (body.role_id,))
+                    role_row = cur.fetchone()
+                    new_perms = role_row[0] if role_row else []
+                    if '*' not in (new_perms or []):
+                        # role ใหม่ไม่ใช่ superadmin → ตรวจว่ายังมี superadmin user อื่น
+                        _assert_superadmin_survives(cur, exclude_user_id=user_id)
+                else:
+                    # แค่ deactivate → ตรวจว่ายังมี superadmin user active อื่น
+                    _assert_superadmin_survives(cur, exclude_user_id=user_id)
+
     vals.append(user_id)
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -495,6 +554,7 @@ def delete_user(user_id: int, current: dict = Depends(_require_perm("users.manag
                 raise HTTPException(status_code=404, detail="ไม่พบผู้ใช้")
             if row[0] == current["sub"]:
                 raise HTTPException(status_code=400, detail="ไม่สามารถลบบัญชีของตัวเองได้")
+            _assert_superadmin_survives(cur, exclude_user_id=user_id)
             cur.execute("DELETE FROM dashboard_users WHERE id = %s", (user_id,))
         conn.commit()
     return {"ok": True}
@@ -711,7 +771,7 @@ def attendance_today(_: dict = Depends(_require_perm("attendance.view"))):
 
 
 @app.post("/attendance/checkout/{per_id}")
-def manual_checkout(per_id: str, _: dict = Depends(_require_perm("attendance.edit"))):
+def manual_checkout(per_id: str, _: dict = Depends(_require_perm("attendance.clear"))):
     """
     ลงชื่อออกด้วยตนเองจาก Dashboard
     - ต้องมี IN วันนี้ก่อน
@@ -810,7 +870,7 @@ def attendance_by_person(
     ]
 
 
-@app.put("/attendance/{log_id}", dependencies=[Depends(_require_perm("attendance.edit"))])
+@app.put("/attendance/{log_id}", dependencies=[Depends(_require_perm("attendance.clear"))])
 def update_attendance(log_id: int, req: AttendanceUpdateRequest):
     """แก้ไข record ลงเวลา — ส่งเฉพาะ field ที่ต้องการเปลี่ยน"""
     if req.status and req.status not in ("IN", "OUT"):
@@ -836,7 +896,7 @@ def update_attendance(log_id: int, req: AttendanceUpdateRequest):
     return {"success": True, "id": log_id, "updated": fields}
 
 
-@app.delete("/attendance/{log_id}", dependencies=[Depends(_require_perm("attendance.edit"))])
+@app.delete("/attendance/{log_id}", dependencies=[Depends(_require_perm("attendance.clear"))])
 def delete_attendance(log_id: int):
     """ลบ record ลงเวลา (ลบถาวร)"""
     with get_connection() as conn:

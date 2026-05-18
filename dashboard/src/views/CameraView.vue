@@ -168,8 +168,8 @@
                     >↻ รีเฟรชสตรีม</button>
                   </div>
 
-                  <!-- ปุ่มเปิด: เฉพาะเมื่อกล้องดับสนิท ไม่รัน ไม่โหลด -->
-                  <div v-else-if="!isLive(cam.id) && !getCamState(cam.id).isStarting && !getCamState(cam.id).isBooting"
+                  <!-- ปุ่มเปิด: เฉพาะเมื่อกล้องดับสนิท ไม่รัน ไม่โหลด และมีสิทธิ์ -->
+                  <div v-else-if="!isLive(cam.id) && !getCamState(cam.id).isStarting && !getCamState(cam.id).isBooting && hasPermission('cameras.manage')"
                        class="relative z-20 flex flex-col items-center gap-2">
                     <button @click.stop="startFace(cam.id)"
                       class="btn-cam-start px-5 py-2 rounded-lg text-xs transition-colors"
@@ -218,7 +218,7 @@
 
           <!-- Start/Stop all -->
           <button
-            v-if="cameras.length > 1"
+            v-if="cameras.length > 1 && hasPermission('cameras.manage')"
             @click="anyLive ? stopAll() : startAll()"
             :disabled="anyStarting"
             class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs
@@ -230,7 +230,7 @@
 
           <!-- Single-cam toggle for 1 camera -->
           <button
-            v-if="cameras.length === 1"
+            v-if="cameras.length === 1 && hasPermission('cameras.manage')"
             @click="toggleFace(cameras[0].id)"
             :disabled="getCamState(cameras[0].id).isStarting"
             class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs
@@ -243,7 +243,7 @@
 
           <!-- ปุ่มเปิด/ปิดแสดงปุ่มทีละตัว -->
           <button
-            v-if="cameras.length > 1"
+            v-if="cameras.length > 1 && hasPermission('cameras.manage')"
             @click="showPerCamControls = !showPerCamControls"
             class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs
                    border border-gui-border text-gui-dim hover:text-gui-text
@@ -274,6 +274,7 @@
           </template>
 
           <button
+            v-if="hasPermission('cameras.manage')"
             @click="showCameraManager = true"
             :class="totalPages <= 1 ? 'ml-auto' : ''"
             class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs
@@ -299,7 +300,7 @@
 
           <!-- แถวปุ่มรายกล้อง (ซ่อน/แสดงได้) -->
           <div
-            v-show="showPerCamControls && cameras.length > 1"
+            v-show="showPerCamControls && cameras.length > 1 && hasPermission('cameras.manage')"
             class="px-4 pb-3 flex flex-wrap gap-2 border-t border-gui-border/40 pt-2.5"
           >
             <template v-for="cam in cameras" :key="`ctrl-${cam.id}`">
@@ -377,7 +378,8 @@
             </div>
           </div>
 
-          <div class="bg-gui-panel border border-gui-border rounded-xl p-4 shrink-0">
+          <div v-if="hasPermission('cameras.manage')"
+               class="bg-gui-panel border border-gui-border rounded-xl p-4 shrink-0">
             <h3 class="font-semibold text-sm mb-3 text-gui-dim">วิธีใช้</h3>
             <ul class="text-xs text-gui-dim space-y-1.5 leading-relaxed">
               <li>• กด <span class="text-gui-in font-medium">▶ ชื่อกล้อง</span> เพื่อ start กล้องนั้น</li>
@@ -505,7 +507,7 @@
         <span v-else>อัพเดตเมื่อ {{ lastFetchStr }}</span>
       </div>
       <div class="flex items-center gap-2">
-        <button @click="confirmClearToday" :disabled="clearing"
+        <button v-if="hasPermission('attendance.clear')" @click="confirmClearToday" :disabled="clearing"
           class="px-3 py-1 rounded-lg border border-gui-fail/30 text-gui-fail/70
                  hover:border-gui-fail/60 hover:text-gui-fail transition-colors
                  disabled:opacity-40 disabled:cursor-not-allowed">
@@ -568,6 +570,7 @@ import { useAttendance }    from '@/composables/useAttendance.js'
 import { useLiveSession }   from '@/composables/useLiveSession.js'
 import { isUIFullscreen }   from '@/composables/useUIFullscreen.js'
 import { apiFetch, apiPost, apiDelete, streamUrl } from '@/api/attendance.js'
+import { hasPermission } from '@/composables/useAuth.js'
 
 // ── Route ───────────────────────────────────────────────────────────
 const route = useRoute()
