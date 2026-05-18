@@ -160,6 +160,7 @@ import OrgBreakdown from '@/components/OrgBreakdown.vue'
 
 import { useAttendance }  from '@/composables/useAttendance.js'
 import { useLiveSession } from '@/composables/useLiveSession.js'
+import { apiDelete }      from '@/api/attendance.js'
 
 const {
   stats,
@@ -225,7 +226,7 @@ async function doClearToday() {
   showConfirm.value = false
   clearing.value    = true
   try {
-    await fetch(CLEAR_TODAY_URL, { method: 'DELETE' })
+    await apiDelete('/attendance/today/all')
     await refresh()
   } catch { /* ignore */ } finally {
     clearing.value = false

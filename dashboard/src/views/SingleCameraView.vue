@@ -125,7 +125,7 @@
           <img
             :key="`stream-${camId}-${camState.streamStartTs}`"
             v-if="camLive && camHasFrame"
-            :src="streamUrl"
+            :src="faceStreamUrl"
             alt="Face Recognition Stream"
             class="w-full h-full object-contain"
             @error="onStreamError"
@@ -299,6 +299,7 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute }    from 'vue-router'
 import LiveDetection   from '@/components/LiveDetection.vue'
+import { apiFetch, apiPost, streamUrl } from '@/api/attendance.js'
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api'
 
@@ -311,9 +312,7 @@ const camera = ref(null)
 
 async function loadCamera() {
   try {
-    const res = await fetch(`${BASE_URL}/cameras`)
-    if (!res.ok) return
-    const list = await res.json()
+    const list = await apiFetch('/cameras')
     camera.value = list.find(c => c.id === camId.value) ?? null
   } catch { /* ignore */ }
 }
@@ -347,8 +346,8 @@ const camBootProgress = computed(() => {
   if (!camState.value.isBooting) return 100
   return _BOOT_STEPS[camState.value.bootMsg] ?? 5
 })
-const streamUrl   = computed(() =>
-  `${BASE_URL}/cameras/${camId.value}/face-stream?t=${camState.value.streamStartTs}`
+const faceStreamUrl = computed(() =>
+  streamUrl(`/cameras/${camId.value}/face-stream?t=${camState.value.streamStartTs}`)
 )
 
 // ── Actions ───────────────────────────────────────────────────────────
@@ -364,8 +363,7 @@ async function startFace() {
   camState.value.bootMsg     = null
   camState.value.streamError = false
   try {
-    const res  = await fetch(`${BASE_URL}/cameras/${camId.value}/face/start`, { method: 'POST' })
-    const data = await res.json()
+    const data = await apiPost(`/cameras/${camId.value}/face/start`)
     if (data.ok) {
       camState.value.streamStartTs = Date.now()
       setTimeout(() => fetchStatus(), 2_000)
@@ -379,7 +377,7 @@ async function startFace() {
 
 async function stopFace() {
   try {
-    await fetch(`${BASE_URL}/cameras/${camId.value}/face/stop`, { method: 'POST' })
+    await apiPost(`/cameras/${camId.value}/face/stop`)
   } catch { /* ignore */ }
 }
 
@@ -390,9 +388,7 @@ function onStreamError() {
 // ── Status Polling ────────────────────────────────────────────────────
 async function fetchStatus() {
   try {
-    const res = await fetch(`${BASE_URL}/cameras/${camId.value}/face/status`)
-    if (!res.ok) return
-    const data = await res.json()
+    const data = await apiFetch(`/cameras/${camId.value}/face/status`)
     camState.value.faceStatus = data
     camState.value.bootMsg    = data.boot_msg ?? null
     if (data.has_frame || !data.running) camState.value.isBooting = false

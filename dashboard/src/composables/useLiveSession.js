@@ -6,9 +6,9 @@
 // ─────────────────────────────────────────────────────────────────────
 
 import { ref, onMounted, onUnmounted } from 'vue'
+import { apiFetch } from '@/api/attendance.js'
 
 const POLL_MS = 2_000
-const API_URL = '/session/live'
 
 // ── Shared state (module-level) ────────────────────────────────────
 const active     = ref(false)
@@ -22,9 +22,7 @@ const lastUpdate = ref(null)
 async function fetchLive() {
   loading.value = true
   try {
-    const res  = await fetch(API_URL)
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const data = await res.json()
+    const data = await apiFetch('/session/live')
     active.value     = data.active  ?? false
     stale.value      = data.stale   ?? true
     persons.value    = data.persons ?? []

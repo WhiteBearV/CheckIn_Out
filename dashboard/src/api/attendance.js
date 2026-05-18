@@ -1,46 +1,62 @@
-// ─────────────────────────────────────────────────────────────────────
 // api/attendance.js — ฟังก์ชัน fetch ข้อมูลจาก FastAPI backend
 //
 // BASE_URL:
 //   - โหมด dev  → /api  (Vite proxy ส่งต่อไป localhost:8000)
 //   - โหมด prod → ตั้งค่า VITE_API_BASE_URL ใน dashboard/.env
 //                 เช่น  VITE_API_BASE_URL=http://192.168.1.x:8000
-//
-// ถ้าต้องการเปลี่ยน base URL: แก้ค่า VITE_API_BASE_URL ใน .env เท่านั้น
-// ─────────────────────────────────────────────────────────────────────
+
+import { getToken, logout } from '@/composables/useAuth.js'
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api'
 
-// ── Internal helper ───────────────────────────────────────────────
-async function apiFetch(path) {
-  const res = await fetch(`${BASE_URL}${path}`)
-  if (!res.ok) throw new Error(`API ${res.status}: ${path}`)
+// ── Internal helper ───────────────────────────────────────────────────────────
+
+function authHeaders() {
+  const t = getToken()
+  return t ? { Authorization: `Bearer ${t}` } : {}
+}
+
+async function request(method, path, body) {
+  const opts = {
+    method,
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+  }
+  if (body !== undefined) opts.body = JSON.stringify(body)
+
+  const res = await fetch(`${BASE_URL}${path}`, opts)
+
+  if (res.status === 401) {
+    logout()
+    window.location.href = '/#/login'
+    throw new Error('Session หมดอายุ กรุณาเข้าสู่ระบบใหม่')
+  }
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || `API ${res.status}: ${path}`)
+  }
   return res.json()
 }
 
-// ── Public API functions ──────────────────────────────────────────
+export const apiFetch  = (path)        => request('GET',    path)
+export const apiPost   = (path, body)  => request('POST',   path, body)
+export const apiPut    = (path, body)  => request('PUT',    path, body)
+export const apiPatch  = (path, body)  => request('PATCH',  path, body)
+export const apiDelete = (path)        => request('DELETE', path)
 
-/**
- * ดึงรายการลงเวลาวันนี้ทั้งหมด
- *
- * Response: Array<{
- *   id, per_id, name, prename_th, per_name, per_surname,
- *   posname_th, organize_th, organize_id,
- *   status,        // "IN" | "OUT"
- *   camera_name,
- *   check_time     // ISO 8601 string
- * }>
- */
+// ── Stream URL helper (MJPEG ใช้ query param token) ──────────────────────────
+
+export function streamUrl(path) {
+  const t = getToken()
+  const sep = path.includes('?') ? '&' : '?'
+  return `${BASE_URL}${path}${t ? `${sep}token=${encodeURIComponent(t)}` : ''}`
+}
+
+// ── Public API functions ──────────────────────────────────────────────────────
+
 export const fetchTodayAttendance = () =>
   apiFetch('/attendance/today')
 
-/**
- * ดึงประวัติลงเวลาของพนักงานคนใดคนหนึ่ง
- *
- * @param {string}  perId      — รหัสพนักงาน
- * @param {string}  [startDate] — YYYY-MM-DD  (optional)
- * @param {string}  [endDate]   — YYYY-MM-DD  (optional)
- */
 export function fetchPersonHistory(perId, startDate, endDate) {
   const params = new URLSearchParams()
   if (startDate) params.set('start_date', startDate)

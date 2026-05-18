@@ -304,7 +304,7 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN",
     # Auto-detect — ใช้เฉพาะ provider ที่พร้อมจริง (ไม่ error อีก)
     # Auto-detect GPU — กรอง TensorRT ออก (ต้องลง TensorRT แยก)
     available = ort.get_available_providers()
-    use_providers = [p for p in available if p != "TensorrtExecutionProvider"]
+    use_providers = [p for p in available if p not in ("TensorrtExecutionProvider", "CoreMLExecutionProvider")]
     print(f"[ORT] Using: {use_providers}")
 
     # ใช้เฉพาะ models ที่จำเป็น — ข้าม genderage + 2d106det (ไม่ได้ใช้ ลด inference 2/5)

@@ -222,6 +222,7 @@
 
 <script setup>
 import { ref, reactive, computed } from 'vue'
+import { apiPost, apiPatch, apiDelete } from '@/api/attendance.js'
 
 const props = defineProps({
   cameras: { type: Array, default: () => [] },
@@ -265,22 +266,7 @@ async function submitAdd() {
 
   adding.value = true
   try {
-    const res = await fetch(`${props.apiBase}/cameras`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name,
-        source_type: form.source_type,
-        source,
-        flip: form.flip,
-      }),
-    })
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}))
-      addError.value = err.detail ?? `Error ${res.status}`
-      return
-    }
-    // reset form
+    await apiPost('/cameras', { name, source_type: form.source_type, source, flip: form.flip })
     form.name        = ''
     form.source_type = 'usb'
     form.source      = '0'
@@ -299,14 +285,8 @@ const flippingId = ref(null)
 async function toggleFlip(cam) {
   flippingId.value = cam.id
   try {
-    const res = await fetch(`${props.apiBase}/cameras/${cam.id}/flip`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ flip: !cam.flip }),
-    })
-    if (res.ok) {
-      emit('changed')
-    }
+    await apiPatch(`/cameras/${cam.id}/flip`, { flip: !cam.flip })
+    emit('changed')
   } catch { /* ignore */ } finally {
     flippingId.value = null
   }
@@ -326,10 +306,8 @@ async function doDelete() {
   deleteTarget.value = null
   deletingId.value = cam.id
   try {
-    const res = await fetch(`${props.apiBase}/cameras/${cam.id}`, { method: 'DELETE' })
-    if (res.ok) {
-      emit('changed')
-    }
+    await apiDelete(`/cameras/${cam.id}`)
+    emit('changed')
   } catch { /* ignore */ } finally {
     deletingId.value = null
   }

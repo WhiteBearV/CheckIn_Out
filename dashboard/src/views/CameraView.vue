@@ -567,6 +567,7 @@ import CameraManagerModal  from '@/components/CameraManagerModal.vue'
 import { useAttendance }    from '@/composables/useAttendance.js'
 import { useLiveSession }   from '@/composables/useLiveSession.js'
 import { isUIFullscreen }   from '@/composables/useUIFullscreen.js'
+import { apiFetch, apiPost, apiDelete, streamUrl } from '@/api/attendance.js'
 
 // ── Route ───────────────────────────────────────────────────────────
 const route = useRoute()
@@ -586,9 +587,7 @@ let   _prevSysMode    = null
 
 async function fetchSystemMode() {
   try {
-    const res  = await fetch(`${BASE_URL}/system/mode`)
-    if (!res.ok) return
-    const data = await res.json()
+    const data = await apiFetch('/system/mode')
     const newMode = data.mode   // 'face' | 'cctv'
 
     if (data.active_windows?.length) {
@@ -598,7 +597,7 @@ async function fetchSystemMode() {
 
     // face→cctv: trigger auto-checkout ฝั่ง frontend ด้วย (backend ก็ทำ แต่ frontend refresh)
     if (_prevSysMode === 'face' && newMode === 'cctv') {
-      fetch(`${BASE_URL}/attendance/auto-checkout`, { method: 'POST' })
+      apiPost('/attendance/auto-checkout')
         .then(() => refresh()).catch(() => {})
     }
 
@@ -621,11 +620,8 @@ const cameras = ref([])
 
 async function loadCameras() {
   try {
-    const res = await fetch(`${BASE_URL}/cameras`)
-    if (res.ok) {
-      cameras.value = await res.json()
-      cameras.value.forEach(cam => initCamState(cam))
-    }
+    cameras.value = await apiFetch('/cameras')
+    cameras.value.forEach(cam => initCamState(cam))
   } catch { /* ignore */ }
 }
 
@@ -790,7 +786,7 @@ const hasRecentFrame  = (camId) => {
 }
 const frameAgeFor     = (camId) => getCamState(camId).faceStatus.frame_age_sec ?? null
 const streamUrlFor    = (camId) =>
-  `${BASE_URL}/cameras/${camId}/face-stream?t=${getCamState(camId).streamStartTs}`
+  streamUrl(`/cameras/${camId}/face-stream?t=${getCamState(camId).streamStartTs}`)
 const ovalColorFor    = (camId) =>
   isLive(camId) ? 'rgba(0,220,0,0.9)' : 'rgba(210,210,210,0.8)'
 const ovalInnerColorFor = (camId) =>
@@ -820,8 +816,7 @@ async function startFace(camId) {
   camStates[camId].bootMsg     = null
   camStates[camId].streamError = false
   try {
-    const res  = await fetch(`${BASE_URL}/cameras/${camId}/face/start`, { method: 'POST' })
-    const data = await res.json()
+    const data = await apiPost(`/cameras/${camId}/face/start`)
     if (data.ok) {
       camStates[camId].streamStartTs = Date.now()
       setTimeout(() => fetchStatus(camId), 2_000)
@@ -835,7 +830,7 @@ async function startFace(camId) {
 
 async function stopFace(camId) {
   try {
-    await fetch(`${BASE_URL}/cameras/${camId}/face/stop`, { method: 'POST' })
+    await apiPost(`/cameras/${camId}/face/stop`)
   } catch { /* ignore */ }
 }
 
@@ -861,9 +856,7 @@ function retryStream(camId) {
 // ── Status Polling ───────────────────────────────────────────────────
 async function fetchStatus(camId) {
   try {
-    const res = await fetch(`${BASE_URL}/cameras/${camId}/face/status`)
-    if (!res.ok) return
-    const data = await res.json()
+    const data = await apiFetch(`/cameras/${camId}/face/status`)
     if (camStates[camId]) {
       camStates[camId].faceStatus = data
       camStates[camId].bootMsg    = data.boot_msg ?? null

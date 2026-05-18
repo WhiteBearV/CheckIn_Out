@@ -22,9 +22,9 @@ LOCAL_API_URL = "http://localhost:8000"
 TIMEOUT       = 5  # วินาที
 
 # ── External API (อ่านจาก .env — ห้ามใส่ key ตรงนี้) ───────────────────────
-MOCK_MODE        = False
-EXTERNAL_API_URL = os.environ["EXTERNAL_API_URL"]
-EXTERNAL_API_KEY = os.environ["EXTERNAL_API_KEY"]
+MOCK_MODE        = os.environ.get("MOCK_MODE", "false").lower() not in ("false", "0", "no")
+EXTERNAL_API_URL = os.environ.get("EXTERNAL_API_URL", "")
+EXTERNAL_API_KEY = os.environ.get("EXTERNAL_API_KEY", "")
 
 # ─────────────────────────────────────────────────────────────────────────────
 

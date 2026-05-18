@@ -18,15 +18,18 @@ Endpoints:
 
 import os
 import json as _json
+import hashlib
 import asyncio as _asyncio
 from dotenv import load_dotenv
+import jwt as _jwt
 from fastapi import FastAPI, HTTPException, Query, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
-from typing import Optional
-from datetime import datetime, date
+from typing import Optional, List
+from datetime import datetime, date, timedelta
 from db import get_connection
 
 load_dotenv()
@@ -103,15 +106,416 @@ def root():
 
 @app.get("/api/session/live", include_in_schema=False)
 def session_live_compat():
-    """Alias: /api/session/live → /session/live (compat กับ useLiveSession.js build เก่า)"""
-    return session_live()
+    """Alias: /api/session/live → /session/live (compat — deprecated, ไม่ต้อง auth)"""
+    from fastapi.responses import JSONResponse
+    return JSONResponse({"active": False, "persons": [], "stale": True, "ts": 0})
 
-_ADMIN_KEY = os.environ.get("ADMIN_API_KEY", "")
 
-def _require_admin(x_admin_key: str = Header(...)):
-    if not _ADMIN_KEY or x_admin_key != _ADMIN_KEY:
-        raise HTTPException(status_code=403, detail="Forbidden")
+# ╔═══════════════════════════════════════════════════════════════════════════╗
+# ║  JWT Authentication & RBAC                                               ║
+# ╚═══════════════════════════════════════════════════════════════════════════╝
 
+_JWT_SECRET = os.environ.get("JWT_SECRET_KEY", "dev-secret-please-change-in-production")
+_JWT_ALGO   = "HS256"
+_JWT_EXPIRE = timedelta(hours=8)
+
+_bearer = HTTPBearer(auto_error=False)
+
+PERMISSIONS_META = {
+    "attendance.view":   "ดูรายการลงเวลา",
+    "attendance.edit":   "แก้ไข/ลบรายการลงเวลา",
+    "attendance.clear":  "ล้างข้อมูลวันนี้",
+    "cameras.view":      "ดูกล้องและ Live Feed",
+    "cameras.manage":    "จัดการกล้อง (เพิ่ม/ลบ/แก้ไข)",
+    "users.manage":      "จัดการผู้ใช้และ Roles",
+    "system.manage":     "จัดการระบบ",
+}
+
+
+def _hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
+
+
+def _create_token(sub: str, role: str, display_name: str, permissions: list) -> str:
+    payload = {
+        "sub":          sub,
+        "role":         role,
+        "display_name": display_name,
+        "permissions":  permissions,
+        "exp":          datetime.utcnow() + _JWT_EXPIRE,
+    }
+    return _jwt.encode(payload, _JWT_SECRET, algorithm=_JWT_ALGO)
+
+
+def _decode_token(token: str) -> dict:
+    return _jwt.decode(token, _JWT_SECRET, algorithms=[_JWT_ALGO])
+
+
+def _has_permission(user: dict, permission: str) -> bool:
+    perms = user.get("permissions", [])
+    return "*" in perms or permission in perms
+
+
+def _require_auth(cred: HTTPAuthorizationCredentials = Depends(_bearer)) -> dict:
+    if not cred:
+        raise HTTPException(status_code=401, detail="ต้องเข้าสู่ระบบก่อน")
+    try:
+        return _decode_token(cred.credentials)
+    except _jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Session หมดอายุ กรุณาเข้าสู่ระบบใหม่")
+    except Exception:
+        raise HTTPException(status_code=401, detail="Token ไม่ถูกต้อง")
+
+
+def _require_perm(permission: str):
+    def _dep(user: dict = Depends(_require_auth)):
+        if not _has_permission(user, permission):
+            raise HTTPException(status_code=403, detail=f"ไม่มีสิทธิ์: {permission}")
+        return user
+    return _dep
+
+
+def _require_admin(user: dict = Depends(_require_auth)):
+    if not _has_permission(user, "users.manage"):
+        raise HTTPException(status_code=403, detail="ต้องมีสิทธิ์ users.manage")
+    return user
+
+
+def _init_auth_tables():
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS dashboard_roles (
+                    id           SERIAL PRIMARY KEY,
+                    name         VARCHAR(50)  UNIQUE NOT NULL,
+                    display_name VARCHAR(100) NOT NULL,
+                    permissions  JSONB        NOT NULL DEFAULT '[]'
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS dashboard_users (
+                    id            SERIAL PRIMARY KEY,
+                    username      VARCHAR(50)  UNIQUE NOT NULL,
+                    password_hash VARCHAR(255) NOT NULL,
+                    display_name  VARCHAR(100) NOT NULL,
+                    role_id       INTEGER REFERENCES dashboard_roles(id) ON DELETE SET NULL,
+                    is_active     BOOLEAN DEFAULT TRUE,
+                    created_at    TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            cur.execute("SELECT COUNT(*) FROM dashboard_roles")
+            if cur.fetchone()[0] == 0:
+                cur.execute("""
+                    INSERT INTO dashboard_roles (name, display_name, permissions) VALUES
+                    ('admin',  'ผู้ดูแลระบบ',   '["*"]'::jsonb),
+                    ('viewer', 'ผู้ดูรายงาน', '["attendance.view","cameras.view"]'::jsonb)
+                """)
+            cur.execute("SELECT COUNT(*) FROM dashboard_users")
+            if cur.fetchone()[0] == 0:
+                cur.execute("""
+                    INSERT INTO dashboard_users (username, password_hash, display_name, role_id)
+                    SELECT 'admin',  %s, 'ผู้ดูแลระบบ',  id FROM dashboard_roles WHERE name='admin'
+                """, (_hash_password("admin1234"),))
+                cur.execute("""
+                    INSERT INTO dashboard_users (username, password_hash, display_name, role_id)
+                    SELECT 'viewer', %s, 'ผู้ดูรายงาน', id FROM dashboard_roles WHERE name='viewer'
+                """, (_hash_password("viewer1234"),))
+        conn.commit()
+
+try:
+    _init_auth_tables()
+    print("[AUTH] Auth tables ready")
+except Exception as _e:
+    print(f"[AUTH] Warning: could not init auth tables: {_e}")
+
+
+# ╔═══════════════════════════════════════════════════════════════════════════╗
+# ║  Auth Endpoints                                                           ║
+# ╚═══════════════════════════════════════════════════════════════════════════╝
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+@app.post("/auth/login")
+def auth_login(req: LoginRequest):
+    """เข้าสู่ระบบ — คืน JWT token"""
+    pw_hash = _hash_password(req.password)
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT u.id, u.username, u.display_name, u.is_active,
+                       r.name AS role, r.permissions
+                FROM dashboard_users u
+                LEFT JOIN dashboard_roles r ON u.role_id = r.id
+                WHERE u.username = %s AND u.password_hash = %s
+            """, (req.username, pw_hash))
+            row = cur.fetchone()
+
+    if not row:
+        raise HTTPException(status_code=401, detail="ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง")
+
+    _id, username, display_name, is_active, role, permissions = row
+    if not is_active:
+        raise HTTPException(status_code=403, detail="บัญชีนี้ถูกระงับการใช้งาน")
+
+    perms = permissions if isinstance(permissions, list) else []
+    token = _create_token(username, role or "", display_name, perms)
+    return {
+        "token":        token,
+        "username":     username,
+        "display_name": display_name,
+        "role":         role,
+        "permissions":  perms,
+    }
+
+
+@app.get("/auth/me")
+def auth_me(user: dict = Depends(_require_auth)):
+    """ดึงข้อมูล user ปัจจุบัน"""
+    return {
+        "username":     user["sub"],
+        "display_name": user.get("display_name", user["sub"]),
+        "role":         user.get("role"),
+        "permissions":  user.get("permissions", []),
+    }
+
+
+# ╔═══════════════════════════════════════════════════════════════════════════╗
+# ║  RBAC Management Endpoints (users.manage permission required)             ║
+# ╚═══════════════════════════════════════════════════════════════════════════╝
+
+@app.get("/admin/permissions")
+def list_permissions(_: dict = Depends(_require_perm("users.manage"))):
+    """รายการ permissions ทั้งหมดในระบบ"""
+    return [{"key": k, "label": v} for k, v in PERMISSIONS_META.items()]
+
+
+# ── Roles ────────────────────────────────────────────────────────────────────
+
+@app.get("/admin/roles")
+def list_roles(_: dict = Depends(_require_perm("users.manage"))):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT r.id, r.name, r.display_name, r.permissions,
+                       COUNT(u.id) AS user_count
+                FROM dashboard_roles r
+                LEFT JOIN dashboard_users u ON u.role_id = r.id
+                GROUP BY r.id ORDER BY r.id
+            """)
+            rows = cur.fetchall()
+    return [
+        {"id": r[0], "name": r[1], "display_name": r[2],
+         "permissions": r[3], "user_count": r[4]}
+        for r in rows
+    ]
+
+
+class RoleCreateBody(BaseModel):
+    name:         str
+    display_name: str
+    permissions:  List[str] = []
+
+@app.post("/admin/roles", status_code=201)
+def create_role(body: RoleCreateBody, _: dict = Depends(_require_perm("users.manage"))):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            try:
+                cur.execute("""
+                    INSERT INTO dashboard_roles (name, display_name, permissions)
+                    VALUES (%s, %s, %s::jsonb) RETURNING id
+                """, (body.name.strip(), body.display_name.strip(),
+                      _json.dumps(body.permissions)))
+                new_id = cur.fetchone()[0]
+            except Exception:
+                raise HTTPException(status_code=409, detail="ชื่อ Role นี้มีอยู่แล้ว")
+        conn.commit()
+    return {"id": new_id, "name": body.name, "display_name": body.display_name,
+            "permissions": body.permissions}
+
+
+class RoleUpdateBody(BaseModel):
+    display_name: Optional[str] = None
+    permissions:  Optional[List[str]] = None
+
+@app.put("/admin/roles/{role_id}")
+def update_role(role_id: int, body: RoleUpdateBody,
+                _: dict = Depends(_require_perm("users.manage"))):
+    fields, vals = [], []
+    if body.display_name is not None:
+        fields.append("display_name = %s"); vals.append(body.display_name.strip())
+    if body.permissions is not None:
+        fields.append("permissions = %s::jsonb"); vals.append(_json.dumps(body.permissions))
+    if not fields:
+        raise HTTPException(status_code=400, detail="ไม่มีข้อมูลที่ต้องอัพเดต")
+    vals.append(role_id)
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"UPDATE dashboard_roles SET {', '.join(fields)} WHERE id = %s", vals)
+            if cur.rowcount == 0:
+                raise HTTPException(status_code=404, detail="ไม่พบ Role")
+        conn.commit()
+    return {"ok": True}
+
+
+@app.delete("/admin/roles/{role_id}")
+def delete_role(role_id: int, _: dict = Depends(_require_perm("users.manage"))):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM dashboard_users WHERE role_id = %s", (role_id,))
+            if cur.fetchone()[0] > 0:
+                raise HTTPException(status_code=409,
+                    detail="ไม่สามารถลบ Role ที่มีผู้ใช้อยู่ได้ กรุณาเปลี่ยน Role ผู้ใช้ก่อน")
+            cur.execute("DELETE FROM dashboard_roles WHERE id = %s", (role_id,))
+            if cur.rowcount == 0:
+                raise HTTPException(status_code=404, detail="ไม่พบ Role")
+        conn.commit()
+    return {"ok": True}
+
+
+# ── Users ────────────────────────────────────────────────────────────────────
+
+@app.get("/admin/users")
+def list_users(_: dict = Depends(_require_perm("users.manage"))):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT u.id, u.username, u.display_name, u.is_active,
+                       u.created_at, r.id AS role_id, r.name AS role_name,
+                       r.display_name AS role_display
+                FROM dashboard_users u
+                LEFT JOIN dashboard_roles r ON u.role_id = r.id
+                ORDER BY u.id
+            """)
+            rows = cur.fetchall()
+    return [
+        {
+            "id":           r[0],
+            "username":     r[1],
+            "display_name": r[2],
+            "is_active":    r[3],
+            "created_at":   r[4].isoformat() if r[4] else None,
+            "role_id":      r[5],
+            "role_name":    r[6],
+            "role_display": r[7],
+        }
+        for r in rows
+    ]
+
+
+class UserCreateBody(BaseModel):
+    username:     str
+    password:     str
+    display_name: str
+    role_id:      int
+    is_active:    bool = True
+
+@app.post("/admin/users", status_code=201)
+def create_user(body: UserCreateBody, _: dict = Depends(_require_perm("users.manage"))):
+    if len(body.password) < 6:
+        raise HTTPException(status_code=400, detail="รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            try:
+                cur.execute("""
+                    INSERT INTO dashboard_users
+                        (username, password_hash, display_name, role_id, is_active)
+                    VALUES (%s, %s, %s, %s, %s) RETURNING id
+                """, (body.username.strip(), _hash_password(body.password),
+                      body.display_name.strip(), body.role_id, body.is_active))
+                new_id = cur.fetchone()[0]
+            except Exception:
+                raise HTTPException(status_code=409, detail="ชื่อผู้ใช้นี้มีอยู่แล้ว")
+        conn.commit()
+    return {"id": new_id, "username": body.username, "display_name": body.display_name}
+
+
+class UserUpdateBody(BaseModel):
+    display_name: Optional[str] = None
+    role_id:      Optional[int] = None
+    is_active:    Optional[bool] = None
+
+@app.put("/admin/users/{user_id}")
+def update_user(user_id: int, body: UserUpdateBody,
+                current: dict = Depends(_require_perm("users.manage"))):
+    fields, vals = [], []
+    if body.display_name is not None:
+        fields.append("display_name = %s"); vals.append(body.display_name.strip())
+    if body.role_id is not None:
+        fields.append("role_id = %s"); vals.append(body.role_id)
+    if body.is_active is not None:
+        # ห้าม deactivate ตัวเอง
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT username FROM dashboard_users WHERE id = %s", (user_id,))
+                row = cur.fetchone()
+        if row and row[0] == current["sub"] and not body.is_active:
+            raise HTTPException(status_code=400, detail="ไม่สามารถระงับบัญชีของตัวเองได้")
+        fields.append("is_active = %s"); vals.append(body.is_active)
+    if not fields:
+        raise HTTPException(status_code=400, detail="ไม่มีข้อมูลที่ต้องอัพเดต")
+    vals.append(user_id)
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"UPDATE dashboard_users SET {', '.join(fields)} WHERE id = %s", vals)
+            if cur.rowcount == 0:
+                raise HTTPException(status_code=404, detail="ไม่พบผู้ใช้")
+        conn.commit()
+    return {"ok": True}
+
+
+class PasswordResetBody(BaseModel):
+    new_password: str
+
+@app.post("/admin/users/{user_id}/reset-password")
+def reset_user_password(user_id: int, body: PasswordResetBody,
+                        _: dict = Depends(_require_perm("users.manage"))):
+    if len(body.new_password) < 6:
+        raise HTTPException(status_code=400, detail="รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE dashboard_users SET password_hash = %s WHERE id = %s",
+                (_hash_password(body.new_password), user_id)
+            )
+            if cur.rowcount == 0:
+                raise HTTPException(status_code=404, detail="ไม่พบผู้ใช้")
+        conn.commit()
+    return {"ok": True}
+
+
+@app.delete("/admin/users/{user_id}")
+def delete_user(user_id: int, current: dict = Depends(_require_perm("users.manage"))):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT username FROM dashboard_users WHERE id = %s", (user_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="ไม่พบผู้ใช้")
+            if row[0] == current["sub"]:
+                raise HTTPException(status_code=400, detail="ไม่สามารถลบบัญชีของตัวเองได้")
+            cur.execute("DELETE FROM dashboard_users WHERE id = %s", (user_id,))
+        conn.commit()
+    return {"ok": True}
+
+
+@app.post("/auth/change-password")
+def change_own_password(
+    body: PasswordResetBody,
+    current: dict = Depends(_require_auth)
+):
+    """เปลี่ยนรหัสผ่านของตัวเอง"""
+    if len(body.new_password) < 6:
+        raise HTTPException(status_code=400, detail="รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE dashboard_users SET password_hash = %s WHERE username = %s",
+                (_hash_password(body.new_password), current["sub"])
+            )
+        conn.commit()
+    return {"ok": True}
 
 # ─── Schemas ────────────────────────────────────────────────────────────────
 
@@ -204,7 +608,8 @@ def mark_attendance(req: AttendanceRequest):
 @app.get("/attendance/today/check")
 def check_attendance_today(
     per_id: str = Query(...),
-    status: str = Query(...)
+    status: str = Query(...),
+    _: dict = Depends(_require_perm("attendance.view")),
 ):
     """ตรวจว่าวันนี้บันทึก IN/OUT แล้วหรือยัง"""
     with get_connection() as conn:
@@ -221,7 +626,7 @@ def check_attendance_today(
 
 
 @app.get("/attendance/today")
-def attendance_today():
+def attendance_today(_: dict = Depends(_require_perm("attendance.view"))):
     """รายการลงเวลาวันนี้ทั้งหมด (สำหรับ Dashboard)"""
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -306,7 +711,7 @@ def attendance_today():
 
 
 @app.post("/attendance/checkout/{per_id}")
-def manual_checkout(per_id: str):
+def manual_checkout(per_id: str, _: dict = Depends(_require_perm("attendance.edit"))):
     """
     ลงชื่อออกด้วยตนเองจาก Dashboard
     - ต้องมี IN วันนี้ก่อน
@@ -362,6 +767,7 @@ def attendance_by_person(
     per_id: str,
     start_date: Optional[date] = Query(None),
     end_date:   Optional[date] = Query(None),
+    _: dict = Depends(_require_perm("attendance.view")),
 ):
     """ประวัติลงเวลาของพนักงาน กรองตามช่วงวันได้"""
     with get_connection() as conn:
@@ -404,7 +810,7 @@ def attendance_by_person(
     ]
 
 
-@app.put("/attendance/{log_id}", dependencies=[Depends(_require_admin)])
+@app.put("/attendance/{log_id}", dependencies=[Depends(_require_perm("attendance.edit"))])
 def update_attendance(log_id: int, req: AttendanceUpdateRequest):
     """แก้ไข record ลงเวลา — ส่งเฉพาะ field ที่ต้องการเปลี่ยน"""
     if req.status and req.status not in ("IN", "OUT"):
@@ -430,7 +836,7 @@ def update_attendance(log_id: int, req: AttendanceUpdateRequest):
     return {"success": True, "id": log_id, "updated": fields}
 
 
-@app.delete("/attendance/{log_id}", dependencies=[Depends(_require_admin)])
+@app.delete("/attendance/{log_id}", dependencies=[Depends(_require_perm("attendance.edit"))])
 def delete_attendance(log_id: int):
     """ลบ record ลงเวลา (ลบถาวร)"""
     with get_connection() as conn:
@@ -443,7 +849,7 @@ def delete_attendance(log_id: int):
     return {"success": True, "id": log_id}
 
 
-@app.delete("/attendance/today/all")
+@app.delete("/attendance/today/all", dependencies=[Depends(_require_perm("attendance.clear"))])
 def clear_today_attendance():
     """
     ล้างข้อมูลการลงเวลาทั้งหมดของวันนี้ + session cache
@@ -554,7 +960,7 @@ def _do_auto_checkout_all(now: datetime) -> int:
     return count
 
 
-@app.post("/attendance/auto-checkout")
+@app.post("/attendance/auto-checkout", dependencies=[Depends(_require_perm("attendance.clear"))])
 def attendance_auto_checkout():
     """
     checkout ทุกคนที่ IN วันนี้แต่ยังไม่มี OUT
@@ -726,7 +1132,7 @@ _CAMERAS: dict = {c["id"]: c for c in CAMERAS_CONFIG}
 
 
 @app.get("/cameras")
-def list_cameras():
+def list_cameras(_: dict = Depends(_require_perm("cameras.view"))):
     """คืนรายการกล้องทั้งหมดที่ตั้งค่าไว้ — ใช้โดย Dashboard เพื่อ render panels"""
     return [
         {
@@ -748,7 +1154,7 @@ class CameraCreateBody(BaseModel):
 
 
 @app.post("/cameras")
-def add_camera(body: CameraCreateBody):
+def add_camera(body: CameraCreateBody, _: dict = Depends(_require_perm("cameras.manage"))):
     """เพิ่มกล้องใหม่ — บันทึกลง cameras_config.json"""
     # แปลง source
     if body.source_type == "usb":
@@ -787,7 +1193,8 @@ class CameraFlipBody(BaseModel):
 
 
 @app.patch("/cameras/{cam_id}/flip")
-def update_camera_flip(cam_id: str, body: CameraFlipBody):
+def update_camera_flip(cam_id: str, body: CameraFlipBody,
+                       _: dict = Depends(_require_perm("cameras.manage"))):
     """
     อัพเดต flip ของกล้องที่ระบุ — บันทึกลง cameras_config.json
     ถ้า face process กำลังรัน → restart อัตโนมัติเพื่อให้ CAMERA_FLIP มีผล
@@ -840,7 +1247,7 @@ def update_camera_flip(cam_id: str, body: CameraFlipBody):
 
 
 @app.delete("/cameras/{cam_id}")
-def delete_camera(cam_id: str):
+def delete_camera(cam_id: str, _: dict = Depends(_require_perm("cameras.manage"))):
     """ลบกล้องออก — หยุด process ถ้ากำลังรัน แล้วบันทึกลง cameras_config.json"""
     if cam_id not in _CAMERAS:
         raise HTTPException(status_code=404, detail=f"Camera '{cam_id}' not found")
@@ -864,12 +1271,24 @@ def delete_camera(cam_id: str):
 
 
 @app.get("/cameras/{cam_id}/stream")
-def cameras_raw_stream(cam_id: str):
+def cameras_raw_stream(cam_id: str, token: Optional[str] = Query(None)):
     """
     MJPEG stream โดยตรงจากกล้องที่ระบุ (ไม่มี face recognition overlay)
     ──────────────────────────────────────────────────────────────────────
     ใช้ทดสอบว่ากล้องทำงานได้ก่อน start main.py
     """
+    # ตรวจ auth ผ่าน query param (img src ไม่รองรับ header)
+    if not token:
+        raise HTTPException(status_code=401, detail="ต้องเข้าสู่ระบบก่อน")
+    try:
+        tok_data = _decode_token(token)
+        if not _has_permission(tok_data, "cameras.view"):
+            raise HTTPException(status_code=403, detail="ไม่มีสิทธิ์ cameras.view")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=401, detail="Token ไม่ถูกต้อง")
+
     cam = _CAMERAS.get(cam_id)
     if not cam:
         raise HTTPException(status_code=404, detail=f"Camera '{cam_id}' not found")
@@ -961,17 +1380,28 @@ def camera_snapshot():
 
 
 @app.get("/camera/stream")
-def camera_stream():
+def camera_stream(token: Optional[str] = Query(None)):
     """
     MJPEG stream จากกล้อง
     ─────────────────────────────────────────────────────────
-    ใช้ใน Vue dashboard: <img :src="'/api/camera/stream'">
+    ใช้ใน Vue dashboard: <img :src="'/api/camera/stream?token=...'">
 
     ⚠ ควรเรียก /camera/snapshot probe ก่อน (CameraView.vue ทำให้อัตโนมัติ)
       ถ้า main.py ใช้กล้องเดียวกัน อาจ conflict (IP camera รองรับ multi-client)
 
     Quality: JPEG 65%  |  Max FPS: 15
     """
+    if not token:
+        raise HTTPException(status_code=401, detail="ต้องเข้าสู่ระบบก่อน")
+    try:
+        tok_data = _decode_token(token)
+        if not _has_permission(tok_data, "cameras.view"):
+            raise HTTPException(status_code=403, detail="ไม่มีสิทธิ์ cameras.view")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=401, detail="Token ไม่ถูกต้อง")
+
     JPEG_QUALITY = 65
     MAX_FPS      = 15
 
@@ -1105,7 +1535,7 @@ import time as _time
 _LIVE_STATE_PATH = _FRAMES_DIR / "live_state.json"   # legacy path (main.py รันตรง)
 
 @app.get("/session/live")
-def session_live():
+def session_live(_: dict = Depends(_require_perm("cameras.view"))):
     """
     คืนสถานะ live รวมจากทุกกล้อง
     ─────────────────────────────────────────────────────────────────────
@@ -1188,7 +1618,7 @@ _face_process: "_subprocess.Popen | None" = None
 
 
 @app.post("/camera/face/start")
-def face_process_start():
+def face_process_start(_: dict = Depends(_require_perm("cameras.manage"))):
     """
     Start main.py เป็น background process
     main.py จะเขียน live_frame.jpg ทุก ~67ms สำหรับ /camera/face-stream
@@ -1215,7 +1645,7 @@ def face_process_start():
 
 
 @app.post("/camera/face/stop")
-def face_process_stop():
+def face_process_stop(_: dict = Depends(_require_perm("cameras.manage"))):
     """หยุด main.py background process"""
     global _face_process
     if _face_process is None or _face_process.poll() is not None:
@@ -1271,17 +1701,24 @@ def face_process_status():
 
 
 @app.get("/camera/face-stream")
-def camera_face_stream():
+def camera_face_stream(token: Optional[str] = Query(None)):
     """
     MJPEG stream จาก main.py (อ่านจาก live_frame.jpg)
     ─────────────────────────────────────────────────────────────────────
-    main.py เขียน live_frame.jpg ทุก ~67ms (15fps) พร้อม overlay ทั้งหมด:
-      - Oval guide + dim effect นอกวงรี
-      - Face bounding boxes + liveness labels
-      - Challenge overlay
-      - HUD (FPS ถ้าเปิด)
-    Dashboard แสดงผลผ่าน <img :src="'/api/camera/face-stream'">
+    main.py เขียน live_frame.jpg ทุก ~67ms (15fps) พร้อม overlay ทั้งหมด
+    Dashboard แสดงผลผ่าน <img :src="'/api/camera/face-stream?token=...'">
     """
+    if not token:
+        raise HTTPException(status_code=401, detail="ต้องเข้าสู่ระบบก่อน")
+    try:
+        tok_data = _decode_token(token)
+        if not _has_permission(tok_data, "cameras.view"):
+            raise HTTPException(status_code=403, detail="ไม่มีสิทธิ์ cameras.view")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=401, detail="Token ไม่ถูกต้อง")
+
     def generate():
         import time
         last_mtime = 0.0
@@ -1339,11 +1776,22 @@ def _boot_path_for(cam_id: str) -> pathlib.Path:
 
 
 @app.get("/cameras/{cam_id}/face-stream")
-def cameras_face_stream(cam_id: str):
+def cameras_face_stream(cam_id: str, token: Optional[str] = Query(None)):
     """
     MJPEG stream จาก main.py พร้อม face recognition overlay สำหรับกล้องที่ระบุ
     อ่านจาก live_frame_{cam_id}.jpg ที่ main.py เขียนทุก ~67ms
     """
+    if not token:
+        raise HTTPException(status_code=401, detail="ต้องเข้าสู่ระบบก่อน")
+    try:
+        tok_data = _decode_token(token)
+        if not _has_permission(tok_data, "cameras.view"):
+            raise HTTPException(status_code=403, detail="ไม่มีสิทธิ์ cameras.view")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=401, detail="Token ไม่ถูกต้อง")
+
     if cam_id not in _CAMERAS:
         raise HTTPException(status_code=404, detail=f"Camera '{cam_id}' not found")
 
@@ -1375,7 +1823,7 @@ def cameras_face_stream(cam_id: str):
 
 
 @app.get("/cameras/{cam_id}/face/status")
-def cameras_face_status(cam_id: str):
+def cameras_face_status(cam_id: str, _: dict = Depends(_require_perm("cameras.view"))):
     """สถานะ main.py process + live frame สำหรับกล้องที่ระบุ"""
     if cam_id not in _CAMERAS:
         raise HTTPException(status_code=404, detail=f"Camera '{cam_id}' not found")
@@ -1409,7 +1857,7 @@ def cameras_face_status(cam_id: str):
 
 
 @app.post("/cameras/{cam_id}/face/start")
-def cameras_face_start(cam_id: str):
+def cameras_face_start(cam_id: str, _: dict = Depends(_require_perm("cameras.manage"))):
     """
     Start main.py สำหรับกล้องที่ระบุ
     ─────────────────────────────────────────────────────────────────────
@@ -1449,7 +1897,7 @@ def cameras_face_start(cam_id: str):
 
 
 @app.post("/cameras/{cam_id}/face/stop")
-def cameras_face_stop(cam_id: str):
+def cameras_face_stop(cam_id: str, _: dict = Depends(_require_perm("cameras.manage"))):
     """หยุด main.py process สำหรับกล้องที่ระบุ"""
     if cam_id not in _CAMERAS:
         raise HTTPException(status_code=404, detail=f"Camera '{cam_id}' not found")
