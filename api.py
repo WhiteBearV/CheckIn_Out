@@ -35,6 +35,13 @@ app = FastAPI(title="Face Attendance API", version="2.1.0")
 _ADMIN_KEY = os.environ.get("ADMIN_API_KEY", "")
 
 
+def _require_viewer(authorization: Optional[str] = Header(None)) -> dict:
+    """Viewer guard — ต้อง login (admin หรือ viewer ก็ผ่าน)"""
+    if not authorization:
+        raise HTTPException(status_code=401, detail="ต้องส่ง Authorization: Bearer <token>")
+    return _auth.get_current_user(authorization)
+
+
 def _require_admin(
     authorization: Optional[str] = Header(None),
     x_admin_key:   Optional[str] = Header(None),
@@ -85,6 +92,18 @@ class AttendanceUpdateRequest(BaseModel):
     posname_th:  Optional[str] = None
     organize_th: Optional[str] = None
     organize_id: Optional[str] = None
+
+
+# ─── Health (no auth — ใช้โดย sync_worker probe) ────────────────────────────
+
+@app.get("/health")
+def health_check():
+    try:
+        with get_connection() as conn:
+            conn.execute("SELECT 1")
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 # ╔═══════════════════════════════════════════════════════════════════════════╗
@@ -147,7 +166,7 @@ def mark_attendance(req: AttendanceRequest):
 
 
 @app.get("/person/{per_id}")
-def get_person(per_id: str):
+def get_person(per_id: str, _=Depends(_require_viewer)):
     """ดึงข้อมูลพนักงาน (รวม per_picpath) จาก external API ผ่าน api_client"""
     from api_client import fetch_person_by_pid
     data = fetch_person_by_pid(per_id)
@@ -168,7 +187,8 @@ def get_person(per_id: str):
 @app.get("/attendance/today/check")
 def check_attendance_today(
     per_id: str = Query(...),
-    status: str = Query(...)
+    status: str = Query(...),
+    _=Depends(_require_viewer)
 ):
     """ตรวจว่าวันนี้บันทึก IN/OUT แล้วหรือยัง"""
     with get_connection() as conn:
@@ -185,7 +205,7 @@ def check_attendance_today(
 
 
 @app.get("/attendance/today")
-def attendance_today():
+def attendance_today(_=Depends(_require_viewer)):
     """รายการลงเวลาวันนี้ทั้งหมด (สำหรับ Dashboard)
 
     Fallback: ถ้า PG ดับ → อ่านจาก offline_queue.attendance_buf แทน
@@ -257,6 +277,7 @@ def attendance_by_person(
     per_id: str,
     start_date: Optional[date] = Query(None),
     end_date:   Optional[date] = Query(None),
+    _=Depends(_require_viewer),
 ):
     """ประวัติลงเวลาของพนักงาน กรองตามช่วงวันได้"""
     with get_connection() as conn:
@@ -410,6 +431,7 @@ def history(
     organize_id:  Optional[str]  = Query(None),
     per_id:       Optional[str]  = Query(None),
     camera_name:  Optional[str]  = Query(None),
+    _=Depends(_require_viewer),
 ):
     """ประวัติลงเวลา filter ตามช่วงวัน/แผนก/บุคคล/กล้อง — group by date"""
     rows = _fetch_history_rows(from_, to, organize_id, per_id, camera_name)
@@ -423,7 +445,7 @@ def history(
 
 
 @app.get("/history/filters")
-def history_filters():
+def history_filters(_=Depends(_require_viewer)):
     """รายการ filter (แผนก/บุคคล/กล้อง) สำหรับ dropdown — distinct จาก attendance_logs"""
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -459,6 +481,7 @@ def report_summary(
     organize_id:  Optional[str]  = Query(None),
     per_id:       Optional[str]  = Query(None),
     camera_name:  Optional[str]  = Query(None),
+    _=Depends(_require_viewer),
 ):
     """สรุปสถิติ: ลงครบ (IN+OUT), เข้าอย่างเดียว, ออกอย่างเดียว — group by per_id+date"""
     where, params = _history_where(from_, to, organize_id, per_id, camera_name)
@@ -518,6 +541,7 @@ def report_export(
     organize_id:  Optional[str]  = Query(None),
     per_id:       Optional[str]  = Query(None),
     camera_name:  Optional[str]  = Query(None),
+    _=Depends(_require_viewer),
 ):
     """Export ประวัติลงเวลาเป็น CSV / XLSX / PDF (filter เดียวกับ /history)"""
     from fastapi.responses import StreamingResponse

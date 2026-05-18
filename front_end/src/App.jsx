@@ -10,6 +10,7 @@ import History from './pages/History'
 import Report from './pages/Report'
 import Login from './pages/Login'
 import ChangePassword from './pages/ChangePassword'
+import Users from './pages/Users'
 
 function Clock() {
   const [now, setNow] = useState(new Date())
@@ -94,6 +95,7 @@ function Layout() {
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/history"   element={<History />} />
           <Route path="/reports"   element={<Report />} />
+          <Route path="/users"     element={<Users />} />
         </Routes>
       </main>
     </div>

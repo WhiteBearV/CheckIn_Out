@@ -1,18 +1,19 @@
-import axios from 'axios'
-
-const api = axios.create({ baseURL: '' })
+import { authFetch } from './client'
 
 export async function fetchAttendanceToday() {
-  const { data } = await api.get('/attendance/today')
-  return data
+  const r = await authFetch('/attendance/today')
+  if (!r.ok) throw new Error(`HTTP ${r.status}`)
+  return r.json()
 }
 
-/** ดึงข้อมูลพนักงาน (รวม per_picpath รูป) จาก External API ผ่าน backend proxy */
 export async function fetchPerson(perId) {
   if (!perId) return null
   try {
-    const { data } = await api.get(`/person/${encodeURIComponent(perId)}`, { timeout: 5000 })
-    return data
+    const r = await authFetch(`/person/${encodeURIComponent(perId)}`, {
+      signal: AbortSignal.timeout(5000),
+    })
+    if (!r.ok) return null
+    return r.json()
   } catch {
     return null
   }

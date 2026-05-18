@@ -44,7 +44,7 @@ from typing import Optional
 
 import cv2
 from dotenv import load_dotenv
-from fastapi import FastAPI, Body, Depends, Request
+from fastapi import FastAPI, Body, Depends, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response, JSONResponse
 from pydantic import BaseModel
@@ -52,6 +52,7 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 import uvicorn
+import notify as _notify
 
 load_dotenv()
 
@@ -157,8 +158,10 @@ def push_frame(cam_id: str, frame, quality: int = 70):
 
 def push_state(cam_id: str, state: dict):
     """Push detection state สำหรับ frontend canvas overlay"""
+    global _last_cam_active_ts
     with _lock:
         _cam_states[cam_id] = state
+        _last_cam_active_ts = time.time()
 
 
 def push_snapshot(cam_id: str, name: str, crop, quality: int = 80):
@@ -312,6 +315,62 @@ async def auth_change_password(request: Request, req: _ChangePwReq,
         _audit.log("auth.password.change", user=user, request=request, success=False)
         raise
     _audit.log("auth.password.change", user=user, request=request)
+    return {"success": True}
+
+
+# ─── User management (admin only) ───────────────────────────────────────────
+
+class _AddUserReq(BaseModel):
+    username: str
+    password: str
+    role:     str  # 'admin' | 'viewer'
+
+class _ResetPwReq(BaseModel):
+    new_password: str
+
+@app.get('/users', dependencies=[Depends(require_admin)])
+async def list_users():
+    return _auth.list_users()
+
+@app.post('/users')
+async def add_user(req: _AddUserReq, request: Request,
+                   user: dict = Depends(require_admin)):
+    try:
+        _auth.add_user(req.username, req.password, req.role)
+    except (ValueError, Exception) as e:
+        msg = str(e).lower()
+        if 'unique' in msg or 'duplicate' in msg or 'already' in msg:
+            raise HTTPException(status_code=400, detail=f'username "{req.username}" มีอยู่แล้ว')
+        raise HTTPException(status_code=400, detail=str(e))
+    _audit.log("user.create", user=user, request=request,
+               details={"username": req.username, "role": req.role})
+    return {"success": True}
+
+@app.delete('/users/{username}')
+async def delete_user(username: str, request: Request,
+                      user: dict = Depends(require_admin)):
+    if username == user["username"]:
+        raise HTTPException(status_code=400, detail="ไม่สามารถลบตัวเองได้")
+    try:
+        _auth.delete_user(username)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    _audit.log("user.delete", user=user, request=request,
+               details={"username": username})
+    return {"success": True}
+
+@app.post('/users/{username}/reset-password')
+async def reset_user_password(username: str, req: _ResetPwReq,
+                               request: Request,
+                               user: dict = Depends(require_admin)):
+    if len(req.new_password) < 6:
+        raise HTTPException(status_code=400, detail="password ต้องอย่างน้อย 6 ตัวอักษร")
+    try:
+        _auth.set_password(username, req.new_password)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    _audit.log("user.reset_password", user=user, request=request,
+               details={"username": username})
     return {"success": True}
 
 
@@ -903,11 +962,16 @@ async def snapfull_person_cam(cam_id: str, name: str):
 
 
 # ─── Push endpoints (headless main.py → stream_server in-memory cache) ────────
-# ใช้แทนการเขียนไฟล์ live_frame / live_state / live_snap / live_snapfull
-# TODO(security): /push/* ยังไม่ guard — ถ้า bind 0.0.0.0 จะเปิดให้ใครใน LAN
-# push frame ปลอมได้ ควรเพิ่ม INTERNAL_PUSH_TOKEN (.env) + ตรวจใน header
+_PUSH_TOKEN = os.environ.get("INTERNAL_PUSH_TOKEN", "")
+
+def _require_push_token(request: Request):
+    token = request.headers.get("X-Push-Token", "")
+    if not _PUSH_TOKEN or token != _PUSH_TOKEN:
+        raise HTTPException(status_code=401, detail="invalid push token")
+
 @app.post('/push/frame/{cam_id}')
-async def push_frame_endpoint(cam_id: str, request: Request):
+async def push_frame_endpoint(cam_id: str, request: Request,
+                               _=Depends(_require_push_token)):
     body = await request.body()
     if not body:
         return Response(status_code=400)
@@ -919,19 +983,23 @@ async def push_frame_endpoint(cam_id: str, request: Request):
 
 
 @app.post('/push/state/{cam_id}')
-async def push_state_endpoint(cam_id: str, request: Request):
+async def push_state_endpoint(cam_id: str, request: Request,
+                               _=Depends(_require_push_token)):
     import json as _j
     try:
         state = _j.loads((await request.body()).decode('utf-8') or '{}')
     except Exception:
         return Response(status_code=400)
+    global _last_cam_active_ts
     with _lock:
         _cam_states[cam_id] = state
+        _last_cam_active_ts = time.time()
     return {'ok': True}
 
 
 @app.post('/push/snap/{cam_id}/{name}')
-async def push_snap_endpoint(cam_id: str, name: str, request: Request):
+async def push_snap_endpoint(cam_id: str, name: str, request: Request,
+                              _=Depends(_require_push_token)):
     body = await request.body()
     if not body:
         return Response(status_code=400)
@@ -943,7 +1011,8 @@ async def push_snap_endpoint(cam_id: str, name: str, request: Request):
 
 
 @app.post('/push/snapfull/{cam_id}/{name}')
-async def push_snapfull_endpoint(cam_id: str, name: str, request: Request):
+async def push_snapfull_endpoint(cam_id: str, name: str, request: Request,
+                                  _=Depends(_require_push_token)):
     body = await request.body()
     if not body:
         return Response(status_code=400)
@@ -981,6 +1050,7 @@ _procs: dict[str, subprocess.Popen] = {}   # 'main' | 'api' → Popen
 _user_intent_started = False  # True หลัง /system/start, False หลัง /system/stop
                               # ใช้เพื่อให้ /system/status สะท้อน "ผู้ใช้กด Start หรือยัง"
                               # ไม่ใช่แค่ port probe (เพราะ npm run dev ก็เปิด api ไว้ตลอด)
+_last_cam_active_ts = 0.0    # timestamp ล่าสุดที่มีกล้องส่ง state มา (ใช้ตรวจ all-cams-dead)
 
 # ─── Watchdog state ──────────────────────────────────────────────────────────
 # respawn child process (main.py / api.py) ถ้า crash ขณะ user สั่ง Start ค้างไว้
@@ -1047,10 +1117,12 @@ def _face_running() -> bool:
 
 
 # ─── Spawn helpers (ใช้ทั้งจาก /system/start และ watchdog) ───────────────────
-def _spawn_main_proc() -> subprocess.Popen:
+def _spawn_main_proc(cam_ids: list = None) -> subprocess.Popen:
     env = {**os.environ,
            'FACE_HEADLESS':     '1',
            'FACE_CAMERA_CHILD': '1'}
+    if cam_ids:
+        env['FACE_CAM_IDS'] = ','.join(cam_ids)
     p = subprocess.Popen(
         [sys.executable, str(_ROOT / 'main.py')],
         cwd=str(_ROOT),
@@ -1087,13 +1159,31 @@ def _record_restart(key: str) -> bool:
     return True
 
 
+_NO_CAM_AUTOSTOP_SECS = 8.0   # วิที่รอก่อน auto-stop ถ้าไม่มีกล้องรันเลย
+
+
 def _watchdog_loop():
     """ตรวจสอบ child process ทุก interval วิ ถ้าตายโดยไม่ตั้งใจ → respawn"""
+    global _user_intent_started
     print(f'[WATCHDOG] เริ่มตรวจ child process (interval={_watchdog_interval}s, '
           f'limit={_watchdog_max_restarts}/{_watchdog_window:.0f}s)')
     while not _watchdog_stop.wait(_watchdog_interval):
+      try:
         if not _user_intent_started:
             continue   # user ยังไม่กด Start หรือกด Stop ไปแล้ว → ไม่ทำอะไร
+
+        # ── auto-stop เมื่อไม่มีกล้องรันเลยนาน _NO_CAM_AUTOSTOP_SECS วิ ──────
+        if (_last_cam_active_ts > 0
+                and (time.time() - _last_cam_active_ts) > _NO_CAM_AUTOSTOP_SECS
+                and not _face_state_fresh()):
+            print('[WATCHDOG] ไม่มีกล้องรันเลย → auto-stop ระบบ')
+            _user_intent_started = False
+            _last_cam_active_ts  = 0.0
+            p = _procs.get('main')
+            if p and p.poll() is None:
+                p.terminate()
+            _notify.system_stop(stopped_by="auto (กล้องทุกตัวหยุดแล้ว)")
+            continue
 
         # ── main.py ──────────────────────────────────────────────────────────
         if 'main' not in _proc_disabled:
@@ -1127,6 +1217,8 @@ def _watchdog_loop():
                         print('[WATCHDOG] api.py respawned ✓')
                     except Exception as e:
                         print(f'[WATCHDOG] respawn api FAILED: {e}')
+      except Exception as _wde:
+          print(f'[WATCHDOG] unhandled error: {_wde}')
 
 
 def _watchdog_start():
@@ -1205,12 +1297,62 @@ async def system_status():
             'api':  _proc_alive('api') or _api_alive()}
 
 
+@app.get('/healthz')
+async def healthz():
+    """Liveness — process ยังมีชีวิตอยู่ไหม (ไม่ต้อง auth)"""
+    return Response(content='ok', media_type='text/plain')
+
+
+@app.get('/readyz')
+async def readyz():
+    """Readiness — dependency ครบพร้อมรับ traffic ไหม (ไม่ต้อง auth)"""
+    checks: dict = {}
+    ok = True
+
+    # 1. PostgreSQL
+    try:
+        from db import get_connection
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute('SELECT 1')
+        checks['postgres'] = 'ok'
+    except Exception as e:
+        checks['postgres'] = f'error: {e}'
+        ok = False
+
+    # 2. cameras.json โหลดได้ไหม
+    try:
+        cams = _load_cam_configs()
+        checks['cameras'] = f'{len(cams)} loaded'
+    except Exception as e:
+        checks['cameras'] = f'error: {e}'
+        ok = False
+
+    # 3. offline_queue DB
+    try:
+        import offline_queue as _oq
+        _oq.pending_count()
+        checks['offline_queue'] = 'ok'
+    except Exception as e:
+        checks['offline_queue'] = f'error: {e}'
+        ok = False
+
+    status = 200 if ok else 503
+    return JSONResponse(status_code=status, content={'ready': ok, 'checks': checks})
+
+
+class _StartReq(BaseModel):
+    cam_ids: list = []
+
 @app.post('/system/start')
-async def system_start(request: Request, user: dict = Depends(require_admin)):
+async def system_start(request: Request, req: _StartReq = _StartReq(),
+                       user: dict = Depends(require_admin)):
     """Start face recognition (subprocess FACE_HEADLESS) + api.py"""
-    global _user_intent_started
+    global _user_intent_started, _last_cam_active_ts
     _user_intent_started = True
-    _audit.log("system.start", user=user, request=request)
+    _last_cam_active_ts  = time.time()   # reset เพื่อให้ watchdog รอกล้อง boot ก่อน
+    _audit.log("system.start", user=user, request=request,
+               details={"cam_ids": req.cam_ids or "all"})
     # user สั่ง start ใหม่ → reset watchdog disable + restart counter
     _proc_disabled.clear()
     for k in _proc_restart_log:
@@ -1219,7 +1361,6 @@ async def system_start(request: Request, user: dict = Depends(require_admin)):
 
     # ── face recognition ──────────────────────────────────────────────────────
     if _start_fn is not None:
-        # python main.py รันอยู่แล้ว → restart workers
         try:
             await asyncio.to_thread(_start_fn)
             result['face'] = 'restarted'
@@ -1229,7 +1370,7 @@ async def system_start(request: Request, user: dict = Depends(require_admin)):
         result['face'] = 'already_running'
     else:
         try:
-            _procs['main'] = _spawn_main_proc()
+            _procs['main'] = _spawn_main_proc(req.cam_ids or None)
             result['face'] = 'started'
         except Exception as e:
             result['face'] = f'error: {e}'
@@ -1246,14 +1387,16 @@ async def system_start(request: Request, user: dict = Depends(require_admin)):
             result['api'] = f'error: {e}'
 
     _watchdog_start()
+    _notify.system_start(started_by=user.get("username", ""))
     return result
 
 
 @app.post('/system/stop')
 async def system_stop(request: Request, user: dict = Depends(require_admin)):
     """Stop face recognition + api.py (graceful shutdown → save PicSAVE)"""
-    global _user_intent_started
+    global _user_intent_started, _last_cam_active_ts
     _user_intent_started = False
+    _last_cam_active_ts  = 0.0
     _audit.log("system.stop", user=user, request=request)
     result = {}
 
@@ -1300,23 +1443,66 @@ async def system_stop(request: Request, user: dict = Depends(require_admin)):
                 pass
     result['legacy_files_deleted'] = legacy
 
+    _notify.system_stop(stopped_by=user.get("username", ""))
     return result
+
+
+@app.post('/cameras/{cam_id}/stop')
+async def stop_single_camera(cam_id: str, request: Request,
+                              user: dict = Depends(require_admin)):
+    """หยุดเฉพาะ camera worker — ใช้ file flag (ทำงานได้ทั้ง in-process และ subprocess)"""
+    flag = _ROOT / f"cam_stop_{cam_id}.flag"
+    flag.touch()
+    # in-process mode: ยังเรียก stop_camera ตรงด้วย
+    if _stop_fn is not None:
+        try:
+            import main as _main
+            if hasattr(_main, 'stop_camera'):
+                _main.stop_camera(cam_id)
+        except Exception:
+            pass
+    _audit.log("camera.stop", user=user, request=request, target=cam_id)
+    return {"success": True, "cam_id": cam_id}
 
 
 @app.post('/cameras/reload')
 async def cameras_reload(request: Request, user: dict = Depends(require_admin)):
-    """Hotload กล้องที่เพิ่งเพิ่มใหม่ใน cameras.json โดยไม่ต้อง restart ระบบ
-    (เหมือนกดปุ่ม R ที่หลังบ้าน — spawn thread ให้เฉพาะกล้องใหม่)"""
-    if _start_fn is None:
-        return {'reloaded': 0, 'msg': 'ระบบไม่ได้รันในโหมด direct (ใช้ START ก่อน)'}
+    """Hotload กล้องที่เพิ่งเพิ่มใหม่ใน cameras.json โดยไม่ต้อง restart ระบบ"""
+    if not _user_intent_started:
+        return {'reloaded': False, 'msg': 'กด START ก่อน'}
     try:
-        import asyncio as _aio
-        result = await _aio.to_thread(_start_fn)
+        if _start_fn is not None:
+            # in-process mode
+            import asyncio as _aio
+            await _aio.to_thread(_start_fn)
+        else:
+            # subprocess mode — ใช้ file flag
+            (_ROOT / 'cam_reload.flag').touch()
         _audit.log("camera.reload", user=user, request=request)
         return {'reloaded': True, 'msg': 'reload สำเร็จ'}
     except Exception as e:
         _audit.log("camera.reload", user=user, request=request, success=False, error=str(e))
         return {'reloaded': False, 'msg': str(e)}
+
+
+@app.post('/cameras/{cam_id}/start')
+async def start_single_camera(cam_id: str, request: Request,
+                               user: dict = Depends(require_admin)):
+    """เริ่มกล้องตัวเดียวที่หยุดอยู่ — ใช้ file flag (ทำงานได้ทั้ง in-process และ subprocess)"""
+    if not _user_intent_started:
+        return {'success': False, 'msg': 'กด START ก่อน'}
+    flag = _ROOT / f'cam_start_{cam_id}.flag'
+    flag.touch()
+    if _start_fn is not None:
+        try:
+            import main as _main
+            if hasattr(_main, 'start_camera_workers'):
+                import asyncio as _aio
+                await _aio.to_thread(_main.start_camera_workers)
+        except Exception:
+            pass
+    _audit.log("camera.start", user=user, request=request, target=cam_id)
+    return {'success': True, 'cam_id': cam_id}
 
 
 # ─── Legacy single-cam endpoints (→ cam1) ────────────────────────────────────
@@ -1393,8 +1579,30 @@ def start(port: int = 8001):
 # ─── Standalone mode ─────────────────────────────────────────────────────────
 # รัน: python stream_server.py
 # จากนั้นเปิด browser แล้วกด START เพื่อสั่งให้ spawn main.py + api.py
+def _kill_stale_main():
+    """Kill main.py processes ที่ไม่ได้ spawn โดย server นี้ (zombie จาก session ก่อน)"""
+    import signal as _sig
+    try:
+        import psutil
+        own_pid = os.getpid()
+        for proc in psutil.process_iter(['pid', 'cmdline']):
+            try:
+                cmd = ' '.join(proc.info['cmdline'] or [])
+                if 'main.py' in cmd and proc.pid != own_pid:
+                    # ไม่ใช่ process ที่ server นี้ spawn ไว้ใน _procs
+                    if _procs.get('main') and _procs['main'].pid == proc.pid:
+                        continue
+                    print(f'[STARTUP] kill stale main.py PID={proc.pid}')
+                    proc.send_signal(_sig.SIGTERM)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+    except ImportError:
+        pass   # psutil ไม่มี — ข้ามไป
+
+
 @app.on_event('startup')
 async def _on_startup():
+    _kill_stale_main()
     _auth.bootstrap_default_users()
     _watchdog_start()
     try:
@@ -1402,15 +1610,37 @@ async def _on_startup():
         _sync_worker.start()
     except Exception as e:
         print(f'[STARTUP] sync_worker init failed: {e}')
+    _notify.server_startup()
 
 
 @app.on_event('shutdown')
 async def _on_shutdown():
+    global _shutdown_notified
     try:
         _sync_worker.stop(timeout=3.0)
     except Exception as e:
         print(f'[SHUTDOWN] sync_worker stop failed: {e}')
+    if not _shutdown_notified:
+        _shutdown_notified = True
+        import threading
+        t = threading.Thread(target=_notify.server_shutdown, daemon=False)
+        t.start()
+        t.join(timeout=6)
 
+
+_shutdown_notified = False
+
+def _register_signal_handlers():
+    import signal
+    def _on_sigterm(signum, frame):
+        global _shutdown_notified
+        if not _shutdown_notified:
+            _shutdown_notified = True
+            print('[STREAM] SIGTERM received — sending shutdown notification')
+            _notify.server_shutdown()
+    signal.signal(signal.SIGTERM, _on_sigterm)
+
+_register_signal_handlers()
 
 if __name__ == '__main__':
     import uvicorn as _uv

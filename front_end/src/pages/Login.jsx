@@ -7,6 +7,7 @@ import Logo from '../components/Logo'
 export default function Login() {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [showPw,   setShowPw]   = useState(false)
   const [error,    setError]    = useState('')
   const [loading,  setLoading]  = useState(false)
   const nav = useNavigate()
@@ -77,14 +78,27 @@ export default function Login() {
 
         <label style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <span style={{ fontSize: 24, color: 'var(--c-text-2)' }}>Password</span>
-          <input
-            type="password"
-            value={password}
-            onChange={e => setPassword(e.target.value)}
-            autoComplete="current-password"
-            required
-            style={inputStyle}
-          />
+          <div style={{ position: 'relative', width: '100%' }}>
+            <input
+              type={showPw ? 'text' : 'password'}
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              autoComplete="current-password"
+              required
+              style={{ ...inputStyle, width: '100%', boxSizing: 'border-box', paddingRight: 48 }}
+            />
+            <button type="button" onClick={() => setShowPw(v => !v)}
+              style={{
+                position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)',
+                background: 'none', border: 'none', cursor: 'pointer', padding: 4,
+                color: 'var(--c-text-3)', display: 'flex', alignItems: 'center',
+              }}>
+              {showPw
+                ? <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                : <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+              }
+            </button>
+          </div>
         </label>
 
         {error && (
@@ -101,32 +115,11 @@ export default function Login() {
         <button
           type="submit"
           disabled={loading || !username || !password}
-          style={{
-            padding: '14px 22px', borderRadius: 10,
-            background: 'var(--c-accent)', color: '#000',
-            border: 'none', fontWeight: 600, fontSize: 24,
-            cursor: loading ? 'wait' : 'pointer',
-            opacity: (loading || !username || !password) ? 0.55 : 1,
-            marginTop: 4,
-          }}
+          className="btn btn-primary btn-block"
         >
           {loading ? 'กำลังเข้าสู่ระบบ…' : 'เข้าสู่ระบบ'}
         </button>
 
-        {/* TODO(production): ลบ block "default credentials" ทั้งก้อนนี้ก่อน deploy
-            — เปิดเผย default creds ในหน้า public ไม่ปลอดภัย */}
-        <div style={{
-          fontSize: 12, color: '#fbbf24',
-          background: 'rgba(251,191,36,0.10)',
-          border: '1px solid rgba(251,191,36,0.35)',
-          borderRadius: 8, padding: '10px 14px',
-          textAlign: 'center', lineHeight: 1.5,
-        }}>
-          ⚠ Dev only — ลบ block นี้ก่อน deploy production
-          <div style={{ marginTop: 4, color: 'var(--c-text-3)' }}>
-            Default: <code>admin / Admin12345</code> หรือ <code>viewer / User12345</code>
-          </div>
-        </div>
       </form>
     </div>
   )

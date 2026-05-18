@@ -3,6 +3,7 @@ import { NavLink } from 'react-router-dom'
 import { useTheme } from '../context/ThemeContext'
 import { useAuth } from '../context/AuthContext'
 import Logo from './Logo'
+import ConfirmModal from './ConfirmModal'
 
 
 const NAV = [
@@ -35,6 +36,7 @@ const DEFAULT_W = 224
 export default function Sidebar() {
   const { theme, toggleTheme } = useTheme()
   const { user, logout } = useAuth()
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
   const [width, setWidth] = useState(() => {
     const saved = localStorage.getItem('sb-width')
     return saved ? Number(saved) : DEFAULT_W
@@ -94,6 +96,13 @@ export default function Sidebar() {
             {item.label}
           </NavLink>
         ))}
+        {user?.role === 'admin' && (
+          <NavLink to="/users"
+            className={({ isActive }) => 'sb-item' + (isActive ? ' active' : '')}>
+            <svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>
+            จัดการผู้ใช้
+          </NavLink>
+        )}
       </nav>
 
       {/* User + Theme + Logout */}
@@ -137,11 +146,29 @@ export default function Sidebar() {
         </button>
 
         {user && (
-          <button className="sb-theme" onClick={logout}
+          <NavLink to="/change-password"
+            className={({ isActive }) => 'sb-theme' + (isActive ? ' active' : '')}
+            style={{ textDecoration: 'none' }}>
+            <svg viewBox="0 0 24 24"><path d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+            เปลี่ยนรหัสผ่าน
+          </NavLink>
+        )}
+        {user && (
+          <button className="sb-theme" onClick={() => setShowLogoutConfirm(true)}
             style={{ color: '#ff8a8a' }}>
             <svg viewBox="0 0 24 24"><path d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
             ออกจากระบบ
           </button>
+        )}
+        {showLogoutConfirm && (
+          <ConfirmModal
+            title="ออกจากระบบ"
+            message="ยืนยันออกจากระบบใช่ไหม?"
+            confirmLabel="ออกจากระบบ"
+            danger
+            onConfirm={logout}
+            onCancel={() => setShowLogoutConfirm(false)}
+          />
         )}
       </div>
 

@@ -52,10 +52,10 @@ export default function ChangePassword() {
         display: 'flex', flexDirection: 'column', gap: 18,
       }}>
         <div>
-          <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--c-text-1)' }}>
+          <div style={{ fontSize: 28, fontWeight: 700, color: 'var(--c-text-1)' }}>
             เปลี่ยนรหัสผ่าน
           </div>
-          <div style={{ fontSize: 13, color: 'var(--c-text-3)', marginTop: 6 }}>
+          <div style={{ fontSize: 20, color: 'var(--c-text-3)', marginTop: 6 }}>
             User: <code>{user?.username}</code>
           </div>
         </div>
@@ -72,27 +72,27 @@ export default function ChangePassword() {
           </div>
         )}
 
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <span style={{ fontSize: 24, color: 'var(--c-text-2)' }}>รหัสเดิม</span>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <span style={{ fontSize: 20, fontWeight: 600, color: 'var(--c-text-2)' }}>รหัสเดิม</span>
           <input type="password" value={oldPw} onChange={e => setOldPw(e.target.value)}
                  autoFocus required style={inputStyle} />
         </label>
 
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <span style={{ fontSize: 24, color: 'var(--c-text-2)' }}>รหัสใหม่</span>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <span style={{ fontSize: 20, fontWeight: 600, color: 'var(--c-text-2)' }}>รหัสใหม่</span>
           <input type="password" value={newPw} onChange={e => setNewPw(e.target.value)}
                  required minLength={6} style={inputStyle} />
         </label>
 
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <span style={{ fontSize: 24, color: 'var(--c-text-2)' }}>ยืนยันรหัสใหม่</span>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <span style={{ fontSize: 20, fontWeight: 600, color: 'var(--c-text-2)' }}>ยืนยันรหัสใหม่</span>
           <input type="password" value={confirm} onChange={e => setConfirm(e.target.value)}
                  required minLength={6} style={inputStyle} />
         </label>
 
         {error && (
           <div style={{
-            fontSize: 24, color: '#ff6b6b',
+            fontSize: 20, color: '#ff6b6b',
             background: 'rgba(255,107,107,0.10)',
             border: '1px solid rgba(255,107,107,0.30)',
             borderRadius: 8, padding: '10px 14px',
@@ -102,35 +102,20 @@ export default function ChangePassword() {
         )}
 
         <button type="submit" disabled={loading || !oldPw || !newPw || !confirm}
-          style={{
-            padding: '14px 22px', borderRadius: 10,
-            background: 'var(--c-accent)', color: '#000',
-            border: 'none', fontWeight: 600, fontSize: 24,
-            cursor: loading ? 'wait' : 'pointer',
-            opacity: (loading || !oldPw || !newPw || !confirm) ? 0.55 : 1,
-            marginTop: 4,
-          }}>
+          className="btn btn-primary btn-block" style={{ fontSize: 20, padding: '14px 22px' }}>
           {loading ? 'กำลังเปลี่ยน…' : 'บันทึกรหัสใหม่'}
         </button>
 
         {!mustChangePassword && (
           <button type="button" onClick={() => nav(-1)}
-            style={{
-              padding: '10px 16px', background: 'transparent',
-              color: 'var(--c-text-3)', border: '1px solid var(--c-border)',
-              borderRadius: 8, cursor: 'pointer', fontSize: 13,
-            }}>
+            className="btn btn-ghost btn-block" style={{ fontSize: 20, padding: '14px 22px' }}>
             ยกเลิก
           </button>
         )}
 
         {mustChangePassword && (
           <button type="button" onClick={logout}
-            style={{
-              padding: '10px 16px', background: 'transparent',
-              color: 'var(--c-text-3)', border: '1px solid var(--c-border)',
-              borderRadius: 8, cursor: 'pointer', fontSize: 13,
-            }}>
+            className="btn btn-stop btn-block" style={{ fontSize: 20, padding: '14px 22px' }}>
             ออกจากระบบ
           </button>
         )}
@@ -140,11 +125,13 @@ export default function ChangePassword() {
 }
 
 const inputStyle = {
-  padding: '12px 16px',
+  padding: '10px 14px',
   background: 'var(--c-bg)',
   border: '1px solid var(--c-border)',
   borderRadius: 8,
   color: 'var(--c-text-1)',
-  fontSize: 24,
+  fontSize: 21,
   outline: 'none',
+  width: '100%',
+  boxSizing: 'border-box',
 }

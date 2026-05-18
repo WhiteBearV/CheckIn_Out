@@ -1,0 +1,12 @@
+[Unit]
+Description=FaceReg — ลบรูปเก่า (PicSAVE >365 วัน, live_snap >7 วัน)
+After=network.target
+
+[Service]
+Type=oneshot
+User=maeb
+WorkingDirectory=/home/maeb/internship_work/FaceReg
+ExecStart=/home/maeb/internship_work/FaceReg/venv/bin/python /home/maeb/internship_work/FaceReg/cleanup.py
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=facereg-cleanup

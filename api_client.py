@@ -13,6 +13,7 @@ api_client.py — HTTP client + mock สำหรับ Face Attendance
 """
 
 import os
+import notify as _notify
 import requests
 from datetime import datetime
 from dotenv import load_dotenv
@@ -269,6 +270,9 @@ def mark_attendance(per_id: str, status: str,
                 except Exception as e:
                     print(f"[API CLIENT] mark_synced({buf_id}) failed: {e}")
             print(f"[API CLIENT] บันทึก {status} สำเร็จ ({per_id})")
+            _notify.attendance(status, per_id, name=name,
+                               organize_th=organize_th, camera_name=camera_name,
+                               check_time=ct)
             return True, ""
 
         # PG rejected (DB rule: ซ้ำ / OUT ก่อน IN)

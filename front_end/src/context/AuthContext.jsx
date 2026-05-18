@@ -64,9 +64,5 @@ export function RequireAuth({ children }) {
     )
   }
   if (!user) return <Navigate to="/login" replace state={{ from: loc.pathname }} />
-  // ถ้าต้องบังคับเปลี่ยนรหัส → ไป /change-password ก่อน (block ทุกหน้าอื่น)
-  if (mustChangePassword && loc.pathname !== '/change-password') {
-    return <Navigate to="/change-password" replace />
-  }
   return children
 }

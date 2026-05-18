@@ -1,14 +1,20 @@
 [
   {
-    "id": "cam1",
-    "name": "CAM_MAIN",
-    "url": "$CAM1",
-    "flip": false
-  },
-  {
     "id": "cam2",
     "name": "CAM_WEb",
     "flip": true,
     "index": 1
+  },
+  {
+    "id": "cam3",
+    "name": "IP_CAM",
+    "flip": false,
+    "url": "rtsp://admin:@dmin123456@192.168.1.13:554/unicast/c1/s0/live"
+  },
+  {
+    "id": "cam4",
+    "name": "PHONE_CAM",
+    "flip": true,
+    "index": 0
   }
 ]

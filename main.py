@@ -61,7 +61,9 @@ from pathlib import Path as _pl_mod
 # คนละ process — สื่อสารผ่าน HTTP POST localhost (ไม่แตะ disk)
 
 # HTTP client (singleton) — pool ใช้ซ้ำเพื่อลด latency
-_STREAM_BASE = f"http://127.0.0.1:{int(os.environ.get('STREAM_PORT', 8001))}"
+_STREAM_BASE  = f"http://127.0.0.1:{int(os.environ.get('STREAM_PORT', 8001))}"
+_PUSH_TOKEN   = os.environ.get("INTERNAL_PUSH_TOKEN", "")
+_PUSH_HEADERS = {"X-Push-Token": _PUSH_TOKEN} if _PUSH_TOKEN else {}
 _http_session = None
 
 def _get_http_session():
@@ -83,7 +85,7 @@ def _post_live_frame(cam_id: str, frame_bgr):
         _get_http_session().post(
             f"{_STREAM_BASE}/push/frame/{cam_id}",
             data=buf.tobytes(),
-            headers={'Content-Type': 'image/jpeg'},
+            headers={'Content-Type': 'image/jpeg', **_PUSH_HEADERS},
             timeout=1.0,
         )
     except Exception:
@@ -96,7 +98,7 @@ def _post_live_state(cam_id: str, state: dict):
         _get_http_session().post(
             f"{_STREAM_BASE}/push/state/{cam_id}",
             data=_j.dumps(state, ensure_ascii=False).encode('utf-8'),
-            headers={'Content-Type': 'application/json'},
+            headers={'Content-Type': 'application/json', **_PUSH_HEADERS},
             timeout=1.0,
         )
     except Exception:
@@ -114,7 +116,7 @@ def _post_live_snap(cam_id: str, name: str, crop):
         _get_http_session().post(
             f"{_STREAM_BASE}/push/snap/{cam_id}/{quote(name, safe='')}",
             data=buf.tobytes(),
-            headers={'Content-Type': 'image/jpeg'},
+            headers={'Content-Type': 'image/jpeg', **_PUSH_HEADERS},
             timeout=1.0,
         )
     except Exception:
@@ -131,7 +133,7 @@ def _post_live_snapfull(cam_id: str, name: str, frame):
         _get_http_session().post(
             f"{_STREAM_BASE}/push/snapfull/{cam_id}/{quote(name, safe='')}",
             data=buf.tobytes(),
-            headers={'Content-Type': 'image/jpeg'},
+            headers={'Content-Type': 'image/jpeg', **_PUSH_HEADERS},
             timeout=1.0,
         )
     except Exception:
@@ -360,7 +362,7 @@ def _resolve_url(url) -> str:
 
 
 
-def run_camera(cam_cfg: dict):
+def run_camera(cam_cfg: dict, cam_stop_event=None):
     """Main loop สำหรับกล้อง 1 ตัว — รัน 1 thread ต่อ cam_cfg"""
     cam_id      = cam_cfg["id"]
     camera_name = cam_cfg["name"]
@@ -851,6 +853,7 @@ def run_camera(cam_cfg: dict):
         stream_frame = raw_frame.copy()
         ui.draw_face_guide(stream_frame, _face_with_names,
                            session.liveness, session.persons, now_ts)
+        ui.draw_hands(stream_frame, hand_results)
 
         if _HEADLESS:
             _post_live_frame(cam_id, stream_frame)
@@ -868,7 +871,14 @@ def run_camera(cam_cfg: dict):
             elif key == ord("f"):
                 _toggle_fullscreen()
         else:
-            if _stop_event.is_set():
+            if _stop_event.is_set() or (cam_stop_event and cam_stop_event.is_set()):
+                break
+            # check file flag (subprocess mode)
+            _flag = _pl_mod(__file__).parent / f"cam_stop_{cam_id}.flag"
+            if _flag.exists():
+                try: _flag.unlink()
+                except: pass
+                print(f"[MAIN] cam_stop flag detected: {cam_id}")
                 break
             time.sleep(0.001)
 
@@ -880,12 +890,23 @@ def run_camera(cam_cfg: dict):
 
 
 _camera_threads: list = []   # track worker threads สำหรับ restart
+_cam_stop_events: dict = {}  # cam_id → threading.Event สำหรับหยุดเฉพาะกล้อง
 
 
 def stop_cameras():
     """หยุด camera workers ทั้งหมด"""
     _stop_event.set()
     print("[MAIN] stop_cameras() called")
+
+
+def stop_camera(cam_id: str):
+    """หยุดเฉพาะ camera worker ตาม cam_id (in-process หรือ file flag)"""
+    ev = _cam_stop_events.get(cam_id)
+    if ev:
+        ev.set()
+    # เขียน flag file เพื่อ subprocess mode ด้วย
+    (_pl_mod(__file__).parent / f"cam_stop_{cam_id}.flag").touch()
+    print(f"[MAIN] stop_camera({cam_id}) called")
 
 
 def start_camera_workers():
@@ -909,6 +930,12 @@ def start_camera_workers():
         }]
     if not stream_server._CAMERAS_JSON.exists() and configs:
         stream_server._save_cam_configs(configs)
+
+    # filter เฉพาะกล้องที่เลือก (ถ้า FACE_CAM_IDS ถูกตั้ง)
+    _face_cam_ids = os.environ.get("FACE_CAM_IDS", "")
+    if _face_cam_ids:
+        _selected = set(_face_cam_ids.split(","))
+        configs = [c for c in configs if c.get("id") in _selected]
     configs = [
         {**c, "url": _resolve_url(c["url"])} if "url" in c else c
         for c in configs
@@ -931,13 +958,16 @@ def start_camera_workers():
         _sel_cam["id"] = configs[0]["id"]
 
     for cam_cfg in new_cams:
+        cam_id = cam_cfg['id']
+        ev = _t.Event()
+        _cam_stop_events[cam_id] = ev
         t = _threading.Thread(
-            target=run_camera, args=(cam_cfg,),
-            name=f"cam-{cam_cfg['id']}", daemon=True,
+            target=run_camera, args=(cam_cfg, ev),
+            name=f"cam-{cam_id}", daemon=True,
         )
         _camera_threads.append(t)
         t.start()
-        print(f"[MAIN] Camera worker started: {cam_cfg['id']}")
+        print(f"[MAIN] Camera worker started: {cam_id}")
     print(f"[MAIN] Hotloaded {len(new_cams)} new cam(s): {[c['id'] for c in new_cams]}")
 
 
@@ -1487,7 +1517,41 @@ if __name__ == "__main__":
         import signal as _sig
         _sig.signal(_sig.SIGTERM, lambda *_: _stop_event.set())
         start_camera_workers()
-        _stop_event.wait()
+
+        _base = _pl_mod(__file__).parent
+        while not _stop_event.is_set():
+            # reload flag — spawn กล้องใหม่หรือกล้องที่ยังไม่ได้รัน
+            _rf = _base / "cam_reload.flag"
+            if _rf.exists():
+                try: _rf.unlink()
+                except: pass
+                print("[MAIN] cam_reload flag detected — hotloading cameras")
+                start_camera_workers()
+
+            # per-cam start flag — spawn กล้องตัวนั้นใหม่
+            for _sf in list(_base.glob("cam_start_*.flag")):
+                _cid = _sf.stem[len("cam_start_"):]
+                try: _sf.unlink()
+                except: pass
+                print(f"[MAIN] cam_start flag detected: {_cid}")
+                # clear per-cam stop event ก่อน spawn ใหม่
+                _ev = _t.Event()
+                _cam_stop_events[_cid] = _ev
+                import threading as _thr
+                _ct = _thr.Thread(
+                    target=run_camera,
+                    args=(next((c for c in stream_server._load_cam_configs()
+                                if c["id"] == _cid), {"id": _cid, "name": _cid}), _ev),
+                    name=f"cam-{_cid}", daemon=True,
+                )
+                # ลบ thread เก่าของกล้องนี้ก่อน (ถ้ามี)
+                _camera_threads[:] = [t for t in _camera_threads
+                                      if t.is_alive() or t.name != f"cam-{_cid}"]
+                _camera_threads.append(_ct)
+                _ct.start()
+
+            _stop_event.wait(timeout=0.5)
+
         # รอ worker threads ให้ save_snapshots() เสร็จก่อน process ออก
         for _t in list(_camera_threads):
             if _t.is_alive():

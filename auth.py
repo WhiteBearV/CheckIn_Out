@@ -157,7 +157,7 @@ def set_password(username: str, new_password: str) -> None:
 
 
 def add_user(username: str, password: str, role: str) -> None:
-    """สร้าง user ใหม่ — must_change_password=TRUE ทุกครั้ง (admin ต้องส่ง initial pw)"""
+    """สร้าง user ใหม่"""
     if role not in ("admin", "viewer"):
         raise ValueError("role ต้องเป็น 'admin' หรือ 'viewer'")
     if len(password) < 6:
@@ -165,7 +165,7 @@ def add_user(username: str, password: str, role: str) -> None:
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             "INSERT INTO users (username, password_hash, role, must_change_password) "
-            "VALUES (%s, %s, %s, TRUE)",
+            "VALUES (%s, %s, %s, FALSE)",
             (username, hash_password(password), role),
         )
         conn.commit()
@@ -196,8 +196,7 @@ def list_users() -> list:
 
 
 def bootstrap_default_users() -> None:
-    """ตอน boot ถ้าตาราง users ว่าง → seed admin + viewer พร้อม must_change_password=TRUE
-    เพื่อบังคับให้เปลี่ยนรหัสตอน login ครั้งแรก"""
+    """ตอน boot ถ้าตาราง users ว่าง → seed admin + viewer"""
     try:
         with get_connection() as conn, conn.cursor() as cur:
             cur.execute("SELECT COUNT(*) FROM users")
@@ -207,11 +206,11 @@ def bootstrap_default_users() -> None:
             for username, password, role in _DEFAULT_USERS:
                 cur.execute(
                     "INSERT INTO users (username, password_hash, role, must_change_password) "
-                    "VALUES (%s, %s, %s, TRUE)",
+                    "VALUES (%s, %s, %s, FALSE)",
                     (username, hash_password(password), role),
                 )
             conn.commit()
-            print(f"[AUTH] seed default users (must change password on first login): "
+            print(f"[AUTH] seed default users: "
                   f"{', '.join(u for u, _, _ in _DEFAULT_USERS)}")
     except Exception as e:
         print(f"[AUTH] bootstrap failed: {e}")

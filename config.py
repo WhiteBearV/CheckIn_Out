@@ -185,7 +185,7 @@ FAS_DETECTOR_BACKEND  = "skip"
 # ╔═══════════════════════════════════════════╗
 # ║  UI: General                              ║
 # ╚═══════════════════════════════════════════╝
-SHOW_LANDMARKS        = False
+SHOW_LANDMARKS        = True
 SHOW_FPS              = True       # แสดง FPS มุมล่างซ้าย (False = ซ่อน)
 NO_FACE_RESET_SEC     = 5
 SCREEN_DEBUG_EMA_ALPHA = 0.20     # EMA smoothing สำหรับ screen debug HUD (TEST_MODE)

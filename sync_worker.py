@@ -27,6 +27,7 @@ from typing import Optional
 import requests
 
 import offline_queue
+import notify as _notify
 
 # ─── ค่าตั้งต้น ────────────────────────────────────────────────────────────────
 
@@ -43,6 +44,7 @@ POST_TIMEOUT           = 5
 _thread: Optional[threading.Thread] = None
 _stop_event = threading.Event()
 _last_cache_refresh_ts = 0.0
+_last_pg_ok: Optional[bool] = None  # ติดตามสถานะ PG เพื่อส่ง notify เมื่อเปลี่ยน
 
 
 # ─── lifecycle ────────────────────────────────────────────────────────────────
@@ -98,6 +100,19 @@ def _loop() -> None:
             return
 
 
+def _notify_pg_state(pg_ok: bool) -> None:
+    """ส่ง notify เมื่อสถานะ PG เปลี่ยน (down→up หรือ up→down) เท่านั้น"""
+    global _last_pg_ok
+    if _last_pg_ok is None:
+        _last_pg_ok = pg_ok
+        return
+    if not pg_ok and _last_pg_ok:
+        _notify.pg_down()
+    elif pg_ok and not _last_pg_ok:
+        _notify.pg_recovered()
+    _last_pg_ok = pg_ok
+
+
 def _tick() -> None:
     """หนึ่งรอบการทำงาน — drain pending + (เป็นครั้งคราว) refresh cache"""
     now = time.time()
@@ -113,6 +128,7 @@ def _tick() -> None:
             "ok": pg_ok,
             "ts": datetime.now().isoformat(timespec='seconds'),
         })
+        _notify_pg_state(pg_ok)
 
     # employee cache refresh
     global _last_cache_refresh_ts
@@ -152,6 +168,7 @@ def _drain_pending() -> None:
         "ok": pg_ok,
         "ts": datetime.now().isoformat(timespec='seconds'),
     })
+    _notify_pg_state(pg_ok)
     if drained or transient_failed or permanent_failed:
         print(f"[SYNC WORKER] drained={drained} transient={transient_failed} "
               f"permanent={permanent_failed} (pending_after={offline_queue.pending_count()})")
@@ -213,11 +230,10 @@ def _push_row(row) -> str:
 # ─── PG probe ─────────────────────────────────────────────────────────────────
 
 def _probe_pg() -> bool:
-    """ping api.py /attendance/today — 200 = PG ปลายทางพร้อม"""
+    """ping api.py /health — 200 + ok=true = PG พร้อม"""
     try:
-        resp = requests.get(f"{LOCAL_API_URL}/attendance/today",
-                            timeout=HEALTH_TIMEOUT)
-        return resp.status_code == 200
+        resp = requests.get(f"{LOCAL_API_URL}/health", timeout=HEALTH_TIMEOUT)
+        return resp.status_code == 200 and resp.json().get("ok") is True
     except Exception:
         return False
 

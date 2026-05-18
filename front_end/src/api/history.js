@@ -1,6 +1,4 @@
-import axios from 'axios'
-
-const api = axios.create({ baseURL: '' })
+import { authFetch } from './client'
 
 function _qs({ from, to, organize_id, per_id, camera_name }) {
   const p = new URLSearchParams()
@@ -13,18 +11,21 @@ function _qs({ from, to, organize_id, per_id, camera_name }) {
 }
 
 export async function fetchHistory(filters) {
-  const { data } = await api.get(`/api/history?${_qs(filters)}`)
-  return data
+  const r = await authFetch(`/api/history?${_qs(filters)}`)
+  if (!r.ok) throw new Error(`HTTP ${r.status}`)
+  return r.json()
 }
 
 export async function fetchHistoryFilters() {
-  const { data } = await api.get('/api/history/filters')
-  return data
+  const r = await authFetch('/api/history/filters')
+  if (!r.ok) throw new Error(`HTTP ${r.status}`)
+  return r.json()
 }
 
 export async function fetchReportSummary(filters) {
-  const { data } = await api.get(`/api/report/summary?${_qs(filters)}`)
-  return data
+  const r = await authFetch(`/api/report/summary?${_qs(filters)}`)
+  if (!r.ok) throw new Error(`HTTP ${r.status}`)
+  return r.json()
 }
 
 export function reportExportUrl(format, filters) {

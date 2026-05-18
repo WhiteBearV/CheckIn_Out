@@ -67,3 +67,30 @@ export function logout() {
   clearToken()
   location.href = '/login'
 }
+
+// ─── User management ──────────────────────────────────────────────────────────
+export async function listUsers() {
+  const r = await authFetch('/users')
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`)
+  return r.json()
+}
+
+export async function addUser(username, password, role) {
+  const r = await authFetch('/users', { method: 'POST', body: { username, password, role } })
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`)
+  return r.json()
+}
+
+export async function deleteUser(username) {
+  const r = await authFetch(`/users/${encodeURIComponent(username)}`, { method: 'DELETE' })
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`)
+  return r.json()
+}
+
+export async function resetUserPassword(username, newPassword) {
+  const r = await authFetch(`/users/${encodeURIComponent(username)}/reset-password`, {
+    method: 'POST', body: { new_password: newPassword },
+  })
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`)
+  return r.json()
+}
