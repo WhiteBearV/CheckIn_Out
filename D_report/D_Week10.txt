@@ -196,3 +196,224 @@
              โดยไม่กระทบ dev mode
 
 ════════════════════════════════════════════════════════════════════════
+
+════════════════════════════════════════════════════════════════════════
+  รายงานการปฏิบัติงานฝึกประสบการณ์วิชาชีพ
+  วันที่  : อังคารที่ 19 พฤษภาคม 2569
+  สัปดาห์ : สัปดาห์ที่ 10
+════════════════════════════════════════════════════════════════════════
+
+■ งานที่ดำเนินการในวันนี้
+────────────────────────────────────────────────────────────────────────
+
+1. แก้บักวันที่คลาดเคลื่อนใน HistoryView (Timezone UTC vs Local)
+   ─────────────────────────────────────────────────────────────────
+   พบว่าหน้าประวัติแสดงจำนวนวันไม่ตรงกับที่เลือก เช่น เลือก "3 วัน"
+   แต่ตารางแสดง "4 วัน" เพราะใช้ toISOString() ซึ่งแปลงเป็น UTC
+   ทำให้เวลาเที่ยงคืนในไทย (UTC+7) กลายเป็นวันก่อนหน้าใน UTC
+
+   - วิเคราะห์: toISOString() คืนค่า UTC date — ที่ UTC+7 เวลา 00:00
+     ท้องถิ่นคือ 17:00 UTC ของวันก่อนหน้า ทำให้วันขยับไปหนึ่งวัน
+   - แก้ไข: เขียน helper function localISO() ใช้ getFullYear / getMonth
+     / getDate โดยตรง (local timezone) แทนที่ทุกที่ที่เรียก toISOString()
+   - ปรับฟังก์ชัน addDays() และ firstOfMonth() ให้ใช้ localISO() ด้วย
+
+2. แก้บักรูปภาพ ชื่อ-นามสกุล และหน่วยงานหายไปใน PersonCard
+   ─────────────────────────────────────────────────────────────────
+   Person card บน Dashboard แสดงเพียง ID ไม่มีรูป ชื่อ หรือหน่วยงาน
+
+   - วิเคราะห์ 1: per_id บางรายการไม่อยู่ใน _MOCK_PERSONS ของ api_client.py
+     ทำให้ _mock_fetch() คืน None แล้ว API ส่งข้อมูลไม่ครบ
+   - แก้ไข: เพิ่ม fallback ให้ _mock_fetch() ตรวจสอบ _local_fetch()
+     จาก attendance_logs DB เมื่อไม่พบใน mock dictionary
+
+   - วิเคราะห์ 2: _local_fetch() ใช้ชื่อตาราง attendance (ผิด)
+   - แก้ไข: แก้เป็น attendance_logs ให้ถูกต้อง
+
+   - วิเคราะห์ 3: รูปไม่โหลด PersonCard แสดงกล่องเทาว่างเปล่า
+   - แก้ไข: เพิ่ม fallback แสดงตัวอักษรแรกของชื่อ (initial letter avatar)
+     พร้อมสีตาม status (IN=เขียว, PENDING=ม่วง, OUT=เหลือง)
+
+   - เพิ่ม _PRENAME_ABBR lookup table และ _abbr_from_prename() ใน
+     api_client.py เพื่อแปลงคำนำหน้าชื่อยาวเป็นคำย่อ (เช่น ร้อยตรี → ร.ต.)
+
+3. ตรวจสอบบักทั้งระบบและแก้ไข (บักรวม 14 รายการ)
+   ─────────────────────────────────────────────────────────────────
+   ทำการตรวจสอบโค้ดทั้ง Python backend และ Vue.js frontend อย่างละเอียด
+   โดยไม่แตะ api.py และ encode_faces_arcface.py
+
+   บัก Critical / Medium (แก้ไขแล้ว 7 รายการ):
+   [1] useAttendance.js — currentlyIn นับผิด: logic เดิมใช้ outIds Set
+       ทำให้คนที่ OUT แล้ว IN ใหม่ยังคงถูกนับเป็น OUT อยู่
+       แก้ไขโดยใช้ latestStatus map track record ล่าสุดต่อคนแทน
+
+   [2] CameraView.vue — doClearToday ขาด Auth header: ใช้ raw fetch()
+       ทำให้ API ตอบ 401 แล้ว redirect ไปหน้า Login
+       แก้ไขโดยเปลี่ยนเป็น apiDelete() ที่ใส่ Authorization header อัตโนมัติ
+
+   [3] session_manager.py — checked_in ถูก set เป็น True แม้ check-in ล้มเหลว:
+       ในบล็อก except ของ try_checkin() มี person.checked_in = True อยู่
+       ทำให้ครั้งต่อไประบบข้าม check-in ไปโดยไม่ทำอะไร
+       แก้ไขโดยลบบรรทัดนั้นออก ให้ return False เพียงอย่างเดียว
+
+   [4] useAuth.js — Token expiry logic กลับด้าน:
+       if (data.exp && data.exp * 1000 < Date.now()) logout()
+       ทำให้ token ที่ไม่มี exp field ไม่ถูก logout
+       แก้ไขเป็น if (!data.exp || data.exp * 1000 < Date.now()) logout()
+
+   [5] db.py — relative path: ใช้ "db_config.json" โดยตรง ทำให้
+       หา config ไม่เจอเมื่อรันจาก directory อื่น
+       แก้ไขโดยใช้ os.path.dirname(__file__) เพื่อ path สัมบูรณ์
+
+   [6] config.py — TEXT_DIM = "#FF0000" (แดงสด) ใช้แทน dim color
+       ทำให้ UI แสดงสีแดงในที่ที่ควรเป็นสีเทา
+       แก้ไขเป็น "#808080"
+
+   [7] CameraView.vue — watch ใช้ชื่อ parameter ซ้ำกับ outer scope:
+       watch(mergedPersons, (persons) => ... แต่ mergedPersons ก็ชื่อ persons
+       แก้ไขเป็น watch(mergedPersons, (updated) => ...
+
+   บัก Low Severity (แก้ไขแล้ว 7 รายการ):
+   [8]  camera.py — reconnect loop ไม่ตรวจ _stopped flag ก่อน reconnect
+   [9]  DashboardView.vue — _clockTimer interval ไม่ถูก clear ใน onUnmounted
+   [10] CameraView.vue — _clockTimer interval ไม่ถูก clear
+   [11] LiveDetection.vue — _clockTimer interval ไม่ถูก clear
+   [12] HourlyChart.vue — chart.destroy() ไม่ถูกเรียกตอน unmount
+   [13] HistoryView.vue — exportCSV ไม่ remove <a> element หลัง click
+   [14] HistoryView.vue — menuRoutes ไม่เป็น computed ทำให้ permission
+        ไม่ reactive (ตรวจพบซ้ำ — ยืนยันว่าแก้แล้วจากสัปดาห์ก่อน)
+
+4. แก้บักกล้องไม่ปิดเมื่อหยุดโปรแกรม (camera.py + main.py)
+   ─────────────────────────────────────────────────────────────────
+   เมื่อกด Ctrl+C หรือระบบส่ง SIGTERM โปรแกรมปิดทันทีโดยไม่ release กล้อง
+   ทำให้ VideoCapture ค้างอยู่และกล้องยังสว่างอยู่
+
+   camera.py:
+   - บันทึก Thread reference ไว้ใน self._thread เพื่อ join ได้
+   - แก้ release(): เรียก self._stopped = True → cap.release() เพื่อ
+     interrupt blocking cap.read() ใน thread → join thread (timeout 2s)
+     → release cap อีกครั้งเพื่อความแน่ใจ
+   - เพิ่มตรวจ self._stopped ในลูป reconnect เพื่อออกจากลูปได้ทันที
+
+   main.py:
+   - เพิ่ม import signal
+   - เพิ่ม atexit.register(cam.release) เป็น fallback สำหรับ Ctrl+C
+   - เพิ่ม SIGTERM signal handler และ _stop_requested flag
+   - เปลี่ยน while True: เป็น while not _stop_requested:
+     ทำให้โค้ด cleanup (cam.release, hands.close) ทำงานได้เสมอ
+
+5. เพิ่มคอลัมน์ "เข้ารอบแรก" และ Auto-refresh ใน HistoryView
+   ─────────────────────────────────────────────────────────────────
+   ผู้ใช้ต้องการทราบเวลา check-in ครั้งแรกของแต่ละคนในช่วงเวลาที่เลือก
+
+   - เพิ่มการคำนวณ firstIn ในขั้นตอน aggregate person data:
+     หา in_time ที่น้อยที่สุดจากทุกวันในช่วงเวลา (earliest check-in)
+   - เพิ่มคอลัมน์ "เข้ารอบแรก" ในตาราง (hidden บน mobile)
+   - เพิ่ม card "เข้ารอบแรก" ใน Modal popup แสดง 4 สถิติ
+   - เพิ่ม Auto-refresh: silentRefresh() ทำงานทุก 30 วินาที โดย
+     ไม่แสดง loading spinner (ไม่รบกวน UX)
+   - เพิ่ม cleanup: clearInterval(_pollTimer) ใน onUnmounted
+
+6. ลบคอลัมน์ "เข้าล่าสุด" ออกจากตาราง HistoryView
+   ─────────────────────────────────────────────────────────────────
+   ลบคอลัมน์ latestIn ออกจากทั้งหัวตาราง (thead) และแถวข้อมูล (tbody)
+   เพื่อให้ตารางกระชับขึ้น โดยข้อมูลยังคงอยู่ใน Modal popup
+
+■ สรุปไฟล์ที่สร้าง / แก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  dashboard/src/views/HistoryView.vue
+    - localISO() helper แทน toISOString() (timezone fix)
+    - เพิ่ม firstIn ใน person aggregation
+    - เพิ่มคอลัมน์ "เข้ารอบแรก" + card ใน Modal
+    - Auto-refresh polling 30 วินาที + clearInterval ใน onUnmounted
+    - ลบคอลัมน์ "เข้าล่าสุด" ออก
+    - แก้ exportCSV: remove <a> element หลัง click
+
+  dashboard/src/components/PersonCard.vue
+    - Initial letter avatar fallback เมื่อ photo โหลดไม่ได้
+    - ลบ dead code: doCheckout, checkingOut, defineEmits
+
+  dashboard/src/composables/useAuth.js
+    - แก้ token expiry condition: !data.exp || ...
+
+  dashboard/src/composables/useAttendance.js
+    - แก้ currentlyIn: ใช้ latestStatus map แทน outIds Set
+
+  dashboard/src/views/CameraView.vue
+    - doClearToday: raw fetch → apiDelete (auth header)
+    - clearInterval(_clockTimer) ใน onUnmounted
+    - แก้ watch parameter name collision
+
+  dashboard/src/views/DashboardView.vue
+    - clearInterval(_clockTimer) ใน onUnmounted
+
+  dashboard/src/components/LiveDetection.vue
+    - clearInterval(_clockTimer) ใน onUnmounted
+
+  dashboard/src/components/HourlyChart.vue
+    - chart.destroy() ใน onUnmounted
+    - clearTimeout(_themeTimer) ใน onUnmounted
+
+  api_client.py
+    - _mock_fetch: fallback ไปยัง _local_fetch เมื่อไม่พบใน mock dict
+    - _local_fetch: แก้ชื่อตาราง attendance → attendance_logs
+    - เพิ่ม _PRENAME_ABBR table และ _abbr_from_prename()
+
+  camera.py
+    - บันทึก thread reference ใน self._thread
+    - แก้ release(): join thread + double-release
+    - เพิ่มตรวจ _stopped ในลูป reconnect
+
+  main.py
+    - import signal
+    - SIGTERM handler + _stop_requested flag
+    - while not _stop_requested แทน while True
+    - atexit.register(cam.release)
+
+  session_manager.py
+    - ลบ person.checked_in = True ออกจาก except block
+
+  db.py
+    - แก้ relative path เป็น absolute path ด้วย __file__
+
+  config.py
+    - TEXT_DIM: #FF0000 → #808080
+
+■ เทคโนโลยีที่ใช้
+────────────────────────────────────────────────────────────────────────
+
+  - Vue 3 Composition API (ref, computed, watch, onMounted, onUnmounted)
+  - JavaScript Date API: local timezone methods vs toISOString() (UTC)
+  - Python signal module: SIGTERM handling, atexit
+  - Python threading: Thread.join(), race condition management
+  - OpenCV VideoCapture resource management
+  - Chart.js: lifecycle management (destroy on unmount)
+  - JWT: token expiry validation logic
+
+■ ปัญหาที่พบและแนวทางแก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  ปัญหา : วันที่นับผิดเสมอเมื่ออยู่ใน timezone UTC+7
+  วิเคราะห์: JavaScript toISOString() คืนค่า UTC ทำให้เวลาเที่ยงคืน
+             ท้องถิ่น (00:00 ICT) กลายเป็น 17:00 UTC ของวันก่อน
+  แก้ไข : สร้าง localISO() helper ที่ใช้ getFullYear/getMonth/getDate
+             (local timezone methods) แทน toISOString() ทั้งหมด
+
+  ปัญหา : กล้องไม่ปิดเมื่อโปรแกรมถูก SIGTERM
+  วิเคราะห์: SIGTERM terminate process ทันที ทำให้ cleanup code ท้าย
+             main loop ไม่ถูกรัน; release() เดิมไม่ join thread ก่อน
+             ทำให้ thread ยังค้างอยู่ขณะ cap ถูก destroy
+  แก้ไข : (1) Signal handler แปลง SIGTERM เป็น flag _stop_requested
+             ให้ main loop exit อย่าง graceful และ cleanup code ทำงาน
+             (2) release() join thread (timeout 2s) ก่อน release cap
+             (3) atexit.register เป็น safety net สำหรับ KeyboardInterrupt
+
+  ปัญหา : Memory leak จาก setInterval ที่ไม่ถูก clear
+  วิเคราะห์: Component ถูก unmount แต่ interval ยังทำงานอยู่ ส่ง request
+             ไปยัง API ต่อเนื่องและอาจ update state ที่ไม่มีอยู่แล้ว
+  แก้ไข : เพิ่ม clearInterval() ใน onUnmounted ทุก component ที่มี
+             setInterval: DashboardView, CameraView, LiveDetection,
+             HistoryView
+
+════════════════════════════════════════════════════════════════════════
