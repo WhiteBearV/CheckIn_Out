@@ -335,6 +335,8 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN",
         cam_src = int(cam_src)
     print(f"[CAM] {camera_name} → {cam_src}")
     cam = ThreadedCamera(cam_src)
+    import atexit as _atexit
+    _atexit.register(cam.release)
 
     # ─── MediaPipe Hands ───
     _write_boot("กำลังติดตั้งระบบตรวจจับ...")
