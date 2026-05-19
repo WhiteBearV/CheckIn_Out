@@ -822,6 +822,81 @@ def manual_checkout(per_id: str, _: dict = Depends(_require_perm("attendance.cle
     return {"success": True, "per_id": per_id, "status": "OUT"}
 
 
+@app.get("/attendance/range")
+def attendance_range(
+    start_date: str = Query(..., description="YYYY-MM-DD"),
+    end_date:   str = Query(..., description="YYYY-MM-DD"),
+    _: dict = Depends(_require_perm("attendance.view")),
+):
+    """รายการลงเวลาทุกคน ระหว่าง start_date ถึง end_date สำหรับหน้าประวัติ"""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, per_id, name, prename_th, per_name, per_surname,
+                       posname_th, organize_th, organize_id,
+                       status, camera_name, check_time
+                FROM attendance_logs
+                WHERE DATE(check_time) BETWEEN %s AND %s
+                ORDER BY check_time ASC
+            """, (start_date, end_date))
+            rows = cur.fetchall()
+    return [
+        {
+            "id":          r[0],
+            "per_id":      r[1],
+            "name":        r[2] or "",
+            "prename_th":  r[3] or "",
+            "per_name":    r[4] or "",
+            "per_surname": r[5] or "",
+            "posname_th":  r[6] or "",
+            "organize_th": r[7] or "",
+            "organize_id": r[8] or "",
+            "status":      r[9],
+            "camera_name": r[10],
+            "check_time":  r[11].isoformat() if r[11] else None,
+        }
+        for r in rows
+    ]
+
+
+@app.get("/attendance/by-date")
+def attendance_by_date(
+    date: Optional[str] = Query(None),
+    _: dict = Depends(_require_perm("attendance.view")),
+):
+    """รายการลงเวลาทุกคนในวันที่ระบุ (YYYY-MM-DD) สำหรับหน้าประวัติ"""
+    from datetime import date as _date
+    target = date or _date.today().isoformat()
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, per_id, name, prename_th, per_name, per_surname,
+                       posname_th, organize_th, organize_id,
+                       status, camera_name, check_time
+                FROM attendance_logs
+                WHERE DATE(check_time) = %s
+                ORDER BY check_time ASC
+            """, (target,))
+            rows = cur.fetchall()
+    return [
+        {
+            "id":          r[0],
+            "per_id":      r[1],
+            "name":        r[2] or "",
+            "prename_th":  r[3] or "",
+            "per_name":    r[4] or "",
+            "per_surname": r[5] or "",
+            "posname_th":  r[6] or "",
+            "organize_th": r[7] or "",
+            "organize_id": r[8] or "",
+            "status":      r[9],
+            "camera_name": r[10],
+            "check_time":  r[11].isoformat() if r[11] else None,
+        }
+        for r in rows
+    ]
+
+
 @app.get("/attendance/{per_id}")
 def attendance_by_person(
     per_id: str,

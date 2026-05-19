@@ -12,6 +12,7 @@ main.py — Main loop (InsightFace / ArcFace)
 import os
 import sys
 import glob
+import signal
 
 
 def _ensure_nvidia_libs():
@@ -336,7 +337,7 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN",
     print(f"[CAM] {camera_name} → {cam_src}")
     cam = ThreadedCamera(cam_src)
     import atexit as _atexit
-    _atexit.register(cam.release)
+    _cam_release_id = _atexit.register(cam.release)  # fallback สำหรับ Ctrl+C
 
     # ─── MediaPipe Hands ───
     _write_boot("กำลังติดตั้งระบบตรวจจับ...")
@@ -460,7 +461,15 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN",
     # MAIN LOOP
     # ═══════════════════════════════════════
     _clear_boot()   # โหลดเสร็จแล้ว — ลบ boot status ให้ Dashboard หยุดแสดง loading
-    while True:
+    _stop_requested = False
+
+    def _sigterm(signum, frame):
+        nonlocal _stop_requested
+        _stop_requested = True
+
+    signal.signal(signal.SIGTERM, _sigterm)
+
+    while not _stop_requested:
         ret, frame = cam.read()
         if not ret or frame is None:
             continue

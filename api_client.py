@@ -105,9 +105,14 @@ def fetch_person_by_pid(per_id: str) -> dict | None:
 
 def _mock_fetch(per_id: str) -> dict | None:
     result = _MOCK_PERSONS.get(per_id)
-    if not result:
-        print(f"[MOCK] ไม่พบ per_id={per_id} ใน mock database")
-    return result
+    if result:
+        return result
+    # fallback to local DB for IDs not in mock dict
+    local = _local_fetch(per_id)
+    if local:
+        return local
+    print(f"[MOCK] ไม่พบ per_id={per_id} ใน mock database หรือ local DB")
+    return None
 
 
 def _real_fetch(per_id: str) -> dict | None:
@@ -160,7 +165,7 @@ def _local_fetch(per_id: str) -> dict | None:
                 cur.execute("""
                     SELECT per_id, name, prename_th, per_name, per_surname,
                            posname_th, organize_th, organize_id
-                    FROM attendance
+                    FROM attendance_logs
                     WHERE per_id = %s
                       AND per_name IS NOT NULL AND per_name != ''
                     ORDER BY check_time DESC

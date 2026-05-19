@@ -39,8 +39,15 @@
         @click="lightboxOpen = true"
       />
 
-      <!-- ไม่มีรูป: แสดงพื้นที่ว่างสีเข้ม -->
-      <div v-else class="w-full h-full bg-gui-bg/60" />
+      <!-- ไม่มีรูป: แสดง initial letter avatar -->
+      <div v-else class="w-full h-full bg-gui-bg/60 flex items-center justify-center">
+        <span class="text-6xl font-bold select-none opacity-30"
+          :class="person.status === 'IN' ? 'text-gui-in'
+                : person.status === 'PENDING' ? 'text-purple-400'
+                : 'text-gui-out'">
+          {{ initial }}
+        </span>
+      </div>
 
       <!-- Badge มุมบนขวา: PENDING → รอตรวจสอบ, IN/OUT → LivenessBadge หรือ StatusBadge -->
       <div class="absolute top-2 right-2">

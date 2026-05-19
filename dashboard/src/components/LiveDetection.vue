@@ -88,7 +88,7 @@
 </template>
 
 <script setup>
-import { computed, ref, reactive } from 'vue'
+import { computed, ref, reactive, onUnmounted } from 'vue'
 import LivenessBadge from './LivenessBadge.vue'
 import { useLiveSession } from '@/composables/useLiveSession.js'
 
@@ -103,7 +103,8 @@ const { active, stale, persons, lastUpdate } = useLiveSession()
 const inFramePersons = computed(() => persons.value.filter(p => p.in_frame))
 
 const now = ref(new Date())
-setInterval(() => { now.value = new Date() }, 3000)
+const _clockTimer = setInterval(() => { now.value = new Date() }, 3000)
+onUnmounted(() => clearInterval(_clockTimer))
 
 const lastUpdateStr = computed(() => {
   if (!lastUpdate.value) return ''

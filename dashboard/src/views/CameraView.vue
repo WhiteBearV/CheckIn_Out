@@ -916,6 +916,7 @@ onMounted(async () => {
 onUnmounted(() => {
   clearInterval(pollTimer)
   clearInterval(_sysModeTimer)
+  clearInterval(_clockTimer)
   window.removeEventListener('keydown', onKeyDown)
   // cleanup scroll lock + shared fullscreen state
   isFullscreen.value                       = false
@@ -998,13 +999,13 @@ const clearing    = ref(false)
 function confirmClearToday() { showConfirm.value = true }
 async function doClearToday() {
   showConfirm.value = false; clearing.value = true
-  try { await fetch(CLEAR_TODAY_URL, { method: 'DELETE' }); await refresh() }
+  try { await apiDelete('/attendance/today/all'); await refresh() }
   catch { /* ignore */ } finally { clearing.value = false }
 }
 
 // ── Clock + Last fetch label ─────────────────────────────────────────
 const now = ref(new Date())
-setInterval(() => { now.value = new Date() }, 1000)
+const _clockTimer = setInterval(() => { now.value = new Date() }, 1000)
 
 const clockStr = computed(() =>
   now.value.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', second: '2-digit' })

@@ -152,7 +152,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, onUnmounted } from 'vue'
 
 import StatCard     from '@/components/StatCard.vue'
 import PersonCard   from '@/components/PersonCard.vue'
@@ -236,7 +236,8 @@ async function doClearToday() {
 }
 
 const now = ref(new Date())
-setInterval(() => { now.value = new Date() }, 5000)
+const _clockTimer = setInterval(() => { now.value = new Date() }, 5000)
+onUnmounted(() => clearInterval(_clockTimer))
 
 const lastFetchStr = computed(() => {
   if (!lastFetch.value) return 'รอข้อมูล...'

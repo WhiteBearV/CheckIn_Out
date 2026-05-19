@@ -57,6 +57,16 @@ export function streamUrl(path) {
 export const fetchTodayAttendance = () =>
   apiFetch('/attendance/today')
 
+export function fetchAttendanceRange(startDate, endDate) {
+  const params = new URLSearchParams({ start_date: startDate, end_date: endDate })
+  return apiFetch(`/attendance/range?${params}`)
+}
+
+export function fetchAttendanceByDate(date) {
+  const qs = date ? `?date=${encodeURIComponent(date)}` : ''
+  return apiFetch(`/attendance/by-date${qs}`)
+}
+
 export function fetchPersonHistory(perId, startDate, endDate) {
   const params = new URLSearchParams()
   if (startDate) params.set('start_date', startDate)

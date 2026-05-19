@@ -141,7 +141,6 @@ class SessionManager:
             return True
         except Exception as e:
             print(f"[IN ERROR] {name}: {e}")
-            person.checked_in = True
             return False
 
     def confirm_presence(self, name: str, now: datetime):

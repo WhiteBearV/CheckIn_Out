@@ -5,6 +5,7 @@ import DashboardView    from '@/views/DashboardView.vue'
 import SingleCameraView from '@/views/SingleCameraView.vue'
 import LoginView        from '@/views/LoginView.vue'
 import SettingsView     from '@/views/SettingsView.vue'
+import HistoryView      from '@/views/HistoryView.vue'
 
 const routes = [
   {
@@ -38,6 +39,16 @@ const routes = [
     name:      'camera-detail',
     component: SingleCameraView,
     meta:      { permission: 'cameras.view' },
+  },
+  {
+    path:      '/history',
+    name:      'history',
+    component: HistoryView,
+    meta: {
+      label:      'ประวัติ',
+      icon:       '📋',
+      permission: 'attendance.view',
+    },
   },
   {
     path:      '/settings',

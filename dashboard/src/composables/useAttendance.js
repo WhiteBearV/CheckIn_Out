@@ -21,8 +21,15 @@ const lastFetch = ref(null)
 const stats = computed(() => {
   const ins  = records.value.filter(r => r.status === 'IN')
   const outs = records.value.filter(r => r.status === 'OUT')
-  const outIds      = new Set(outs.map(r => r.per_id))
-  const currentlyIn = ins.filter(r => !outIds.has(r.per_id)).length
+
+  // นับ "ยังอยู่" โดยดูจาก record ล่าสุดของแต่ละคน ไม่ใช่แค่มี OUT อยู่ใน set
+  const latestStatus = {}
+  for (const r of records.value) {
+    const prev = latestStatus[r.per_id]
+    if (!prev || r.check_time > prev.check_time) latestStatus[r.per_id] = r
+  }
+  const currentlyIn = Object.values(latestStatus).filter(r => r.status === 'IN').length
+
   return {
     totalIn:     ins.length,
     totalOut:    outs.length,

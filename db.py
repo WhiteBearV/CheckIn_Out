@@ -12,7 +12,8 @@ if os.environ.get("DB_HOST"):
         "password": os.environ.get("DB_PASSWORD", ""),
     }
 else:
-    with open("db_config.json") as f:
+    _db_cfg_path = os.path.join(os.path.dirname(__file__), "db_config.json")
+    with open(_db_cfg_path) as f:
         _cfg = json.load(f)
     DB_CONFIG = _cfg[_cfg["mode"]]
 

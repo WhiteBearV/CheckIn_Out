@@ -38,7 +38,8 @@ class ThreadedCamera:
         self.cap = self._open()
         self._ret, self._frame = self.cap.read()
 
-        Thread(target=self._reader_loop, daemon=True).start()
+        self._thread = Thread(target=self._reader_loop, daemon=True)
+        self._thread.start()
 
     # ──────────────────────────────────────────
     def _open(self) -> cv2.VideoCapture:
@@ -73,8 +74,8 @@ class ThreadedCamera:
             ret, frame = self.cap.read()
 
             if not ret:
-                if not self._is_url:
-                    # กล้อง local หาย → หยุดเลย
+                if not self._is_url or self._stopped:
+                    # กล้อง local หาย หรือถูกสั่ง stop → หยุดเลย
                     with self._lock:
                         self._ret = False
                     break
@@ -82,6 +83,8 @@ class ThreadedCamera:
                 # IP camera หาย → รอแล้ว reconnect
                 print(f"[CAM] สัญญาณขาด — reconnect ใน {self._reconnect_delay:.0f}s...")
                 time.sleep(self._reconnect_delay)
+                if self._stopped:
+                    break
                 try:
                     self.cap.release()
                     self.cap = self._open()
@@ -103,7 +106,12 @@ class ThreadedCamera:
 
     def release(self):
         self._stopped = True
-        self.cap.release()
+        self.cap.release()          # interrupt blocking cap.read() ใน thread
+        self._thread.join(timeout=2.0)
+        try:                        # release อีกครั้งถ้า reconnect เปิด cap ใหม่
+            self.cap.release()
+        except Exception:
+            pass
 
     @property
     def width(self) -> int:
