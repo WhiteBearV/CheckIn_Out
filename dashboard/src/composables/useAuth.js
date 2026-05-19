@@ -94,7 +94,7 @@ export function checkTokenExpiry() {
   try {
     const [, payload] = token.value.split('.')
     const data = JSON.parse(atob(payload))
-    if (data.exp && data.exp * 1000 < Date.now()) {
+    if (!data.exp || data.exp * 1000 < Date.now()) {
       logout()
       return false
     }

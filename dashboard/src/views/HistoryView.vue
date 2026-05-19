@@ -10,6 +10,10 @@
       <span class="text-xs text-gui-dim">{{ dateRangeLabel }}</span>
       <div class="ml-auto flex items-center gap-2">
         <span class="text-xs text-gui-dim">{{ filteredPersons.length }} คน</span>
+        <span v-if="!loading" class="text-[10px] text-gui-dim/40 flex items-center gap-1">
+          <span class="w-1.5 h-1.5 rounded-full bg-gui-in/50 animate-pulse" />
+          อัปเดตทุก 30s
+        </span>
         <button @click="exportCSV" :disabled="filteredPersons.length === 0"
           class="px-3 py-1.5 rounded-lg text-xs border border-gui-border text-gui-dim
                  hover:text-gui-text hover:border-gui-in/40 transition-colors
@@ -104,7 +108,7 @@
               <th class="text-left px-4 py-3 font-medium">ชื่อ-นามสกุล</th>
               <th class="text-left px-4 py-3 font-medium hidden md:table-cell">หน่วยงาน / ตำแหน่ง</th>
               <th class="text-center px-3 py-3 font-medium">เข้างาน</th>
-              <th class="text-center px-3 py-3 font-medium hidden sm:table-cell">เข้าล่าสุด</th>
+              <th class="text-center px-3 py-3 font-medium hidden sm:table-cell">เข้ารอบแรก</th>
               <th class="text-center px-3 py-3 font-medium hidden sm:table-cell">ออกล่าสุด</th>
               <th class="text-center px-3 py-3 font-medium">สถานะ</th>
               <th class="px-3 py-3 w-6"></th>
@@ -170,11 +174,11 @@
                 </span>
                 <span class="text-[10px] text-gui-dim/60"> / {{ totalDays }} วัน</span>
               </td>
-              <!-- เข้าล่าสุด -->
+              <!-- เข้ารอบแรก -->
               <td class="px-3 py-3 text-center hidden sm:table-cell">
                 <span class="font-mono text-xs tabular-nums"
-                  :class="p.latestIn ? 'text-gui-in' : 'text-gui-dim/40'">
-                  {{ p.latestIn ? fmtDateTimeShort(p.latestIn) : '——' }}
+                  :class="p.firstIn ? 'text-gui-in' : 'text-gui-dim/40'">
+                  {{ p.firstIn ? fmtDateTimeShort(p.firstIn) : '——' }}
                 </span>
               </td>
               <!-- ออกล่าสุด -->
@@ -235,7 +239,7 @@
         </div>
 
         <!-- Attendance summary -->
-        <div class="grid grid-cols-3 border-b border-gui-border divide-x divide-gui-border">
+        <div class="grid grid-cols-2 sm:grid-cols-4 border-b border-gui-border divide-x divide-gui-border">
           <div class="py-3 text-center">
             <div class="text-2xl font-bold text-gui-in tabular-nums">{{ selectedPerson.daysCount }}</div>
             <div class="text-[10px] text-gui-dim uppercase tracking-wider mt-0.5">วันที่เข้า</div>
@@ -252,6 +256,13 @@
               {{ attendRate(selectedPerson) }}%
             </div>
             <div class="text-[10px] text-gui-dim uppercase tracking-wider mt-0.5">อัตราเข้างาน</div>
+          </div>
+          <div class="py-3 text-center col-span-2 sm:col-span-1 border-t sm:border-t-0 border-gui-border">
+            <div class="font-mono font-bold text-gui-in leading-tight tabular-nums"
+              :class="selectedPerson.firstIn ? 'text-sm' : 'text-2xl'">
+              {{ selectedPerson.firstIn ? fmtDateTimeShort(selectedPerson.firstIn) : '——' }}
+            </div>
+            <div class="text-[10px] text-gui-dim uppercase tracking-wider mt-0.5">เข้ารอบแรก</div>
           </div>
         </div>
 
@@ -308,7 +319,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { fetchAttendanceRange } from '@/api/attendance.js'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '/api'
@@ -408,7 +419,19 @@ async function fetchData() {
   }
 }
 
-onMounted(fetchData)
+async function silentRefresh() {
+  try {
+    records.value = await fetchAttendanceRange(startDate.value, endDate.value)
+  } catch { /* ไม่แสดง error ระหว่าง background refresh */ }
+}
+
+let _pollTimer = null
+onMounted(() => {
+  fetchData()
+  _pollTimer = setInterval(silentRefresh, 30_000)
+})
+onUnmounted(() => clearInterval(_pollTimer))
+
 watch([startDate, endDate], fetchData)
 
 // ── Org list ───────────────────────────────────────────────────────────────────
@@ -447,10 +470,13 @@ const persons = computed(() => {
   return Object.values(map).map(p => {
     const entries = Object.entries(p.days).sort(([a], [b]) => b.localeCompare(a))
     const latest  = entries[0]
+    const allIns  = Object.values(p.days).map(t => t.in).filter(Boolean)
+    const firstIn = allIns.length ? allIns.reduce((a, b) => a < b ? a : b) : null
     return {
       ...p,
       dayEntries: entries,
       daysCount:  entries.length,
+      firstIn,
       latestIn:   latest?.[1].in  ?? null,
       latestOut:  latest?.[1].out ?? null,
       status: latest ? (latest[1].out ? 'OUT' : 'IN') : 'IN',
@@ -576,11 +602,14 @@ function exportCSV() {
     .map(row => row.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))
     .join('\n')
   const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' })
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(blob)
+  const url  = URL.createObjectURL(blob)
+  const a    = document.createElement('a')
+  a.href     = url
   a.download = `attendance_${startDate.value}_to_${endDate.value}.csv`
+  document.body.appendChild(a)
   a.click()
-  URL.revokeObjectURL(a.href)
+  document.body.removeChild(a)
+  setTimeout(() => URL.revokeObjectURL(url), 100)
 }
 
 function exportPDF() { window.print() }

@@ -975,8 +975,8 @@ function photoSrc(pid) {
   return bust ? `${API_BASE}/person-face/${pid}?t=${bust}` : `${API_BASE}/person-face/${pid}`
 }
 
-watch(mergedPersons, (persons) => {
-  persons.forEach(p => {
+watch(mergedPersons, (updated) => {
+  updated.forEach(p => {
     if (p.status === 'IN' && failedPhotos.value.has(p.per_id)) {
       const next = new Set(failedPhotos.value); next.delete(p.per_id); failedPhotos.value = next
       const m = new Map(photoRetry.value); m.set(p.per_id, Date.now()); photoRetry.value = m

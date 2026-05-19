@@ -120,13 +120,17 @@ function updateData() {
   chart.update('none')
 }
 
+let _themeTimer = null
 onMounted(buildChart)
-onUnmounted(() => chart?.destroy())
+onUnmounted(() => {
+  clearTimeout(_themeTimer)
+  chart?.destroy()
+})
 
 // rebuild เมื่อ theme เปลี่ยน (สีต้องอ่านใหม่หลัง CSS variable อัพเดต)
 watch(theme, () => {
-  // รอ 1 tick ให้ CSS variable อัพเดตก่อน
-  setTimeout(buildChart, 50)
+  clearTimeout(_themeTimer)
+  _themeTimer = setTimeout(buildChart, 50)
 })
 
 watch(() => props.hourly, updateData, { deep: true })

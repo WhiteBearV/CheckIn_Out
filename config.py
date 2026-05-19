@@ -225,7 +225,7 @@ class Color:
     PANEL_HEADER  = _hex("#323232")
     DIVIDER       = _hex("#3A3A3A")
     TEXT          = _hex("#FFFFFF")
-    TEXT_DIM      = _hex("#FF0000")
+    TEXT_DIM      = _hex("#808080")
     TEXT_CYAN     = _hex("#00E6E6")
     TEXT_MORE     = _hex("#969696")
     HUD_TEST      = _hex("#00E6E6")

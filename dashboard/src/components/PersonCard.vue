@@ -167,31 +167,8 @@ const props = defineProps({
   photoMode: { type: String,  default: 'profile' }, // 'profile' | 'verify'
 })
 
-const emit = defineEmits(['checked-out'])
-
 // ── Lightbox ───────────────────────────────────────────────────────
 const lightboxOpen = ref(false)
-
-// ── Checkout ───────────────────────────────────────────────────────
-const checkingOut = ref(false)
-
-async function doCheckout() {
-  if (checkingOut.value) return
-  checkingOut.value = true
-  try {
-    const res  = await fetch(`${props.apiBase}/attendance/checkout/${props.person.per_id}`, { method: 'POST' })
-    const data = await res.json()
-    if (data.success) {
-      emit('checked-out', props.person.per_id)
-    } else {
-      alert(data.reason || 'ไม่สามารถลงชื่อออกได้')
-    }
-  } catch {
-    alert('เชื่อมต่อ API ไม่ได้')
-  } finally {
-    checkingOut.value = false
-  }
-}
 
 // ── Photo ─────────────────────────────────────────────────────────
 const photoError = ref(false)

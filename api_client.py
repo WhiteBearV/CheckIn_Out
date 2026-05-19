@@ -156,6 +156,23 @@ def _real_fetch(per_id: str) -> dict | None:
         return None
 
 
+_PRENAME_ABBR = {
+    "ร้อยตรี": "ร.ต.", "ร้อยโท": "ร.ท.", "ร้อยเอก": "ร.อ.",
+    "พันตรี": "พ.ต.", "พันโท": "พ.ท.", "พันเอก": "พ.อ.",
+    "พลตรี": "พล.ต.", "พลโท": "พล.ท.", "พลเอก": "พล.อ.",
+    "นาวาตรี": "น.ต.", "นาวาโท": "น.ท.", "นาวาเอก": "น.อ.",
+    "เรือตรี": "ร.ต.", "เรือโท": "ร.ท.", "เรือเอก": "ร.อ.",
+    "นาวาอากาศตรี": "น.อ.ต.", "นาวาอากาศโท": "น.อ.ท.", "นาวาอากาศเอก": "น.อ.อ.",
+    "ร้อยตำรวจตรี": "ร.ต.ต.", "ร้อยตำรวจโท": "ร.ต.ท.", "ร้อยตำรวจเอก": "ร.ต.อ.",
+    "พันตำรวจตรี": "พ.ต.ต.", "พันตำรวจโท": "พ.ต.ท.", "พันตำรวจเอก": "พ.ต.อ.",
+    "พลตำรวจตรี": "พล.ต.ต.", "พลตำรวจโท": "พล.ต.ท.", "พลตำรวจเอก": "พล.ต.อ.",
+    "นาย": "นาย", "นาง": "นาง", "นางสาว": "น.ส.",
+}
+
+def _abbr_from_prename(prename: str) -> str:
+    return _PRENAME_ABBR.get(prename.strip(), prename)
+
+
 def _local_fetch(per_id: str) -> dict | None:
     """Fallback: ดึงจาก local attendance DB (ข้อมูลจาก check-in ล่าสุดที่มีชื่อ)"""
     try:
@@ -185,7 +202,7 @@ def _local_fetch(per_id: str) -> dict | None:
             "posname_th":     row[5] or "",
             "organize_th":    row[6] or "",
             "organize_id":    row[7] or "",
-            "prenameth_abbr": row[2] or "",  # ใช้ prename_th แทน abbr เมื่อมาจาก DB
+            "prenameth_abbr": _abbr_from_prename(row[2] or ""),
         }
     except Exception as e:
         print(f"[API CLIENT] local_fetch({per_id}): {e}")
