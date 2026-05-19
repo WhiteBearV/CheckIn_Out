@@ -1544,11 +1544,17 @@ if __name__ == "__main__":
                                 if c["id"] == _cid), {"id": _cid, "name": _cid}), _ev),
                     name=f"cam-{_cid}", daemon=True,
                 )
-                # ลบ thread เก่าของกล้องนี้ก่อน (ถ้ามี)
-                _camera_threads[:] = [t for t in _camera_threads
-                                      if t.is_alive() or t.name != f"cam-{_cid}"]
+                # ลบ dead threads ทั้งหมดออกก่อน (รวม thread เก่าของกล้องนี้)
+                _camera_threads[:] = [t for t in _camera_threads if t.is_alive()]
                 _camera_threads.append(_ct)
                 _ct.start()
+
+            # ถ้ากล้องเคยถูก spawn แล้วและทุกตัวหยุดแล้ว → ออกเอง (graceful exit code 0)
+            if _camera_threads:
+                _camera_threads[:] = [t for t in _camera_threads if t.is_alive()]
+                if not _camera_threads:
+                    print("[MAIN] กล้องทุกตัวหยุดแล้ว — graceful exit")
+                    break
 
             _stop_event.wait(timeout=0.5)
 

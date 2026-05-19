@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────
-# ติดตั้ง systemd service สำหรับ FaceReg stream_server.py
+# ติดตั้ง systemd services + timers ทั้งหมดสำหรับ FaceReg
 # รัน:  sudo bash deploy/install_service.sh
 # ─────────────────────────────────────────────────────────────────────
 set -euo pipefail
@@ -10,45 +10,74 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
-SERVICE_NAME="facereg-stream"
-SERVICE_FILE="/home/maeb/internship_work/FaceReg/deploy/${SERVICE_NAME}.service"
-TARGET="/etc/systemd/system/${SERVICE_NAME}.service"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SYSTEMD_DIR="/etc/systemd/system"
 
-if [[ ! -f "$SERVICE_FILE" ]]; then
-    echo "[ERR] ไม่พบ $SERVICE_FILE"
-    exit 1
-fi
+# ─── helper ───────────────────────────────────────────────────────────
+install_unit() {
+    local name="$1"
+    local src="$SCRIPT_DIR/${name}"
+    if [[ ! -f "$src" ]]; then
+        echo "[SKIP] ไม่พบ $src"
+        return
+    fi
+    cp "$src" "$SYSTEMD_DIR/${name}"
+    chmod 644 "$SYSTEMD_DIR/${name}"
+    echo "  → $SYSTEMD_DIR/${name}"
+}
 
-echo "[1/4] copy service file → $TARGET"
-cp "$SERVICE_FILE" "$TARGET"
-chmod 644 "$TARGET"
+# ─── 1. stream server (main process) ─────────────────────────────────
+echo "[1/5] facereg-stream.service"
+install_unit "facereg-stream.service"
 
-echo "[2/4] systemctl daemon-reload"
+# ─── 2. backup timer ─────────────────────────────────────────────────
+echo "[2/5] facereg-backup (service + timer)"
+install_unit "facereg-backup.service"
+install_unit "facereg-backup.timer"
+
+# ─── 3. cleanup timer ────────────────────────────────────────────────
+echo "[3/5] facereg-cleanup (service + timer)"
+install_unit "facereg-cleanup.service"
+install_unit "facereg-cleanup.timer"
+
+# ─── 4. journald log rotation ────────────────────────────────────────
+echo "[4/5] journald config (log rotation)"
+JOURNALD_CONF_DIR="/etc/systemd/journald.conf.d"
+mkdir -p "$JOURNALD_CONF_DIR"
+cp "$SCRIPT_DIR/journald-facereg.conf" "$JOURNALD_CONF_DIR/facereg.conf"
+chmod 644 "$JOURNALD_CONF_DIR/facereg.conf"
+echo "  → $JOURNALD_CONF_DIR/facereg.conf"
+systemctl restart systemd-journald
+echo "  systemd-journald restarted"
+
+# ─── 5. enable + start ───────────────────────────────────────────────
+echo "[5/5] daemon-reload + enable + start"
 systemctl daemon-reload
 
-echo "[3/4] enable service (auto-start ตอน boot)"
-systemctl enable "$SERVICE_NAME"
-
-echo "[4/4] start service"
-systemctl restart "$SERVICE_NAME"
+systemctl enable --now facereg-stream
+systemctl enable facereg-backup.timer facereg-cleanup.timer
+systemctl start  facereg-backup.timer facereg-cleanup.timer
 
 sleep 2
-systemctl status "$SERVICE_NAME" --no-pager --lines=5 || true
+systemctl status facereg-stream --no-pager --lines=5 || true
 
 cat <<EOF
 
 ────────────────────────────────────────────────────────
-[OK] ติดตั้งเสร็จ — คำสั่งที่ใช้บ่อย:
+[OK] ติดตั้งเสร็จครบทุก service
 
-    sudo systemctl status   ${SERVICE_NAME}     # ดูสถานะ
-    sudo systemctl restart  ${SERVICE_NAME}     # restart
-    sudo systemctl stop     ${SERVICE_NAME}     # หยุด (จะไม่ auto-start จนกว่าจะ start)
-    sudo systemctl start    ${SERVICE_NAME}     # start
-    sudo systemctl disable  ${SERVICE_NAME}     # ปิดไม่ให้ auto-start ตอน boot
-    journalctl -u ${SERVICE_NAME} -f            # ดู log สด
-    journalctl -u ${SERVICE_NAME} -n 200        # ดู log 200 บรรทัดล่าสุด
+STREAM SERVER
+    sudo systemctl status   facereg-stream
+    sudo systemctl restart  facereg-stream
+    journalctl -u facereg-stream -f
 
-หน้าเว็บ:  http://localhost:8001/admin
-สถานะ watchdog (child process):  http://localhost:8001/system/watchdog
+BACKUP / CLEANUP TIMERS
+    systemctl list-timers --no-pager | grep facereg
+    journalctl -u facereg-backup  -n 50
+    journalctl -u facereg-cleanup -n 50
+
+หน้าเว็บ:        http://localhost:8001
+Admin panel:     http://localhost:8001/admin
+Watchdog status: http://localhost:8001/system/watchdog
 ────────────────────────────────────────────────────────
 EOF

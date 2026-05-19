@@ -10,8 +10,11 @@ import threading
 import requests
 from datetime import datetime
 
-def _send(text: str):
-    """ส่งข้อความแบบ async — ไม่บล็อก main thread"""
+def _send(text: str, blocking: bool = False):
+    """ส่งข้อความไป Telegram
+    blocking=False (default) — spawn daemon thread ไม่บล็อก
+    blocking=True — รอจนส่งเสร็จ (ใช้ตอน process กำลังจะตาย)
+    """
     token   = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
     if not token or not chat_id:
@@ -27,7 +30,10 @@ def _send(text: str):
         except Exception as e:
             print(f"[NOTIFY] ส่งไม่สำเร็จ: {e}")
 
-    threading.Thread(target=_do, daemon=True).start()
+    if blocking:
+        _do()
+    else:
+        threading.Thread(target=_do, daemon=True).start()
 
 
 def _now() -> str:
@@ -92,13 +98,19 @@ def system_start(started_by: str = ""):
     _send(msg)
 
 
-def system_stop(stopped_by: str = ""):
-    """แจ้งเตือนเมื่อระบบหยุดทำงาน"""
-    msg = f"⛔ <b>ระบบหยุดทำงานแล้ว</b>"
-    if stopped_by:
-        msg += f"\n👤 สั่งโดย: {stopped_by}"
+def system_stop(stopped_by: str = "", reason: str = "manual"):
+    """แจ้งเตือนเมื่อระบบหยุดทำงาน
+    reason='manual'     → ผู้ใช้กด Stop (async)
+    reason='no_cameras' → ระบบหยุดอัตโนมัติ (blocking — กันข้อความหาย)
+    """
+    if reason == "no_cameras":
+        msg = f"⛔ <b>ระบบหยุดอัตโนมัติ</b>\n📷 ไม่มีกล้องรันอยู่"
+    else:
+        msg = f"⛔ <b>ระบบหยุดทำงานแล้ว</b>"
+        if stopped_by:
+            msg += f"\n👤 สั่งโดย: {stopped_by}"
     msg += f"\n🕐 {_now()}"
-    _send(msg)
+    _send(msg, blocking=(reason == "no_cameras"))
 
 
 def pg_down():

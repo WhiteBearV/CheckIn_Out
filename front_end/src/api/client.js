@@ -87,6 +87,14 @@ export async function deleteUser(username) {
   return r.json()
 }
 
+export async function updateUserRole(username, role) {
+  const r = await authFetch(`/users/${encodeURIComponent(username)}/role`, {
+    method: 'PATCH', body: { role },
+  })
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`)
+  return r.json()
+}
+
 export async function resetUserPassword(username, newPassword) {
   const r = await authFetch(`/users/${encodeURIComponent(username)}/reset-password`, {
     method: 'POST', body: { new_password: newPassword },

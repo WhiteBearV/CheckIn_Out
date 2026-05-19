@@ -290,7 +290,40 @@ venv/bin/python backup_db.py
 
 ---
 
-## 11. DB Schema Migrations
+## 11. Production — nginx + HTTPS
+
+ใช้ nginx เป็น reverse proxy เปิดจาก internet หรือ local network (แนะนำสำหรับ production)
+
+### ติดตั้ง nginx + ใช้ config ที่เตรียมไว้
+```bash
+sudo apt install nginx
+
+# copy config
+sudo cp deploy/nginx-facereg.conf /etc/nginx/sites-available/facereg
+sudo ln -s /etc/nginx/sites-available/facereg /etc/nginx/sites-enabled/facereg
+sudo rm -f /etc/nginx/sites-enabled/default
+
+# ทดสอบ config + โหลดใหม่
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+### เปิด HTTPS ด้วย Let's Encrypt (ถ้ามี domain และเชื่อมต่อ internet)
+```bash
+sudo apt install certbot python3-certbot-nginx
+sudo certbot --nginx -d <your-domain>
+# certbot จะแก้ nginx config ให้อัตโนมัติ + ตั้ง cron ต่ออายุ cert
+```
+
+### เปลี่ยน CORS_ORIGINS หลังติดตั้ง nginx
+```bash
+# แก้ใน /etc/systemd/system/facereg-stream.service
+# เพิ่ม: Environment=CORS_ORIGINS=http://192.168.1.x,https://your-domain.com
+sudo systemctl daemon-reload && sudo systemctl restart facereg-stream
+```
+
+---
+
+## 12. DB Schema Migrations
 
 Schema ทั้งหมดรวมอยู่ใน `migrations/setup_db.sql` ไฟล์เดียว
 

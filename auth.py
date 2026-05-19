@@ -171,6 +171,17 @@ def add_user(username: str, password: str, role: str) -> None:
         conn.commit()
 
 
+def set_role(username: str, role: str) -> None:
+    """เปลี่ยน role ของ user"""
+    if role not in ("admin", "viewer"):
+        raise ValueError("role ต้องเป็น 'admin' หรือ 'viewer'")
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("UPDATE users SET role = %s WHERE username = %s", (role, username))
+        if cur.rowcount == 0:
+            raise ValueError(f"ไม่พบ user '{username}'")
+        conn.commit()
+
+
 def delete_user(username: str) -> None:
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute("DELETE FROM users WHERE username = %s", (username,))

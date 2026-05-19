@@ -1,6 +1,6 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { ThemeProvider } from './context/ThemeContext'
 import { AuthProvider, RequireAuth } from './context/AuthContext'
 import Sidebar from './components/Sidebar'
@@ -12,36 +12,83 @@ import Login from './pages/Login'
 import ChangePassword from './pages/ChangePassword'
 import Users from './pages/Users'
 
+const CLOCK_POS_KEY = 'clock_pos'
+
 function Clock() {
   const [now, setNow] = useState(new Date())
+  const [pos, setPos] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(CLOCK_POS_KEY))
+      if (saved && typeof saved.x === 'number') return saved
+    } catch {}
+    return null  // null = ใช้ default bottom-right
+  })
+  const [dragging, setDragging] = useState(false)
+  const dragOffset = useRef({ dx: 0, dy: 0 })
+  const ref = useRef(null)
+
+  // tick
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000)
     return () => clearInterval(t)
   }, [])
 
+  const onMouseDown = useCallback(e => {
+    if (e.button !== 0) return
+    e.preventDefault()
+    const rect = ref.current.getBoundingClientRect()
+    dragOffset.current = { dx: e.clientX - rect.left, dy: e.clientY - rect.top }
+    setDragging(true)
+  }, [])
+
+  useEffect(() => {
+    if (!dragging) return
+    const onMove = e => {
+      const x = Math.max(0, Math.min(window.innerWidth  - (ref.current?.offsetWidth  || 0), e.clientX - dragOffset.current.dx))
+      const y = Math.max(0, Math.min(window.innerHeight - (ref.current?.offsetHeight || 0), e.clientY - dragOffset.current.dy))
+      const next = { x, y }
+      setPos(next)
+      localStorage.setItem(CLOCK_POS_KEY, JSON.stringify(next))
+    }
+    const onUp = () => setDragging(false)
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup',   onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup',   onUp)
+    }
+  }, [dragging])
+
   const time = now.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
   const date = now.toLocaleDateString('th-TH', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
 
+  const posStyle = pos
+    ? { top: pos.y, left: pos.x }
+    : { bottom: 16, right: 16 }
+
   return (
-    <div style={{
-      position:     'fixed',
-      bottom:       16,
-      right:        16,
-      zIndex:       9000,
-      display:      'flex',
-      alignItems:   'center',
-      gap:          10,
-      padding:      '6px 14px',
-      borderRadius: 8,
-      background:   'var(--c-accent-bg)',
-      border:       '1px solid var(--c-accent-border)',
-      backdropFilter: 'blur(8px)',
-      boxShadow:    '0 2px 12px rgba(0,0,0,0.18)',
-      fontFamily:   'var(--font-mono)',
-      pointerEvents: 'none',
-      userSelect:   'none',
-    }}>
-      {/* pulse dot */}
+    <div
+      ref={ref}
+      onMouseDown={onMouseDown}
+      style={{
+        position:     'fixed',
+        ...posStyle,
+        zIndex:       9000,
+        display:      'flex',
+        alignItems:   'center',
+        gap:          10,
+        padding:      '6px 14px',
+        borderRadius: 8,
+        background:   'var(--c-accent-bg)',
+        border:       '1px solid var(--c-accent-border)',
+        backdropFilter: 'blur(8px)',
+        boxShadow:    '0 2px 12px rgba(0,0,0,0.18)',
+        fontFamily:   'var(--font-mono)',
+        userSelect:   'none',
+        cursor:       dragging ? 'grabbing' : 'grab',
+        touchAction:  'none',
+      }}
+    >
       <span style={{
         width: 6, height: 6, borderRadius: '50%',
         background: 'var(--c-accent)',

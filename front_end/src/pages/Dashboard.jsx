@@ -733,28 +733,28 @@ export default function Dashboard() {
       {/* ── Stat cards ──────────────────────────────────────────────────────── */}
       <div className="stats">
         <StatCard title="เช็คอินวันนี้"   value={isLoading ? null : stats.inCount}
-          subtitle="วันนี้" color="#22c55e"
+          color="#22c55e"
           icon={<svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
               d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1" />
           </svg>}
         />
         <StatCard title="เช็คเอาท์วันนี้" value={isLoading ? null : stats.outCount}
-          subtitle="ออกแล้ว" color="#f97316"
+          color="#f97316"
           icon={<svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
               d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
           </svg>}
         />
         <StatCard title="อยู่ในอาคาร"     value={isLoading ? null : stats.stillInside}
-          subtitle="ยังอยู่ในอาคาร" color="#0089ff"
+          color="#0089ff"
           icon={<svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
               d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
           </svg>}
         />
         <StatCard title="พนักงานทั้งหมด"  value={isLoading ? null : stats.total}
-          subtitle="คนที่มีการลงเวลา" color="#a855f7"
+          color="#a855f7"
           icon={<svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
               d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />

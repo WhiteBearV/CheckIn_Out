@@ -116,6 +116,7 @@ export default function Login() {
           type="submit"
           disabled={loading || !username || !password}
           className="btn btn-primary btn-block"
+          style={{ fontSize: 21, padding: '15px 18px' }}
         >
           {loading ? 'กำลังเข้าสู่ระบบ…' : 'เข้าสู่ระบบ'}
         </button>

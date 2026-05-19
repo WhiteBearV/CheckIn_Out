@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { listUsers, addUser, deleteUser, resetUserPassword } from '../api/client'
+import { listUsers, addUser, deleteUser, resetUserPassword, updateUserRole } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import ConfirmModal from '../components/ConfirmModal'
 
@@ -181,6 +181,15 @@ export default function Users() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
   })
 
+  const roleMut = useMutation({
+    mutationFn: ({ username, role }) => updateUserRole(username, role),
+    onSuccess: (_, { username, role }) => {
+      qc.invalidateQueries({ queryKey: ['users'] })
+      showToast(`เปลี่ยน role "${username}" เป็น ${role} เรียบร้อย`)
+    },
+    onError: err => showToast(`เปลี่ยน role ไม่สำเร็จ: ${err.message}`),
+  })
+
   const [showAdd,    setShowAdd]    = useState(false)
   const [resetFor,   setResetFor]   = useState(null)
   const [deleteFor,  setDeleteFor]  = useState(null)
@@ -278,15 +287,39 @@ export default function Users() {
                     </div>
                   </td>
                   <td style={{ padding: '14px 16px' }}>
-                    <span style={{
-                      fontSize: 16, padding: '4px 12px', borderRadius: 20, fontWeight: 600,
-                      background: u.role === 'admin' ? 'rgba(99,179,237,0.12)' : 'rgba(160,160,160,0.12)',
-                      color:      u.role === 'admin' ? '#63b3ed' : '#aaa',
-                      border:     `1px solid ${u.role === 'admin' ? 'rgba(99,179,237,0.3)' : 'rgba(160,160,160,0.2)'}`,
-                      letterSpacing: 1,
-                    }}>
-                      {u.role}
-                    </span>
+                    {u.username === me?.username ? (
+                      <span style={{
+                        fontSize: 16, padding: '4px 12px', borderRadius: 20, fontWeight: 600,
+                        background: u.role === 'admin' ? 'rgba(99,179,237,0.12)' : 'rgba(160,160,160,0.12)',
+                        color:      u.role === 'admin' ? '#63b3ed' : '#aaa',
+                        border:     `1px solid ${u.role === 'admin' ? 'rgba(99,179,237,0.3)' : 'rgba(160,160,160,0.2)'}`,
+                        letterSpacing: 1,
+                      }}>
+                        {u.role}
+                      </span>
+                    ) : (
+                      <button
+                        title="คลิกเพื่อสลับ role"
+                        disabled={roleMut.isPending && roleMut.variables?.username === u.username}
+                        onClick={() => roleMut.mutate({ username: u.username, role: u.role === 'admin' ? 'viewer' : 'admin' })}
+                        style={{
+                          fontSize: 16, padding: '4px 12px', borderRadius: 20, fontWeight: 600,
+                          background: u.role === 'admin' ? 'rgba(99,179,237,0.12)' : 'rgba(160,160,160,0.12)',
+                          color:      u.role === 'admin' ? '#63b3ed' : '#aaa',
+                          border:     `1px solid ${u.role === 'admin' ? 'rgba(99,179,237,0.3)' : 'rgba(160,160,160,0.2)'}`,
+                          letterSpacing: 1, cursor: 'pointer',
+                          display: 'inline-flex', alignItems: 'center', gap: 5,
+                          opacity: roleMut.isPending && roleMut.variables?.username === u.username ? 0.5 : 1,
+                        }}
+                        onMouseEnter={e => e.currentTarget.style.opacity = '0.7'}
+                        onMouseLeave={e => e.currentTarget.style.opacity = roleMut.variables?.username === u.username ? '0.5' : '1'}
+                      >
+                        {u.role}
+                        <svg viewBox="0 0 24 24" style={{ width: 11, height: 11, fill: 'none', stroke: 'currentColor', strokeWidth: 2.5, opacity: 0.6 }}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M7 16V4m0 0L3 8m4-4l4 4M17 8v12m0 0l4-4m-4 4l-4-4"/>
+                        </svg>
+                      </button>
+                    )}
                   </td>
                   <td style={{ padding: '18px 16px', fontSize: 20, color: 'var(--c-text-3)' }}>
                     {fmt(u.created_at)}

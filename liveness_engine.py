@@ -817,7 +817,9 @@ class LivenessEngine:
             return
 
         # ─── Timeout ───
-        if now_ts - s.start_ts > cfg.LIVENESS_TIMEOUT:
+        # ถ้า challenge กำลัง active → ให้ CHALLENGE_TIMEOUT จัดการเองแทน
+        # ไม่ตัด session กลาง challenge ด้วย LIVENESS_TIMEOUT
+        if now_ts - s.start_ts > cfg.LIVENESS_TIMEOUT and s.challenge_phase != "active":
             s.failed = True
             reasons = []
             if not s.depth_ok:     reasons.append("Depth")

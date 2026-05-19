@@ -349,6 +349,153 @@ function FaceModal({ src, name, onClose }) {
   )
 }
 
+// ─── HowToUseButton — ปุ่มวิธีใช้ (ทุกคนเข้าถึงได้ ไม่ต้อง auth) ────────────
+
+const STEPS = [
+  {
+    icon: '👤',
+    title: 'ยืนยันตัวตน',
+    desc: 'ยืนต่อหน้ากล้องในระยะ 50–80 ซม. ให้ใบหน้าอยู่กลางวงรี',
+  },
+  {
+    icon: '👁️',
+    title: 'ผ่านการตรวจสอบ',
+    desc: 'กระพริบตา 2 ครั้ง และชูนิ้วตามจำนวนที่ระบบแจ้ง เพื่อยืนยันว่าเป็นคนจริง',
+  },
+  {
+    icon: '✅',
+    title: 'ลงชื่อเข้างาน',
+    desc: 'เมื่อระบบจำได้ จะแสดง "เข้างาน" พร้อมชื่อและเวลา — ถอยออกจากกล้องได้เลย',
+  },
+  {
+    icon: '🚪',
+    title: 'ลงชื่อออกงาน',
+    desc: 'กลับมายืนหน้ากล้องอีกครั้งตอนเลิกงาน ระบบจะบันทึก "ออกงาน" ให้อัตโนมัติ',
+  },
+]
+
+function HowToUseButton() {
+  const [open, setOpen] = useState(false)
+
+  return (
+    <>
+      {/* ปุ่ม */}
+      <div className="panel" style={{ padding: 0, overflow: 'hidden' }}>
+        <button
+          onClick={() => setOpen(true)}
+          style={{
+            width: '100%', padding: '14px 16px',
+            background: 'none', border: 'none', cursor: 'pointer',
+            display: 'flex', alignItems: 'center', gap: 10,
+            color: 'var(--c-text-2)', fontFamily: 'var(--font-mono)', fontSize: 22,
+            letterSpacing: '0.06em', textTransform: 'uppercase',
+          }}
+          onMouseEnter={e => e.currentTarget.style.background = 'var(--c-bg-hover)'}
+          onMouseLeave={e => e.currentTarget.style.background = 'none'}
+        >
+          <svg viewBox="0 0 24 24" style={{ width: 18, height: 18, flexShrink: 0, fill: 'none', stroke: 'currentColor', strokeWidth: 2 }}>
+            <circle cx="12" cy="12" r="10"/>
+            <path strokeLinecap="round" d="M12 16v-4M12 8h.01"/>
+          </svg>
+          วิธีการใช้งาน
+          <svg viewBox="0 0 24 24" style={{ width: 14, height: 14, marginLeft: 'auto', fill: 'none', stroke: 'currentColor', strokeWidth: 2 }}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7"/>
+          </svg>
+        </button>
+      </div>
+
+      {/* Popup */}
+      {open && (
+        <div
+          onClick={() => setOpen(false)}
+          style={{
+            position: 'fixed', inset: 0, zIndex: 9000,
+            background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(6px)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: 16,
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: 'var(--c-bg-card)',
+              border: '1px solid var(--c-border)',
+              borderRadius: 14, padding: '28px 28px 24px',
+              width: '100%', maxWidth: 460,
+              boxShadow: '0 24px 64px rgba(0,0,0,0.4)',
+            }}
+          >
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 24 }}>
+              <div>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 21, color: 'var(--c-accent)', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 4 }}>
+                  วิธีการใช้งาน
+                </div>
+                <div style={{ fontSize: 26, fontWeight: 700, color: 'var(--c-text)' }}>
+                  ขั้นตอนลงชื่อเข้า-ออกงาน
+                </div>
+              </div>
+              <button
+                onClick={() => setOpen(false)}
+                style={{ width: 36, height: 36, borderRadius: 8, border: '1px solid var(--c-border)', background: 'var(--c-bg-deep)', color: 'var(--c-text-3)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 2 }}
+              >
+                <svg viewBox="0 0 24 24" style={{ width: 16, height: 16, fill: 'none', stroke: 'currentColor', strokeWidth: 2 }}>
+                  <path strokeLinecap="round" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+              </button>
+            </div>
+
+            {/* Steps */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              {STEPS.map((s, i) => (
+                <div key={i} style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
+                  {/* Icon + connector */}
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                    <div style={{
+                      width: 52, height: 52, borderRadius: '50%',
+                      background: 'var(--c-accent-bg)',
+                      border: '1px solid var(--c-accent-border)',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: 22, lineHeight: 1, overflow: 'hidden', flexShrink: 0,
+                    }}>
+                      {s.icon}
+                    </div>
+                    {i < STEPS.length - 1 && (
+                      <div style={{ width: 2, height: 16, background: 'var(--c-border)' }} />
+                    )}
+                  </div>
+                  {/* Text */}
+                  <div style={{ paddingTop: 6 }}>
+                    <div style={{ fontSize: 23, fontWeight: 600, color: 'var(--c-text)', marginBottom: 4 }}>
+                      ขั้นที่ {i + 1} — {s.title}
+                    </div>
+                    <div style={{ fontSize: 22, color: 'var(--c-text-3)', lineHeight: 1.65 }}>
+                      {s.desc}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Footer note — highlighted */}
+            <div style={{
+              marginTop: 24, padding: '12px 16px', borderRadius: 10,
+              background: 'var(--c-accent-bg)',
+              border: '1px solid var(--c-accent-border)',
+              display: 'flex', gap: 10, alignItems: 'flex-start',
+            }}>
+              <span style={{ fontSize: 21, lineHeight: 1, flexShrink: 0, marginTop: 1 }}>⚠️</span>
+              <span style={{ fontSize: 21, color: 'var(--c-text-2)', lineHeight: 1.65 }}>
+                หากสแกนไม่ผ่านหลายครั้ง ลองปรับระยะและแสงสว่าง หรือ<strong style={{ color: 'var(--c-text)' }}>ติดต่อผู้ดูแลระบบ</strong>
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
 // ─── FullscreenModal — ใช้ Browser Fullscreen API ─────────────────────────────
 
 function FullscreenModal({ cam, onClose }) {
@@ -386,10 +533,10 @@ function FullscreenModal({ cam, onClose }) {
       }}
       onClick={handleClose}
     >
-      <div onClick={e => e.stopPropagation()} style={{ maxWidth: '100%', maxHeight: '100%' }}>
+      <div onClick={e => e.stopPropagation()} style={{ position: 'absolute', inset: 0 }}>
         <CamStream
           camId={cam.id}
-          style={{ maxWidth: '100vw', maxHeight: '100vh', objectFit: 'contain', display: 'block' }}
+          style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
         />
       </div>
 
@@ -530,7 +677,7 @@ function CameraCell({ cam, isOnline, isIdle, isConnecting, onExpand, onSelect })
 
 // ─── CameraManager ────────────────────────────────────────────────────────────
 
-function CameraManager({ cameras, onReload, enabledCamIds, onEnabledChange, systemRunning, allStates = {} }) {
+function CameraManager({ cameras, onReload, enabledCamIds, onEnabledChange, systemRunning, allStates = {}, onCamStart }) {
   const qc = useQueryClient()
   const { isAdmin } = useAuth()
   const [open, setOpen]         = useState(false)
@@ -574,6 +721,15 @@ function CameraManager({ cameras, onReload, enabledCamIds, onEnabledChange, syst
     onError: (e) => showErr(e.message),
   })
 
+  const startCamMut = useMutation({
+    mutationFn: (id) => startSingleCamera(id),
+    onSuccess: (_, id) => {
+      showMsg(`✓ เริ่มกล้อง ${id} แล้ว`)
+      onCamStart?.(id)
+    },
+    onError: (e) => showErr(e.message),
+  })
+
   const delMut = useMutation({
     mutationFn: (id) => deleteCamera(id),
     onSuccess: (_, id) => {
@@ -590,52 +746,34 @@ function CameraManager({ cameras, onReload, enabledCamIds, onEnabledChange, syst
     <>
     <div className="panel">
       <div className="p-head">
-        <span className="eb">CAMERAS</span>
-        <div style={{ display: 'flex', gap: 6 }}>
-          <button
-            className="sys-btn sys-ghost"
-            style={{ padding: '6px 12px', fontSize: 14, width: 'auto', opacity: isAdmin ? 1 : 0.4 }}
-            onClick={() => reloadMut.mutate()}
-            disabled={!isAdmin}
-            title={isAdmin ? "รีเฟรชรายการกล้อง" : "admin เท่านั้น"}
-          >
-            <svg viewBox="0 0 24 24" style={{ width: 14, height: 14 }}><path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-            Reload
-          </button>
-          <button
-            className="sys-btn sys-ghost"
-            style={{ padding: '6px 12px', fontSize: 14, width: 'auto',
-                     color: open ? 'var(--c-accent)' : undefined,
-                     opacity: isAdmin ? 1 : 0.4 }}
-            onClick={() => setOpen(v => !v)}
-            disabled={!isAdmin}
-            title={isAdmin ? "" : "admin เท่านั้น"}
-          >
-            {open ? '✕ ปิด' : '+ เพิ่มกล้อง'}
-          </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span className="eb">CAMERAS</span>
+          {isAdmin && (
+            <button
+              className="btn btn-primary"
+              style={{ fontSize: 16 }}
+              onClick={() => setOpen(v => !v)}
+            >
+              + เพิ่มกล้อง
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Select All / None */}
-      {!systemRunning && cameras.length > 0 && (
-        <div className="p-body" style={{ paddingTop: 0, paddingBottom: 4, display: 'flex', gap: 8 }}>
-          <button onClick={() => onEnabledChange?.(null)}
-            style={{ fontSize: 12, padding: '3px 10px', borderRadius: 6, cursor: 'pointer',
-                     background: 'var(--c-accent-bg)', color: 'var(--c-accent)',
-                     border: '1px solid var(--c-accent-border)' }}>
-            เลือกทั้งหมด
-          </button>
-          <button onClick={() => onEnabledChange?.([])}
-            style={{ fontSize: 12, padding: '3px 10px', borderRadius: 6, cursor: 'pointer',
-                     background: 'var(--c-bg)', color: 'var(--c-text-3)',
-                     border: '1px solid var(--c-border)' }}>
-            ยกเลิกทั้งหมด
-          </button>
-        </div>
-      )}
-
       {/* Camera list */}
       <div className="p-body" style={{ display: 'grid', gap: 8 }}>
+        {!systemRunning && cameras.length > 0 && (
+          <div style={{ display: 'flex', gap: 6, paddingBottom: 6, borderBottom: '1px solid var(--c-border-s)', justifyContent: 'center' }}>
+            <button className="btn btn-ghost" style={{ fontSize: 15 }}
+              onClick={() => onEnabledChange?.(null)}>
+              เลือกทั้งหมด
+            </button>
+            <button className="btn btn-ghost" style={{ fontSize: 15 }}
+              onClick={() => onEnabledChange?.([])} >
+              ยกเลิกทั้งหมด
+            </button>
+          </div>
+        )}
         {cameras.length === 0 && (
           <div style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--c-text-4)', textAlign: 'center', padding: '8px 0' }}>ไม่มีกล้อง</div>
         )}
@@ -664,7 +802,7 @@ function CameraManager({ cameras, onReload, enabledCamIds, onEnabledChange, syst
                              background: isCamAlive ? '#22c55e' : '#4b5563',
                              boxShadow: isCamAlive ? '0 0 4px #22c55e88' : 'none' }} />
             )}
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, flex: 1,
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 600, flex: 1,
                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                            color: isEnabled ? 'var(--c-text-2)' : 'var(--c-text-4)',
                            textDecoration: (!systemRunning && !isEnabled) ? 'line-through' : 'none' }}>
@@ -688,7 +826,7 @@ function CameraManager({ cameras, onReload, enabledCamIds, onEnabledChange, syst
             )}
             {/* ปุ่ม restart (ตอนรันแต่กล้องหยุดอยู่) */}
             {systemRunning && isAdmin && !isCamAlive && (
-              <button onClick={() => reloadMut.mutate()} disabled={reloadMut.isPending}
+              <button onClick={() => startCamMut.mutate(cam.id)} disabled={startCamMut.isPending}
                 style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#22c55e',
                          padding: '3px 5px', opacity: 0.8, lineHeight: 1, flexShrink: 0 }}
                 onMouseEnter={e => e.currentTarget.style.opacity = '1'}
@@ -715,55 +853,6 @@ function CameraManager({ cameras, onReload, enabledCamIds, onEnabledChange, syst
           )
         })}
 
-        {/* Add camera form */}
-        {open && (
-          <div style={{ borderTop: '1px solid var(--c-border-s)', paddingTop: 10, display: 'grid', gap: 8 }}>
-            <div>
-              <label style={lbl}>ชื่อกล้อง</label>
-              <input style={inp} placeholder="เช่น CAM-FRONT" value={form.name}
-                onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
-            </div>
-            <div>
-              <label style={lbl}>ประเภท</label>
-              <div style={{ display: 'flex', gap: 6 }}>
-                {['usb', 'ip'].map(t => (
-                  <button key={t} onClick={() => setForm(f => ({ ...f, cam_type: t }))}
-                    style={{ ...inp, width: 'auto', flex: 1, textAlign: 'center', cursor: 'pointer',
-                      background: form.cam_type === t ? 'var(--c-accent-bg)' : 'var(--c-bg-input)',
-                      color:      form.cam_type === t ? 'var(--c-accent)' : 'var(--c-text-3)',
-                      borderColor: form.cam_type === t ? 'var(--c-accent-border)' : 'var(--c-border)',
-                    }}>
-                    {t.toUpperCase()}
-                  </button>
-                ))}
-              </div>
-            </div>
-            {form.cam_type === 'usb' ? (
-              <div>
-                <label style={lbl}>Index (0, 1, 2…)</label>
-                <input style={inp} type="number" min="0" value={form.index}
-                  onChange={e => setForm(f => ({ ...f, index: e.target.value }))} />
-              </div>
-            ) : (
-              <div>
-                <label style={lbl}>RTSP URL</label>
-                <input style={inp} placeholder="rtsp://..." value={form.url}
-                  onChange={e => setForm(f => ({ ...f, url: e.target.value }))} />
-              </div>
-            )}
-            <label style={{ ...lbl, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', marginBottom: 0 }}>
-              <input type="checkbox" checked={form.flip} onChange={e => setForm(f => ({ ...f, flip: e.target.checked }))} />
-              Flip กล้อง
-            </label>
-            <button
-              className="sys-btn sys-start"
-              disabled={!form.name || addMut.isPending}
-              onClick={() => addMut.mutate()}
-            >
-              {addMut.isPending ? 'กำลังเพิ่ม...' : '+ เพิ่มกล้อง'}
-            </button>
-          </div>
-        )}
 
         {msg && (
           <div style={{
@@ -775,6 +864,86 @@ function CameraManager({ cameras, onReload, enabledCamIds, onEnabledChange, syst
         )}
       </div>
     </div>
+
+    {/* Add camera popup */}
+    {open && (
+      <div onClick={() => setOpen(false)} style={{
+        position: 'fixed', inset: 0, zIndex: 9000,
+        background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
+      }}>
+        <div onClick={e => e.stopPropagation()} style={{
+          background: 'var(--c-bg-card)', border: '1px solid var(--c-border)',
+          borderRadius: 12, padding: '28px', width: '100%', maxWidth: 420,
+          boxShadow: '0 20px 60px rgba(0,0,0,0.4)', display: 'grid', gap: 16,
+        }}>
+          {/* Header */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--c-text)', fontFamily: 'var(--font-mono)' }}>
+              + เพิ่มกล้อง
+            </div>
+            <button onClick={() => setOpen(false)} style={{
+              width: 32, height: 32, borderRadius: 6, border: '1px solid var(--c-border)',
+              background: 'var(--c-bg-deep)', color: 'var(--c-text-3)',
+              cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <svg viewBox="0 0 24 24" style={{ width: 15, height: 15, fill: 'none', stroke: 'currentColor', strokeWidth: 2 }}>
+                <path strokeLinecap="round" d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
+
+          <div>
+            <label style={{ ...lbl, fontSize: 16 }}>ชื่อกล้อง</label>
+            <input style={{ ...inp, fontSize: 19, padding: '10px 12px' }} placeholder="เช่น CAM-FRONT" value={form.name} autoFocus
+              onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+          </div>
+          <div>
+            <label style={{ ...lbl, fontSize: 16 }}>ประเภท</label>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {['usb', 'ip'].map(t => (
+                <button key={t} onClick={() => setForm(f => ({ ...f, cam_type: t }))}
+                  style={{ ...inp, fontSize: 19, padding: '10px 12px', width: 'auto', flex: 1, textAlign: 'center', cursor: 'pointer',
+                    background:  form.cam_type === t ? 'var(--c-accent-bg)' : 'var(--c-bg-input)',
+                    color:       form.cam_type === t ? 'var(--c-accent)'    : 'var(--c-text-3)',
+                    borderColor: form.cam_type === t ? 'var(--c-accent-border)' : 'var(--c-border)',
+                  }}>
+                  {t.toUpperCase()}
+                </button>
+              ))}
+            </div>
+          </div>
+          {form.cam_type === 'usb' ? (
+            <div>
+              <label style={{ ...lbl, fontSize: 16 }}>Index (0, 1, 2…)</label>
+              <input style={{ ...inp, fontSize: 19, padding: '10px 12px' }} type="number" min="0" value={form.index}
+                onChange={e => setForm(f => ({ ...f, index: e.target.value }))} />
+            </div>
+          ) : (
+            <div>
+              <label style={{ ...lbl, fontSize: 16 }}>RTSP URL</label>
+              <input style={{ ...inp, fontSize: 19, padding: '10px 12px' }} placeholder="rtsp://..." value={form.url}
+                onChange={e => setForm(f => ({ ...f, url: e.target.value }))} />
+            </div>
+          )}
+          <label style={{ ...lbl, fontSize: 16, display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 0 }}>
+            <input type="checkbox" checked={form.flip} onChange={e => setForm(f => ({ ...f, flip: e.target.checked }))}
+              style={{ width: 16, height: 16, accentColor: 'var(--c-accent)', cursor: 'pointer' }} />
+            Flip กล้อง
+          </label>
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 4 }}>
+            <button onClick={() => setOpen(false)} className="btn btn-ghost"
+              style={{ fontSize: 19 }}>ยกเลิก</button>
+            <button className="btn btn-primary" disabled={!form.name || addMut.isPending}
+              onClick={() => addMut.mutate()}
+              style={{ fontSize: 19 }}>
+              {addMut.isPending ? 'กำลังเพิ่ม...' : '+ เพิ่มกล้อง'}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
     {deleteFor && (
       <ConfirmModal
         title={`ลบกล้อง "${deleteFor.name}"`}
@@ -1049,10 +1218,10 @@ export default function LiveCam() {
     return () => clearInterval(t)
   }, [])
 
-  // Connecting timeout 90 วิ — ถ้าเชื่อมไม่ติดให้เปลี่ยนเป็น offline เอง
+  // Connecting timeout 20 วิ — ถ้าเชื่อมไม่ติดให้เปลี่ยนเป็น offline เอง
   useEffect(() => {
     if (Object.keys(connectingCams).length === 0) return
-    const t = setTimeout(() => setConnectingCams({}), 90_000)
+    const t = setTimeout(() => setConnectingCams({}), 20_000)
     return () => clearTimeout(t)
   }, [connectingCams])
 
@@ -1086,16 +1255,20 @@ export default function LiveCam() {
       return next
     })
     // ล้าง connecting state เมื่อกล้องมาออนไลน์แล้ว
+    // คืน prev ถ้าไม่มีอะไรเปลี่ยน — กัน object ใหม่ reset timeout ทุก 1 วิ
     setConnectingCams(prev => {
       const hasPending = cameras.some(c => prev[c.id])
       if (!hasPending) return prev
       const next = { ...prev }
+      let changed = false
       cameras.forEach((c, i) => {
         const res = results[i]
-        if (res.status === 'fulfilled' && res.value && isFresh(res.value))
+        if (res.status === 'fulfilled' && res.value && isFresh(res.value) && next[c.id]) {
           delete next[c.id]
+          changed = true
+        }
       })
-      return next
+      return changed ? next : prev
     })
     pollRef.current = setTimeout(pollStates, running ? 1000 : 5000)
   }, [cameras])
@@ -1105,7 +1278,7 @@ export default function LiveCam() {
     return () => clearTimeout(pollRef.current)
   }, [pollStates])
 
-  // Aggregate persons จากทุกกล้อง รวม camName
+  // Aggregate persons จากทุกกล้อง รวม camName — เรียงจากเจอล่าสุดก่อน
   const allPersons = useMemo(() => {
     const list = []
     cameras.forEach(c => {
@@ -1115,7 +1288,7 @@ export default function LiveCam() {
           list.push({ camId: c.id, camName: c.name || c.id, name, person: p })
         )
     })
-    return list
+    return list.sort((a, b) => elapsedSec(a.person.first_seen) - elapsedSec(b.person.first_seen))
   }, [allStates, cameras])
 
   // Auto-select first camera; keep selection if it still exists
@@ -1150,8 +1323,14 @@ export default function LiveCam() {
             </div>
           </div>
           <div className="status">
-            <span className="dot" style={{ background: activeCamCount === 0 ? '#ef4444' : undefined }} />
-            system active · {activeCamCount} cam{activeCamCount !== 1 ? 's' : ''} online
+            <span className="dot" style={{
+              background: !sys.face ? '#4b5563'
+                : activeCamCount === 0 ? '#ef4444'
+                : undefined
+            }} />
+            {sys.face
+              ? `system active · ${activeCamCount} cam${activeCamCount !== 1 ? 's' : ''} online`
+              : 'system stopped'}
           </div>
         </div>
 
@@ -1251,26 +1430,11 @@ export default function LiveCam() {
             {/* Camera Manager Panel (list + add + delete + reload) */}
             <CameraManager cameras={cameras} onReload={() => {}}
                            enabledCamIds={enabledCamIds} onEnabledChange={setEnabledCamIds}
-                           systemRunning={sys.face} allStates={allStates} />
+                           systemRunning={sys.face} allStates={allStates}
+                           onCamStart={id => setConnectingCams(prev => ({ ...prev, [id]: true }))} />
 
-            {/* Hints Panel */}
-            <div className="panel">
-              <div className="p-head">
-                <span className="eb">HINTS</span>
-                <span className="eb eb-muted">keyboard</span>
-              </div>
-              <div className="p-body" style={{ display: 'grid', gap: 8, fontSize: 18, color: 'var(--c-text-3)' }}>
-                {[
-                  ['ESC', 'ปิด popup / ออก fullscreen'],
-                  ['⛶', 'กดไอคอนมุมกล้องเพื่อ fullscreen'],
-                ].map(([k, v]) => (
-                  <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span className="kbd">{k}</span>
-                    <span>{v}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
+            {/* Guide Button */}
+            <HowToUseButton />
 
           </div>
         </div>

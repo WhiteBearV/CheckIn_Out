@@ -359,6 +359,24 @@ async def delete_user(username: str, request: Request,
                details={"username": username})
     return {"success": True}
 
+class _SetRoleReq(BaseModel):
+    role: str
+
+@app.patch('/users/{username}/role')
+async def set_user_role(username: str, req: _SetRoleReq,
+                        request: Request,
+                        user: dict = Depends(require_admin)):
+    if username == user["username"]:
+        raise HTTPException(status_code=400, detail="ไม่สามารถเปลี่ยน role ตัวเองได้")
+    try:
+        _auth.set_role(username, req.role)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    _audit.log("user.set_role", user=user, request=request,
+               details={"username": username, "role": req.role})
+    return {"success": True}
+
+
 @app.post('/users/{username}/reset-password')
 async def reset_user_password(username: str, req: _ResetPwReq,
                                request: Request,
@@ -1106,6 +1124,16 @@ def _api_alive() -> bool:
     except OSError:
         return False
 
+
+def _stop_api() -> None:
+    """หยุด api.py เฉพาะกรณีที่ stream_server spawn เอง (_procs['api'] ถูกตั้งค่า)
+    ถ้า api ถูก spawn จาก concurrently (npm run dev) → ไม่แตะ
+    เพราะ kill จากภายนอกทำให้ concurrently --kill-others-on-fail พา stream_server ตายด้วย
+    UI แสดง stopped state ได้จาก _user_intent_started=False อยู่แล้ว"""
+    p = _procs.get('api')
+    if p and p.poll() is None:
+        p.terminate()
+
 def _face_state_fresh() -> bool:
     now = time.time()
     with _lock:
@@ -1159,12 +1187,12 @@ def _record_restart(key: str) -> bool:
     return True
 
 
-_NO_CAM_AUTOSTOP_SECS = 8.0   # วิที่รอก่อน auto-stop ถ้าไม่มีกล้องรันเลย
+_NO_CAM_AUTOSTOP_SECS = 6.0   # วิที่รอก่อน auto-stop ถ้าไม่มีกล้องรันเลย (> freshness 5s)
 
 
 def _watchdog_loop():
     """ตรวจสอบ child process ทุก interval วิ ถ้าตายโดยไม่ตั้งใจ → respawn"""
-    global _user_intent_started
+    global _user_intent_started, _last_cam_active_ts
     print(f'[WATCHDOG] เริ่มตรวจ child process (interval={_watchdog_interval}s, '
           f'limit={_watchdog_max_restarts}/{_watchdog_window:.0f}s)')
     while not _watchdog_stop.wait(_watchdog_interval):
@@ -1179,10 +1207,16 @@ def _watchdog_loop():
             print('[WATCHDOG] ไม่มีกล้องรันเลย → auto-stop ระบบ')
             _user_intent_started = False
             _last_cam_active_ts  = 0.0
-            p = _procs.get('main')
-            if p and p.poll() is None:
-                p.terminate()
-            _notify.system_stop(stopped_by="auto (กล้องทุกตัวหยุดแล้ว)")
+            _p = _procs.get('main')
+            if _p and _p.poll() is None:
+                _p.terminate()
+            _stop_api()
+            with _lock:
+                _cam_frames.clear()
+                _cam_counts.clear()
+                _cam_frame_ts.clear()
+                _cam_states.clear()
+            _notify.system_stop(reason="no_cameras")
             continue
 
         # ── main.py ──────────────────────────────────────────────────────────
@@ -1193,13 +1227,30 @@ def _watchdog_loop():
                 age = time.time() - _proc_last_spawn.get('main', 0)
                 if p.poll() is not None and age > _watchdog_grace_after_start:
                     code = p.returncode
-                    print(f'[WATCHDOG] main.py died (exit={code}) — respawning')
-                    if _record_restart('main'):
-                        try:
-                            _procs['main'] = _spawn_main_proc()
-                            print('[WATCHDOG] main.py respawned ✓')
-                        except Exception as e:
-                            print(f'[WATCHDOG] respawn main FAILED: {e}')
+                    if code == 0 and _user_intent_started:
+                        # graceful exit — กล้องทุกตัวหยุดเอง → full stop เหมือนกด Stop
+                        print('[WATCHDOG] main.py graceful exit → auto-stop ระบบ')
+                        _user_intent_started = False
+                        _last_cam_active_ts  = 0.0
+                        _stop_api()
+                        with _lock:
+                            _cam_frames.clear()
+                            _cam_counts.clear()
+                            _cam_frame_ts.clear()
+                            _cam_states.clear()
+                        _notify.system_stop(reason="no_cameras")
+                    elif _user_intent_started:
+                        # crash exit + user ยังต้องการ Start → respawn
+                        print(f'[WATCHDOG] main.py died (exit={code}) — respawning')
+                        if _record_restart('main'):
+                            try:
+                                _procs['main'] = _spawn_main_proc()
+                                print('[WATCHDOG] main.py respawned ✓')
+                            except Exception as e:
+                                print(f'[WATCHDOG] respawn main FAILED: {e}')
+                    else:
+                        # user กด Stop แล้ว main.py จึงตาย → ไม่ต้อง respawn
+                        print(f'[WATCHDOG] main.py exited (exit={code}) after Stop — skip respawn')
 
         # ── api.py ───────────────────────────────────────────────────────────
         if 'api' not in _proc_disabled and 'api' in _procs:
@@ -1350,7 +1401,7 @@ async def system_start(request: Request, req: _StartReq = _StartReq(),
     """Start face recognition (subprocess FACE_HEADLESS) + api.py"""
     global _user_intent_started, _last_cam_active_ts
     _user_intent_started = True
-    _last_cam_active_ts  = time.time()   # reset เพื่อให้ watchdog รอกล้อง boot ก่อน
+    _last_cam_active_ts  = 0.0   # รอจนกล้อง push state จริงก่อน — ไม่ fire auto-stop ตอนบูท
     _audit.log("system.start", user=user, request=request,
                details={"cam_ids": req.cam_ids or "all"})
     # user สั่ง start ใหม่ → reset watchdog disable + restart counter
@@ -1398,7 +1449,7 @@ async def system_stop(request: Request, user: dict = Depends(require_admin)):
     _user_intent_started = False
     _last_cam_active_ts  = 0.0
     _audit.log("system.stop", user=user, request=request)
-    result = {}
+    result = {'face': 'not_running', 'api': 'not_running'}
 
     # หยุด face recognition
     if _stop_fn:
@@ -1418,12 +1469,9 @@ async def system_stop(request: Request, user: dict = Depends(require_admin)):
             _procs['main'].kill()    # kill ถ้ารอนานเกิน 8 วิ
         result['face'] = 'terminated'
 
-    # หยุด api
-    if _proc_alive('api'):
-        _procs['api'].terminate()
-        result['api'] = 'terminated'
-    else:
-        result['api'] = 'not_running'
+    # หยุด api (ทั้ง in-procs และ concurrently/npm run dev)
+    _stop_api()
+    result['api'] = 'terminated'
 
     # ล้าง in-memory buffers ทั้งหมด
     with _lock:

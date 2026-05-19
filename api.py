@@ -535,7 +535,7 @@ def report_summary(
 
 @app.get("/report/export")
 def report_export(
-    format:       str            = Query("csv", pattern="^(csv|xlsx|pdf)$"),
+    format:       str            = Query("csv", pattern="^(csv|xlsx|pdf|txt)$"),
     from_:        Optional[date] = Query(None, alias="from"),
     to:           Optional[date] = Query(None),
     organize_id:  Optional[str]  = Query(None),
@@ -559,6 +559,19 @@ def report_export(
         return [ct, d, t, r.get("per_id",""), r.get("name",""),
                 r.get("organize_th",""), r.get("posname_th",""),
                 r.get("status",""), r.get("camera_name","")]
+
+    if format == "txt":
+        col_w = [20, 10, 8, 15, 24, 20, 20, 8, 16]
+        def _pad(val, w): s = str(val); return s[:w].ljust(w)
+        lines = ["  ".join(_pad(h, col_w[i]) for i, h in enumerate(headers))]
+        lines.append("-" * (sum(col_w) + 2 * (len(headers) - 1)))
+        for r in rows:
+            lines.append("  ".join(_pad(v, col_w[i]) for i, v in enumerate(_row_values(r))))
+        data = ("\n".join(lines) + "\n").encode("utf-8")
+        return StreamingResponse(
+            io.BytesIO(data), media_type="text/plain; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{fname}.txt"'},
+        )
 
     if format == "csv":
         import csv

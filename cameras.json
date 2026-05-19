@@ -16,5 +16,11 @@
     "name": "PHONE_CAM",
     "flip": true,
     "index": 0
+  },
+  {
+    "id": "cam5",
+    "name": "กล้องหน้าวัง",
+    "flip": true,
+    "index": 3
   }
 ]

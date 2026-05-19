@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useMemo, useState, useRef } from 'react'
 import { fetchReportSummary, fetchHistoryFilters, reportExportUrl } from '../api/history'
+import { authFetch } from '../api/client'
 import { maskPid } from '../utils/pid'
 
 function todayISO() { return new Date().toISOString().slice(0, 10) }
@@ -98,9 +99,22 @@ export default function Report() {
   }
 
   const applyPreset = (p) => { setFrom(p.from); setTo(p.to) }
-  const handleExport = (fmt) => {
+  const handleExport = async (fmt) => {
     const url = reportExportUrl(fmt, filters)
-    window.open(url, '_blank', 'noopener')
+    try {
+      const r = await authFetch(url)
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const blob = await r.blob()
+      const ext  = fmt === 'xlsx' ? 'xlsx' : fmt
+      const name = `report_${filters.from}_${filters.to}.${ext}`
+      const a    = document.createElement('a')
+      a.href     = URL.createObjectURL(blob)
+      a.download = name
+      a.click()
+      URL.revokeObjectURL(a.href)
+    } catch (e) {
+      alert(`ส่งออกไม่สำเร็จ: ${e.message}`)
+    }
   }
 
   const total = t.total_person_days || 1
@@ -167,6 +181,11 @@ export default function Report() {
               onClick={() => handleExport('pdf')}
               title="ดาวน์โหลดรายงานเป็นไฟล์ PDF">
               <PrinterIcon /> PDF
+            </button>
+            <button className="btn btn-start"
+              onClick={() => handleExport('txt')}
+              title="ดาวน์โหลดรายงานเป็นไฟล์ข้อความ (.txt)">
+              <PrinterIcon /> TXT
             </button>
             <span style={{ marginLeft: 'auto', fontFamily: 'var(--font-mono)', fontSize: 24, color: 'var(--c-text-4)', alignSelf: 'center' }}>
               {summaryQ.isFetching ? 'กำลังโหลด...' : `${t.total_person_days} person-day`}
