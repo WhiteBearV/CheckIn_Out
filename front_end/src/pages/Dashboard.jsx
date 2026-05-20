@@ -670,7 +670,12 @@ export default function Dashboard() {
   }, [])
 
   // แสดง 1 การ์ด ต่อ (กล้อง × คน) — persist ข้าม Stop, ล้างเมื่อเปลี่ยนวัน
-  const livePersons = useMemo(() => Object.values(persistedPersons), [persistedPersons])
+  // เรียงตาม last_seen (เวลาเจอล่าสุด) descending → คนที่เพิ่งเจออยู่หน้าสุด
+  const livePersons = useMemo(() => {
+    const arr = Object.values(persistedPersons)
+    const tsOf = p => (p?.person?.last_seen || p?.person?.first_seen || '')
+    return arr.sort((a, b) => tsOf(b).localeCompare(tsOf(a)))
+  }, [persistedPersons])
 
   const stats  = useMemo(() => computeStats(data),  [data])
   const hourly = useMemo(() => computeHourly(data), [data])
