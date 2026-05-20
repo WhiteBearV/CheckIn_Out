@@ -154,17 +154,20 @@ class SessionManager:
             p.absence_reset = False
             print(f"[RE-VERIFY] {p.display_name} — ยืนยันตัวตนซ้ำ {now.strftime('%H:%M:%S')}")
 
-    def do_checkout(self, camera_name: str, now: datetime) -> int:
+    def do_checkout(self, camera_name: str, ref_time: datetime) -> int:
+        """checkout ทุกคนที่ยังอยู่ — ใช้ last_seen เป็นเวลา OUT (ref_time เป็น fallback)"""
         print(f"\n{'='*50}")
-        print(f"[CHECKOUT] เวลา {now.strftime('%H:%M:%S')}")
+        print(f"[CHECKOUT] ref_time={ref_time.strftime('%H:%M:%S')}")
         count = 0
         for name, person in self.persons.items():
             if not person.checked_in or person.checked_out:
                 continue
+            # ใช้เวลา verify ล่าสุดเป็นเวลา OUT — fallback เป็น ref_time ถ้าไม่มี last_seen
+            checkout_time = person.last_seen if person.last_seen else ref_time
             try:
                 mark_attendance(
                     person.per_id, "OUT", camera_name,
-                    check_time=now,
+                    check_time=checkout_time,
                     name=person.api_name,
                     prename_th=person.prename_th,
                     per_name=person.per_name,
@@ -174,9 +177,9 @@ class SessionManager:
                     organize_id=person.organize_id,
                 )
                 person.checked_out    = True
-                person.checked_out_at = now
+                person.checked_out_at = checkout_time
                 count += 1
-                print(f"  [{person.display_name}] OUT ({now.strftime('%H:%M:%S')})")
+                print(f"  [{person.display_name}] OUT ({checkout_time.strftime('%H:%M:%S')})")
             except Exception as e:
                 print(f"  [{name}] ERROR: {e}")
         print(f"[CHECKOUT] สำเร็จ {count} คน\n{'='*50}\n")

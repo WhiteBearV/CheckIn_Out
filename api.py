@@ -1,7 +1,7 @@
 """
 api.py — FastAPI Server สำหรับระบบ Face Attendance
 =====================================================
-รัน: uvicorn api:app --host 0.0.0.0 --port 8000
+รัน: uvicorn api:app --host 0.0.0.0 --port 8000 --no-access-log
 
 Endpoints:
   [Attendance]
@@ -1053,21 +1053,51 @@ def system_mode():
     }
 
 
+def _read_last_seen_map() -> dict:
+    """
+    อ่าน last_seen (เวลา verify ล่าสุด) ของแต่ละคนจาก live_state JSON files
+    คืน dict { per_id: datetime }
+    """
+    import glob as _glob
+    import json as _json
+    live_dir = _ROOT / "live"
+    result: dict = {}
+    for path in _glob.glob(str(live_dir / "live_state*.json")):
+        try:
+            data = _json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+            for p in data.get("persons", []):
+                pid = p.get("per_id")
+                ls  = p.get("last_seen")
+                if pid and ls:
+                    try:
+                        dt = datetime.fromisoformat(ls)
+                        if pid not in result or dt > result[pid]:
+                            result[pid] = dt
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+    return result
+
+
 def _do_auto_checkout_all(now: datetime) -> int:
     """
     checkout ทุกคนที่มี IN ในวันทำงานปัจจุบันแต่ยังไม่มี OUT
-    ใช้ชื่อ/หน่วยงานจาก IN record ล่าสุดของแต่ละคน
-    คืนจำนวนคนที่ checkout สำเร็จ
-
-    target_date: ถ้ารันก่อน 05:00 (ข้ามเที่ยงคืน) → ดูวานนี้ ไม่ใช่วันนี้
+    เวลา OUT (ลำดับความสำคัญ):
+      1. last_seen จาก live_state JSON  — verify ล่าสุดขณะ main.py รัน
+      2. check_time ของ IN record ใน DB — เมื่อสแกนรอบเดียว = เวลา verify ล่าสุด
+      3. CHECKOUT_TIME (22:00)          — fallback สุดท้าย
     """
     from datetime import time as _dtime
     target_date = now.date()
-    if now.time() < _dtime(5, 0):   # ข้ามเที่ยงคืน: รอบวานยังไม่ปิด
+    if now.time() < _dtime(5, 0):
         target_date = target_date - timedelta(days=1)
 
-    # เวลา checkout มาตรฐาน = CHECKOUT_TIME (22:00) ของ target_date
-    checkout_time = datetime.combine(target_date, _ACTIVE_WINDOWS[-1][1])
+    # fallback สุดท้าย = 22:00
+    fallback_time = datetime.combine(target_date, _ACTIVE_WINDOWS[-1][1])
+
+    # อ่าน last_seen ของแต่ละคนจาก live_state JSON
+    last_seen_map = _read_last_seen_map()
 
     count = 0
     try:
@@ -1076,7 +1106,8 @@ def _do_auto_checkout_all(now: datetime) -> int:
                 cur.execute("""
                     SELECT DISTINCT ON (a.per_id)
                         a.per_id, a.name, a.prename_th, a.per_name, a.per_surname,
-                        a.posname_th, a.organize_th, a.organize_id, a.camera_name
+                        a.posname_th, a.organize_th, a.organize_id, a.camera_name,
+                        a.check_time
                     FROM attendance_logs a
                     WHERE DATE(a.check_time) = %s
                       AND a.status = 'IN'
@@ -1089,7 +1120,14 @@ def _do_auto_checkout_all(now: datetime) -> int:
                 rows = cur.fetchall()
 
             for row in rows:
-                per_id, name, prename_th, per_name, per_surname, posname_th, organize_th, organize_id, camera_name = row
+                per_id, name, prename_th, per_name, per_surname, posname_th, organize_th, organize_id, camera_name, in_check_time = row
+                # ลำดับ: live_state last_seen → IN check_time → 22:00
+                if per_id in last_seen_map:
+                    checkout_time = last_seen_map[per_id]
+                elif in_check_time:
+                    checkout_time = in_check_time   # เวลาสแกนเข้า = verify ล่าสุดถ้าสแกนรอบเดียว
+                else:
+                    checkout_time = fallback_time
                 with conn.cursor() as cur:
                     cur.execute("""
                         INSERT INTO attendance_logs
@@ -1103,8 +1141,9 @@ def _do_auto_checkout_all(now: datetime) -> int:
                         posname_th, organize_th, organize_id,
                     ))
                 count += 1
+                print(f"  [{per_id}] OUT ({checkout_time.strftime('%H:%M:%S')})")
             conn.commit()
-        print(f"[AUTO-CHECKOUT] checkout {count} คน  checkout_time={checkout_time.strftime('%Y-%m-%d %H:%M')}")
+        print(f"[AUTO-CHECKOUT] checkout {count} คน")
     except Exception as e:
         print(f"[AUTO-CHECKOUT] error: {e}")
     return count

@@ -94,6 +94,16 @@ if _MOCK_JSON_PATH.exists():
         print(f"[MOCK] ไม่สามารถโหลด mock_persons.json: {_e}")
 
 
+# ─── Global TTL Cache — กัน external API flood ────────────────────────────────
+# fetch_person_by_pid จะถูกเรียกทุก 10 วิจาก attendance_today endpoint
+# cache hit → คืนข้อมูลเก่า, cache miss หรือ expired → fetch ใหม่และ print log
+import time as _time
+
+_PERSON_CACHE: dict = {}          # per_id → (result_or_None, timestamp)
+_CACHE_TTL_HIT  = 600             # 10 นาที สำหรับ fetch สำเร็จ
+_CACHE_TTL_MISS = 120             # 2 นาที สำหรับ fetch ไม่ได้ (retry ช้าลง)
+
+
 # ─── ดึงข้อมูลพนักงานจาก per_id ─────────────────────────────────────────────
 
 def fetch_person_by_pid(per_id: str) -> dict | None:
@@ -111,11 +121,21 @@ def fetch_person_by_pid(per_id: str) -> dict | None:
               organize_th, posname_th, ...
         None  ถ้าไม่พบทั้งใน API และ DB
     """
+    now_ts = _time.monotonic()
+    if per_id in _PERSON_CACHE:
+        cached_result, cached_ts = _PERSON_CACHE[per_id]
+        ttl = _CACHE_TTL_HIT if cached_result else _CACHE_TTL_MISS
+        if now_ts - cached_ts < ttl:
+            return cached_result   # cache hit — ไม่ fetch ซ้ำ
+
     if MOCK_MODE:
-        return _mock_fetch(per_id)
-    result = _real_fetch(per_id)
-    if not result:
-        result = _local_fetch(per_id)
+        result = _mock_fetch(per_id)
+    else:
+        result = _real_fetch(per_id)
+        if not result:
+            result = _local_fetch(per_id)
+
+    _PERSON_CACHE[per_id] = (result, now_ts)
     return result
 
 
@@ -123,12 +143,7 @@ def _mock_fetch(per_id: str) -> dict | None:
     result = _MOCK_PERSONS.get(per_id)
     if result:
         return result
-    # fallback to local DB for IDs not in mock dict
-    local = _local_fetch(per_id)
-    if local:
-        return local
-    print(f"[MOCK] ไม่พบ per_id={per_id} ใน mock database หรือ local DB")
-    return None
+    return _local_fetch(per_id)
 
 
 def _real_fetch(per_id: str) -> dict | None:
@@ -161,14 +176,12 @@ def _real_fetch(per_id: str) -> dict | None:
                         break
 
         if not person:
-            print(f"[API CLIENT] ไม่พบข้อมูล per_name ใน response: {str(body)[:200]}")
             return None
 
-        print(f"[API CLIENT] ดึงข้อมูลสำเร็จ per_id={per_id} per_name={person.get('per_name')}")
         return person
 
     except Exception as e:
-        print(f"[API CLIENT] fetch_person_by_pid({per_id}): {e}")
+        print(f"[API CLIENT] ERROR fetch({per_id}): {type(e).__name__}: {e}")
         return None
 
 
@@ -206,9 +219,7 @@ def _local_fetch(per_id: str) -> dict | None:
                 """, (per_id,))
                 row = cur.fetchone()
         if not row:
-            print(f"[API CLIENT] local_fetch: ไม่พบ per_id={per_id} ใน attendance DB")
             return None
-        print(f"[API CLIENT] local_fetch: ใช้ข้อมูลจาก DB สำหรับ per_id={per_id}")
         return {
             "per_id":         row[0],
             "name":           row[1] or "",
@@ -221,7 +232,7 @@ def _local_fetch(per_id: str) -> dict | None:
             "prenameth_abbr": _abbr_from_prename(row[2] or ""),
         }
     except Exception as e:
-        print(f"[API CLIENT] local_fetch({per_id}): {e}")
+        print(f"[API CLIENT] ERROR local_fetch({per_id}): {e}")
         return None
 
 

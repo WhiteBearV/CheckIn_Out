@@ -1,6 +1,6 @@
 ════════════════════════════════════════════════════════════════════════
   Command Log — Face Attendance System
-  อัปเดตล่าสุด : 22 เมษายน 2569
+  อัปเดตล่าสุด : 20 พฤษภาคม 2569
 ════════════════════════════════════════════════════════════════════════
 
 ■ Docker (วิธีหลัก — รันผ่าน Container)
@@ -79,6 +79,34 @@
   ดู log แบบ filter realtime:
     docker compose -f docker/docker-compose.yml logs -f api | grep --line-buffered "API CLIENT"
 
+  ล้าง Person Cache (หลังแก้ external API / mock data):
+    restart container หรือ restart api service
+
+
+■ Person API Cache (api_client.py)
+────────────────────────────────────────────────────────────────────────
+
+  MOCK_MODE=false → ดึงจาก External API
+  MOCK_MODE=true  → ดึงจาก _MOCK_PERSONS (โค้ด) หรือ mock_persons.json (ไฟล์)
+
+  Cache TTL:
+    สำเร็จ (hit)  → 10 นาที  (_CACHE_TTL_HIT  = 600)
+    ไม่พบ (miss)  →  2 นาที  (_CACHE_TTL_MISS = 120)
+
+  mock_persons.json — เพิ่มข้อมูลพนักงานโดยไม่แก้โค้ด:
+    [
+      {
+        "per_id": "1234567890123",
+        "prename_th": "นาย",
+        "per_name": "ชื่อ",
+        "per_surname": "นามสกุล",
+        "posname_th": "ตำแหน่ง",
+        "organize_th": "หน่วยงาน",
+        "prenameth_abbr": "นาย",
+        "per_picpath": ""
+      }
+    ]
+
 
 ■ Dashboard (Vue — build สำหรับ production)
 ────────────────────────────────────────────────────────────────────────
@@ -117,10 +145,13 @@
 ────────────────────────────────────────────────────────────────────────
 
   รัน API server:
-    uvicorn api:app --host 0.0.0.0 --port 8000
+    uvicorn api:app --host 0.0.0.0 --port 8000 --no-access-log
 
   รัน dev mode (auto-reload):
-    uvicorn api:app --host 0.0.0.0 --port 8000 --reload
+    uvicorn api:app --host 0.0.0.0 --port 8000 --reload --no-access-log
+
+  หมายเหตุ: --no-access-log ปิด HTTP request log ที่พิมพ์รัวทุก 2-10 วิ
+            (Dashboard poll /attendance/today ทุก 10s และ /session/live ทุก 2s)
 
 
 ■ Database (PostgreSQL)
