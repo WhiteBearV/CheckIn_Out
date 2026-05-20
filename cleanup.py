@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 cleanup.py — ลบไฟล์รูปเก่าอัตโนมัติ
-  - PicSAVE/  : เก็บ PICSAVE_DAYS วัน (default 90)
+  - PicSAVE/  : เก็บ PICSAVE_DAYS วัน (default 365)
   - live_snap*: เก็บ SNAP_DAYS วัน    (default 7)
 
 รัน: python cleanup.py

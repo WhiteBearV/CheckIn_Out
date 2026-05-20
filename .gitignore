@@ -12,6 +12,8 @@ venv/
 .env
 .env.*
 *.env
+# template ต้อง commit (ไม่มี secrets จริง)
+!.env.example
 
 # Python packaging
 build/
@@ -82,3 +84,8 @@ npm-debug.log*
 known_faces/
 Report/Day/
 fortestFn/
+
+# Diagnostic / soak test (local debugging, not for git)
+logs/
+debug_camera_outage.sh
+soak_test_48h.sh

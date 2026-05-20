@@ -117,8 +117,9 @@ class CameraConfigRequest(BaseModel):
 _lock        = threading.Lock()
 _cam_frames: dict[str, bytes | None]         = {}   # cam_id → latest JPEG
 _cam_counts: dict[str, int]                  = {}   # cam_id → frame counter
-_cam_frame_ts: dict[str, float]              = {}   # cam_id → last frame ts (epoch)
+_cam_frame_ts: dict[str, float]              = {}   # cam_id → last frame ts (monotonic)
 _cam_states: dict[str, dict]                 = {}   # cam_id → latest state
+_cam_state_ts: dict[str, float]              = {}   # cam_id → last state push ts (monotonic) — clock-change safe
 _cam_snaps:      dict[str, dict[str, bytes]] = {}   # cam_id → {name: face-crop jpeg}
 _cam_snaps_full: dict[str, dict[str, bytes]] = {}   # cam_id → {name: full-frame jpeg}
 
@@ -153,7 +154,7 @@ def push_frame(cam_id: str, frame, quality: int = 70):
     with _lock:
         _cam_frames[cam_id] = buf.tobytes()
         _cam_counts[cam_id] = _cam_counts.get(cam_id, 0) + 1
-        _cam_frame_ts[cam_id] = time.time()
+        _cam_frame_ts[cam_id] = time.monotonic()
 
 
 def push_state(cam_id: str, state: dict):
@@ -161,7 +162,8 @@ def push_state(cam_id: str, state: dict):
     global _last_cam_active_ts
     with _lock:
         _cam_states[cam_id] = state
-        _last_cam_active_ts = time.time()
+        _cam_state_ts[cam_id] = time.monotonic()
+        _last_cam_active_ts = time.monotonic()
 
 
 def push_snapshot(cam_id: str, name: str, crop, quality: int = 80):
@@ -996,7 +998,7 @@ async def push_frame_endpoint(cam_id: str, request: Request,
     with _lock:
         _cam_frames[cam_id] = body
         _cam_counts[cam_id] = _cam_counts.get(cam_id, 0) + 1
-        _cam_frame_ts[cam_id] = time.time()
+        _cam_frame_ts[cam_id] = time.monotonic()
     return {'ok': True, 'bytes': len(body)}
 
 
@@ -1011,7 +1013,8 @@ async def push_state_endpoint(cam_id: str, request: Request,
     global _last_cam_active_ts
     with _lock:
         _cam_states[cam_id] = state
-        _last_cam_active_ts = time.time()
+        _cam_state_ts[cam_id] = time.monotonic()
+        _last_cam_active_ts = time.monotonic()
     return {'ok': True}
 
 
@@ -1084,8 +1087,8 @@ _proc_disabled: dict[str, str] = {}  # key → reason (กันลูปไม�
 
 # ─── In-memory active-cam detection ──────────────────────────────────────────
 def _mem_active_cams(max_age: float = 5.0) -> list:
-    """กล้องที่ frame ล่าสุดมีอายุ < max_age วินาที"""
-    now = time.time()
+    """กล้องที่ frame ล่าสุดมีอายุ < max_age วินาที (monotonic — clock-change safe)"""
+    now = time.monotonic()
     with _lock:
         return [cid for cid, ts in _cam_frame_ts.items() if (now - ts) < max_age]
 
@@ -1135,9 +1138,12 @@ def _stop_api() -> None:
         p.terminate()
 
 def _face_state_fresh() -> bool:
-    now = time.time()
+    """กล้องอย่างน้อย 1 ตัว push state ภายใน 5 วิที่ผ่านมา (monotonic — clock-change safe)
+    ใช้ _cam_state_ts (set ที่ stream_server) แทน s['ts'] ที่ส่งมาจาก main.py
+    เพราะคนละ process → monotonic ไม่ตรงกัน"""
+    now = time.monotonic()
     with _lock:
-        return any((now - s.get('ts', 0)) < 5 for s in _cam_states.values())
+        return any((now - ts) < 5 for ts in _cam_state_ts.values())
 
 def _face_running() -> bool:
     return (_proc_alive('main') or _face_state_fresh()
@@ -1156,7 +1162,7 @@ def _spawn_main_proc(cam_ids: list = None) -> subprocess.Popen:
         cwd=str(_ROOT),
         env=env,
     )
-    _proc_last_spawn['main'] = time.time()
+    _proc_last_spawn['main'] = time.monotonic()
     return p
 
 
@@ -1166,13 +1172,14 @@ def _spawn_api_proc() -> subprocess.Popen:
          '--host', '0.0.0.0', '--port', '8000'],
         cwd=str(_ROOT),
     )
-    _proc_last_spawn['api'] = time.time()
+    _proc_last_spawn['api'] = time.monotonic()
     return p
 
 
 def _record_restart(key: str) -> bool:
-    """เพิ่ม restart timestamp; return False ถ้าเกิน rate limit (ห้าม respawn)"""
-    now = time.time()
+    """เพิ่ม restart timestamp; return False ถ้าเกิน rate limit (ห้าม respawn)
+    ใช้ monotonic — clock-change safe"""
+    now = time.monotonic()
     log = _proc_restart_log.setdefault(key, [])
     log.append(now)
     # ตัด timestamp ที่หลุด window
@@ -1202,7 +1209,7 @@ def _watchdog_loop():
 
         # ── auto-stop เมื่อไม่มีกล้องรันเลยนาน _NO_CAM_AUTOSTOP_SECS วิ ──────
         if (_last_cam_active_ts > 0
-                and (time.time() - _last_cam_active_ts) > _NO_CAM_AUTOSTOP_SECS
+                and (time.monotonic() - _last_cam_active_ts) > _NO_CAM_AUTOSTOP_SECS
                 and not _face_state_fresh()):
             print('[WATCHDOG] ไม่มีกล้องรันเลย → auto-stop ระบบ')
             _user_intent_started = False
@@ -1216,6 +1223,7 @@ def _watchdog_loop():
                 _cam_counts.clear()
                 _cam_frame_ts.clear()
                 _cam_states.clear()
+                _cam_state_ts.clear()
             _notify.system_stop(reason="no_cameras")
             continue
 
@@ -1224,7 +1232,7 @@ def _watchdog_loop():
             should_run = _start_fn is None  # spawn mode (standalone)
             if should_run and 'main' in _procs:
                 p = _procs['main']
-                age = time.time() - _proc_last_spawn.get('main', 0)
+                age = time.monotonic() - _proc_last_spawn.get('main', 0)
                 if p.poll() is not None and age > _watchdog_grace_after_start:
                     code = p.returncode
                     if code == 0 and _user_intent_started:
@@ -1238,6 +1246,7 @@ def _watchdog_loop():
                             _cam_counts.clear()
                             _cam_frame_ts.clear()
                             _cam_states.clear()
+                            _cam_state_ts.clear()
                         _notify.system_stop(reason="no_cameras")
                     elif _user_intent_started:
                         # crash exit + user ยังต้องการ Start → respawn
@@ -1255,7 +1264,7 @@ def _watchdog_loop():
         # ── api.py ───────────────────────────────────────────────────────────
         if 'api' not in _proc_disabled and 'api' in _procs:
             p = _procs['api']
-            age = time.time() - _proc_last_spawn.get('api', 0)
+            age = time.monotonic() - _proc_last_spawn.get('api', 0)
             if p.poll() is not None and age > _watchdog_grace_after_start:
                 # ก่อน respawn เช็คว่ามี service อื่นมายึด port 8000 หรือยัง
                 if _api_alive():
@@ -1284,8 +1293,8 @@ def _watchdog_start():
 
 @app.get('/system/watchdog', dependencies=[Depends(get_current_user)])
 async def system_watchdog_status():
-    """ดูสถานะ watchdog + restart history"""
-    now = time.time()
+    """ดูสถานะ watchdog + restart history (age คำนวณจาก monotonic)"""
+    now = time.monotonic()
     return {
         'enabled': _watchdog_thread is not None and _watchdog_thread.is_alive(),
         'user_intent_started': _user_intent_started,
@@ -1479,6 +1488,7 @@ async def system_stop(request: Request, user: dict = Depends(require_admin)):
         _cam_counts.clear()
         _cam_frame_ts.clear()
         _cam_states.clear()
+        _cam_state_ts.clear()
     # เก็บกวาดไฟล์ legacy ที่อาจตกค้างจาก version เก่า (ครั้งเดียว)
     legacy = 0
     for pattern in ('live_frame_*.jpg', 'live_state_*.json',

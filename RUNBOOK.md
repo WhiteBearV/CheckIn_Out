@@ -15,10 +15,29 @@
 8. [แก้ปัญหาที่พบบ่อย](#8-แก้ปัญหาที่พบบ่อย)
 9. [Scheduled Tasks](#9-scheduled-tasks)
 10. [Port Reference](#10-port-reference)
+11. [Production — nginx + HTTPS](#11-production--nginx--https)
+12. [DB Schema Migrations](#12-db-schema-migrations)
+13. [Network Requirements (สำหรับทีม Network)](#13-network-requirements-สำหรับทีม-network)
 
 ---
 
 ## 1. ภาพรวมระบบ
+
+### 1.1 System Requirements
+
+| Component | Minimum | Recommended | หมายเหตุ |
+|---|---|---|---|
+| **OS** | Ubuntu 22.04 LTS | Ubuntu 24.04 LTS | Debian 12+ ก็ใช้ได้ |
+| **Python** | 3.10 | 3.12 | ต้องมี `python3-venv` |
+| **PostgreSQL** | 14 | 16 | สำหรับ JSONB + indexes |
+| **Node.js** | 18 LTS | 20 LTS | สำหรับ build frontend (ใช้ครั้งเดียว) |
+| **CPU** | 4 cores | 8 cores | x86_64 |
+| **RAM** | 8 GB | 16 GB+ | InsightFace ใช้ ~2 GB/cam |
+| **GPU** | (CPU mode ได้) | NVIDIA + CUDA 11/12 | เร็วกว่า CPU 5-10x |
+| **Disk** | 20 GB | 100 GB+ SSD | PicSAVE เก็บ 365 วัน → โต ~10-50 GB/ปี |
+| **Network** | 100 Mbps | 1 Gbps | RTSP cam 1080p ใช้ ~4 Mbps/ตัว |
+
+### 1.2 Architecture
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -41,6 +60,20 @@
 | `facereg-cleanup.timer` | ลบรูปเก่า ทุกคืน 02:00 |
 | `facereg-backup.timer` | backup PostgreSQL ทุกคืน 03:00 |
 
+### 1.3 Dependencies ที่ต้อง apt install ก่อน
+
+```bash
+sudo apt update && sudo apt install -y \
+    python3 python3-venv python3-pip \
+    postgresql postgresql-contrib \
+    nginx certbot python3-certbot-nginx \
+    nodejs npm \
+    ffmpeg libsm6 libxext6 libgl1 \
+    git curl
+```
+
+> **GPU mode:** ติดตั้ง NVIDIA driver + CUDA toolkit แยกตาม OS — ดู https://developer.nvidia.com/cuda-downloads
+
 ---
 
 ## 2. เริ่ม / หยุด ระบบ
@@ -51,6 +84,9 @@
 3. กดปุ่ม **START** เพื่อเริ่มระบบ / **STOP** เพื่อหยุด
 
 ### วิธี systemd (production)
+
+> ติดตั้ง systemd services ครั้งแรกด้วย `sudo bash deploy/install_service.sh` (ดู [ม.11.0](#110-ติดตั้ง-systemd-services-ก่อนทำอย่างอื่น))
+
 ```bash
 # ดูสถานะ
 sudo systemctl status facereg-stream
@@ -294,27 +330,109 @@ venv/bin/python backup_db.py
 
 ใช้ nginx เป็น reverse proxy เปิดจาก internet หรือ local network (แนะนำสำหรับ production)
 
-### ติดตั้ง nginx + ใช้ config ที่เตรียมไว้
+### 11.0 ติดตั้ง systemd services (ก่อนทำอย่างอื่น)
+
+ใช้ `install_service.sh` ติดตั้ง systemd units ครบทั้ง 5 ตัวในคำสั่งเดียว:
+- `facereg-stream.service` — main entrypoint (FastAPI + spawn main.py/api.py)
+- `facereg-backup.service` + `.timer` — backup DB ทุกคืน 03:00
+- `facereg-cleanup.service` + `.timer` — ลบรูปเก่าทุกคืน 02:00
+- `journald-facereg.conf` — log rotation (1 GB / 30 วัน)
+
+```bash
+# วิธีปกติ — auto-detect path ของ repo + user ปัจจุบัน
+sudo bash deploy/install_service.sh
+```
+
+Script จะ:
+1. ตรวจว่ามี `venv/bin/python` พร้อม → ถ้าไม่มีจะ error บอกให้สร้าง venv ก่อน
+2. ตรวจว่า user มีอยู่จริงใน system
+3. ใช้ `sed` substitute hardcoded path (`/home/maeb/internship_work/FaceReg`) + user (`maeb`) ในไฟล์ `.service` ทุกตัว → ใช้ค่าจริงตอน install
+4. Copy ไป `/etc/systemd/system/` + `chmod 644`
+5. `systemctl daemon-reload` + `enable --now`
+6. Print สรุปการใช้งาน
+
+#### Override path / user (สำหรับ custom location)
+
+ถ้าติดตั้งที่ path อื่น หรือต้องการให้ service รันด้วย user เฉพาะ:
+
+```bash
+# ตัวอย่าง: deploy ที่ /opt/facereg ใช้ user facereg
+sudo FACEREG_DIR=/opt/facereg FACEREG_USER=facereg \
+     bash deploy/install_service.sh
+```
+
+**Env vars ที่ override ได้:**
+
+| Variable | Default | คำอธิบาย |
+|---|---|---|
+| `FACEREG_DIR` | auto-detect (script's parent) | path เต็มของ repo บน server |
+| `FACEREG_USER` | `$SUDO_USER` | user ที่ service จะรันด้วย (group = primary group ของ user) |
+
+#### หลัง install เสร็จ
+
+```bash
+# 1. ตรวจสถานะ
+sudo systemctl status facereg-stream
+systemctl list-timers --no-pager | grep facereg
+
+# 2. ตั้ง env vars สำคัญ (อ่าน .env.example ก่อน)
+sudo systemctl edit facereg-stream
+# เพิ่ม:
+#   [Service]
+#   Environment=INTERNAL_PUSH_TOKEN=<random_64_hex>
+#   Environment=JWT_SECRET=<random_64_hex>
+#   Environment=CORS_ORIGINS=https://your-domain.com
+#   Environment=TELEGRAM_BOT_TOKEN=<optional>
+
+# 3. apply changes
+sudo systemctl daemon-reload
+sudo systemctl restart facereg-stream
+
+# 4. ดู log ทันที
+journalctl -u facereg-stream -f
+```
+
+#### Uninstall (ถ้าต้องการลบ)
+```bash
+sudo systemctl disable --now facereg-stream facereg-backup.timer facereg-cleanup.timer
+sudo rm /etc/systemd/system/facereg-{stream,backup,cleanup}.{service,timer}
+sudo rm /etc/systemd/journald.conf.d/facereg.conf
+sudo systemctl daemon-reload
+sudo systemctl restart systemd-journald
+```
+
+---
+
+### 11.1 ติดตั้ง nginx + ใช้ config ที่เตรียมไว้
+
+⚠ **สำคัญ:** `nginx-facereg.conf` มี `root /home/maeb/internship_work/FaceReg/front_end/dist;` hardcoded
+ต้อง substitute เป็น path จริงของ repo บน server ก่อน
+
 ```bash
 sudo apt install nginx
 
-# copy config
-sudo cp deploy/nginx-facereg.conf /etc/nginx/sites-available/facereg
-sudo ln -s /etc/nginx/sites-available/facereg /etc/nginx/sites-enabled/facereg
+# 1. substitute path ให้ตรงกับ repo บน server
+FACEREG_DIR="/path/to/FaceReg"   # ← แก้ตรงนี้ให้ตรงกับของจริง
+sudo sed "s|/home/maeb/internship_work/FaceReg|$FACEREG_DIR|g" \
+     deploy/nginx-facereg.conf > /tmp/facereg.conf
+
+# 2. copy ไป sites-available
+sudo mv /tmp/facereg.conf /etc/nginx/sites-available/facereg
+sudo ln -sf /etc/nginx/sites-available/facereg /etc/nginx/sites-enabled/facereg
 sudo rm -f /etc/nginx/sites-enabled/default
 
-# ทดสอบ config + โหลดใหม่
+# 3. ทดสอบ config + โหลดใหม่
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-### เปิด HTTPS ด้วย Let's Encrypt (ถ้ามี domain และเชื่อมต่อ internet)
+### 11.2 เปิด HTTPS ด้วย Let's Encrypt (ถ้ามี domain และเชื่อมต่อ internet)
 ```bash
 sudo apt install certbot python3-certbot-nginx
 sudo certbot --nginx -d <your-domain>
 # certbot จะแก้ nginx config ให้อัตโนมัติ + ตั้ง cron ต่ออายุ cert
 ```
 
-### เปลี่ยน CORS_ORIGINS หลังติดตั้ง nginx
+### 11.3 เปลี่ยน CORS_ORIGINS หลังติดตั้ง nginx
 ```bash
 # แก้ใน /etc/systemd/system/facereg-stream.service
 # เพิ่ม: Environment=CORS_ORIGINS=http://192.168.1.x,https://your-domain.com
@@ -336,4 +454,103 @@ sudo -u postgres psql -c "CREATE DATABASE face_attendance OWNER face_user;"
 sudo -u postgres psql -d face_attendance -f migrations/setup_db.sql
 ```
 
-*อัปเดตล่าสุด: 2026-05-18*
+---
+
+## 13. Network Requirements (สำหรับทีม Network)
+
+**Section นี้สำหรับทีม Network/IT** ที่จะ deploy ระบบ — บอกว่าระบบต้องการ network connectivity แบบไหน
+
+### 13.1 IP Camera Reachability
+
+FaceReg server ต้องเชื่อมต่อ **RTSP stream** ของกล้องได้ตรง ๆ:
+
+| Protocol | Port | Direction | หมายเหตุ |
+|---|---|---|---|
+| RTSP (TCP) | **554** | server → camera | ระบบใช้ TCP transport (เสถียรกว่า UDP) |
+| ICMP (ping) | — | server → camera | ใช้ debug reachability |
+
+**Code:** `camera.py` set `OPENCV_FFMPEG_CAPTURE_OPTIONS=rtsp_transport;tcp` อัตโนมัติ
+
+### 13.2 กรณีกล้องอยู่คนละ subnet/VLAN
+
+ระบบ **ไม่จัดการ routing เอง** — ทีม Network ต้องจัดทางใดทางหนึ่ง:
+
+| วิธี | เหมาะกับ | ข้อควรระวัง |
+|---|---|---|
+| **Inter-VLAN routing + firewall rule** | กล้อง+server อาคารเดียวกัน VLAN ต่าง | ต้อง allow `server → camera_ip:554/tcp` |
+| **Site-to-site VPN** | กล้องคนละสาขา | latency ต้อง < 100ms, bandwidth ต้องพอ |
+| **Tailscale/WireGuard subnet router** | dev/PoC, ไม่มี VPN องค์กร | ต้องมี node อยู่ใน camera network 24/7 |
+| **Dedicated NIC** บน server | physical camera VLAN trunk | ตั้ง static route แยก subnet |
+
+### 13.3 Bandwidth Requirements
+
+| Resolution | Codec | Bandwidth/cam |
+|---|---|---|
+| 720p @ 15fps | H.264 | ~1-2 Mbps |
+| 1080p @ 15fps | H.264 | ~3-4 Mbps |
+| 1080p @ 30fps | H.264 | ~6-8 Mbps |
+| 4K @ 15fps | H.265 | ~8-12 Mbps |
+
+**คำนวณรวม:** N กล้อง × bandwidth/cam = bandwidth ขั้นต่ำที่ link ระหว่าง server กับ camera network ต้องรองรับ
+
+### 13.4 Pre-deploy Network Test
+
+**ทีม Network ทำก่อน install FaceReg** (ทดสอบจาก server จริง):
+
+```bash
+# 1. ping ถึงกล้องหรือไม่
+ping -c 5 <camera_ip>
+
+# 2. port 554 เปิดหรือไม่
+nc -zv <camera_ip> 554
+
+# 3. RTSP stream ดึงได้จริงหรือไม่ (ต้องมี ffplay หรือ vlc)
+ffplay -rtsp_transport tcp "rtsp://<user>:<pass>@<camera_ip>:554/<path>"
+
+# 4. วัด latency / packet loss นาน 1 นาที
+ping -c 60 <camera_ip> | tail -3
+```
+
+**Pass criteria:**
+- ping loss < 1%
+- latency < 50ms (LAN) / < 150ms (WAN)
+- RTSP stream เปิดได้และเล่นต่อเนื่อง > 30 วินาที โดยไม่ขาด
+
+### 13.5 อื่น ๆ ที่ network team อาจต้องเปิด
+
+| Service | Port | Direction | กรณี |
+|---|---|---|---|
+| HTTP | 80 | client → server | nginx redirect → 443 |
+| HTTPS | 443 | client → server | Web UI หลัก (production) |
+| HTTP (dev) | 8001 | client → server | stream_server (dev only) |
+| HTTP (dev) | 8000 | client → server | api.py (dev only) |
+| PostgreSQL | 5432 | server → DB | ถ้า PG อยู่คนละเครื่อง |
+| Telegram API | 443 | server → api.telegram.org | system notify (optional) |
+| NTP | 123 | server → NTP server | sync system clock |
+
+### 13.6 DNS / Static IP
+
+- **Server IP:** แนะนำ static (กล้องบางตัว whitelist client IP)
+- **กล้อง IP:** static หรือ DHCP reservation (อย่าให้เปลี่ยน — cameras.json hardcode IP)
+- **Domain:** ถ้าใช้ HTTPS ต้องมี domain + DNS A record ชี้ public IP
+
+### 13.7 Troubleshoot reference
+
+ถ้าผู้ดูแลรายงาน "กล้องเปิดไม่ได้" และเป็นกล้อง IP:
+
+```bash
+# ดู log
+grep "CAM ERROR\|CAM\]" /var/log/facereg/*.log | tail -20
+
+# common patterns:
+# "Stream timeout triggered after 30000.000 ms"  → network unreachable / port block
+# "Connection refused"                            → port 554 ปิด / กล้องไม่รัน RTSP
+# "401 Unauthorized"                              → username/password กล้องผิด
+# "Connection reset by peer"                      → กล้อง reboot / VPN drop
+```
+
+ดู `8.1 ระบบไม่เริ่ม / กล้องไม่ขึ้น` สำหรับ troubleshoot ทั่วไป
+
+---
+
+*อัปเดตล่าสุด: 2026-05-21 (เพิ่ม Network Requirements section 13)*

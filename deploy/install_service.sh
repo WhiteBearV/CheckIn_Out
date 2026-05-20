@@ -2,6 +2,13 @@
 # ─────────────────────────────────────────────────────────────────────
 # ติดตั้ง systemd services + timers ทั้งหมดสำหรับ FaceReg
 # รัน:  sudo bash deploy/install_service.sh
+#
+# Script นี้จะ substitute path/user อัตโนมัติให้ตรงกับ environment ปัจจุบัน:
+#   - FACEREG_DIR  = path ของ repo (autodetect จาก script location)
+#   - FACEREG_USER = user ที่จะ own service (default = invoker user)
+#
+# Override ได้ด้วย env var:
+#   sudo FACEREG_DIR=/opt/facereg FACEREG_USER=facereg bash deploy/install_service.sh
 # ─────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -10,20 +17,57 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
+# ─── Auto-detect paths / user ────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_DIR="$(dirname "$SCRIPT_DIR")"   # ../  (repo root)
+DEFAULT_USER="${SUDO_USER:-$(whoami)}"
+
+FACEREG_DIR="${FACEREG_DIR:-$DEFAULT_DIR}"
+FACEREG_USER="${FACEREG_USER:-$DEFAULT_USER}"
+
+# Sanity check
+if [[ ! -d "$FACEREG_DIR" ]]; then
+    echo "[ERR] FACEREG_DIR ไม่มีจริง: $FACEREG_DIR"
+    exit 1
+fi
+if [[ ! -x "$FACEREG_DIR/venv/bin/python" ]]; then
+    echo "[ERR] ไม่มี $FACEREG_DIR/venv/bin/python — ติดตั้ง venv ก่อน:"
+    echo "      cd $FACEREG_DIR && python3 -m venv venv && venv/bin/pip install -r requirements.txt"
+    exit 1
+fi
+if ! id "$FACEREG_USER" &>/dev/null; then
+    echo "[ERR] user '$FACEREG_USER' ไม่มีจริง"
+    exit 1
+fi
+FACEREG_GROUP="$(id -gn "$FACEREG_USER")"
+
+echo "════════════════════════════════════════════════════════════════"
+echo " FaceReg systemd installer"
+echo "════════════════════════════════════════════════════════════════"
+echo "  Repo path : $FACEREG_DIR"
+echo "  Run as    : $FACEREG_USER:$FACEREG_GROUP"
+echo "════════════════════════════════════════════════════════════════"
+echo ""
+
 SYSTEMD_DIR="/etc/systemd/system"
 
-# ─── helper ───────────────────────────────────────────────────────────
+# ─── helper: install unit พร้อม substitute placeholder ───────────────
 install_unit() {
     local name="$1"
     local src="$SCRIPT_DIR/${name}"
+    local dst="$SYSTEMD_DIR/${name}"
     if [[ ! -f "$src" ]]; then
         echo "[SKIP] ไม่พบ $src"
         return
     fi
-    cp "$src" "$SYSTEMD_DIR/${name}"
-    chmod 644 "$SYSTEMD_DIR/${name}"
-    echo "  → $SYSTEMD_DIR/${name}"
+    # แทนที่ hardcoded path/user ด้วยค่าจริงตอน install
+    sed \
+        -e "s|User=maeb|User=$FACEREG_USER|g" \
+        -e "s|Group=maeb|Group=$FACEREG_GROUP|g" \
+        -e "s|/home/maeb/internship_work/FaceReg|$FACEREG_DIR|g" \
+        "$src" > "$dst"
+    chmod 644 "$dst"
+    echo "  → $dst"
 }
 
 # ─── 1. stream server (main process) ─────────────────────────────────
@@ -79,5 +123,9 @@ BACKUP / CLEANUP TIMERS
 หน้าเว็บ:        http://localhost:8001
 Admin panel:     http://localhost:8001/admin
 Watchdog status: http://localhost:8001/system/watchdog
+
+NOTE: ถ้ายังไม่ตั้ง env ต้องแก้ /etc/systemd/system/facereg-stream.service
+เพิ่ม Environment=... ตามค่าใน $FACEREG_DIR/.env.example
+แล้วรัน: sudo systemctl daemon-reload && sudo systemctl restart facereg-stream
 ────────────────────────────────────────────────────────
 EOF
