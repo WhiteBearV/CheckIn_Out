@@ -417,3 +417,118 @@
              HistoryView
 
 ════════════════════════════════════════════════════════════════════════
+
+════════════════════════════════════════════════════════════════════════
+  รายงานประจำวัน — วันพุธที่ 20 พฤษภาคม 2569
+════════════════════════════════════════════════════════════════════════
+
+■ งานที่ดำเนินการในวันนี้
+────────────────────────────────────────────────────────────────────────
+
+  1. แก้บัก Dashboard ค้างแสดงสถานะ IN หลัง main.py หยุดทำงาน
+     - เพิ่ม watch(liveStale) ใน DashboardView.vue ให้เรียก refresh()
+       ดึงข้อมูลจาก DB ทันทีเมื่อ live_state.json ไม่ได้รับการอัปเดต
+       นานเกิน 5 วินาที (main.py หยุด)
+     - ผล: หน้า Dashboard แสดงสถานะที่ถูกต้องจาก DB แทน live cache
+
+  2. แก้กล้อง MacBook ไม่ยอมปิดหลัง main.py หยุด
+     - เพิ่ม signal.signal(SIGINT, _sigterm) ให้ Ctrl+C ใช้ flag
+       _stop_requested แทนการ raise KeyboardInterrupt
+     - ปรับ camera.py release() ให้ idempotent: check _stopped flag,
+       join thread (timeout 3s) ก่อน release cap ครั้งสุดท้าย
+     - เพิ่ม cv2.waitKey(1) หลัง destroyAllWindows() เพื่อ flush
+       pending camera events บน macOS
+     - เพิ่ม atexit.unregister(cam.release) กัน double-release
+
+  3. แก้ PersonCard ไม่แสดงรูป/ชื่อ/ตำแหน่ง/หน่วยงาน
+     - เพิ่ม watch(photoUrl) ใน PersonCard.vue reset photoError
+       เมื่อ URL เปลี่ยน (กัน error state ค้างจากรูปเก่า)
+     - แก้บัก _to_update ใน api.py ที่ตรวจ u[0] (name) แทน u[-1]
+       (per_id) ทำให้ skip การ update ข้อมูลคนที่ควร update
+     - เปลี่ยน MOCK_MODE=false ใน .env เพื่อใช้ External API จริง
+       พร้อมตั้งค่า EXTERNAL_API_URL และ EXTERNAL_API_KEY
+
+  4. เพิ่ม Global TTL Cache ใน api_client.py และลด Log Spam
+     - เพิ่ม _PERSON_CACHE dict พร้อม TTL 600s (hit) / 120s (miss)
+       ป้องกัน External API ถูกเรียกซ้ำจาก /attendance/today
+       ที่ poll ทุก 10 วินาที
+     - ลบ print verbose ออกจาก _real_fetch, _local_fetch, _mock_fetch
+       เหลือเฉพาะ error log
+     - เพิ่ม --no-access-log ใน uvicorn command ปิด HTTP access log
+       ที่พิมพ์รัวทุก 2-10 วินาทีจาก Dashboard polling
+
+  5. เพิ่มระบบโหลด mock_persons.json
+     - เพิ่มการโหลด mock_persons.json อัตโนมัติเมื่อ startup
+       รองรับทั้ง format list และ dict keyed by per_id
+     - Merge เข้า _MOCK_PERSONS (override ค่าในโค้ดด้วยไฟล์)
+       ทำให้เพิ่มข้อมูลพนักงานได้โดยไม่แก้โค้ด
+
+  6. แก้เวลา OUT แสดงผิด (22:00 แทนเวลา Verify ล่าสุด)
+     - แก้ session_manager.py do_checkout() ให้ใช้ person.last_seen
+       เป็นเวลา OUT แทน ref_time
+     - แก้ api.py _do_auto_checkout_all() เพิ่ม priority chain:
+       (1) last_seen จาก live_state*.json
+       (2) check_time จาก IN record ใน DB
+       (3) fallback 22:00
+     - เพิ่ม _read_last_seen_map() อ่าน last_seen จากทุก
+       live_state*.json ใน live/ directory
+     - ลบ safety checkout ตอน main.py exit — ให้ scheduler
+       จัดการเท่านั้น และเก็บ last_seen ไว้ใน live_state.json
+
+■ สรุปไฟล์ที่สร้าง/แก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  แก้ไข:
+    dashboard/src/views/DashboardView.vue  — เพิ่ม watch(liveStale)
+    dashboard/src/components/PersonCard.vue — เพิ่ม watch(photoUrl)
+    main.py                                — SIGINT handler, ลบ checkout on exit
+    camera.py                              — release() idempotent + thread join
+    session_manager.py                     — do_checkout ใช้ last_seen
+    api.py                                 — แก้ _to_update bug, เพิ่ม _read_last_seen_map,
+                                             แก้ checkout_time priority
+    api_client.py                          — Global TTL Cache, mock_persons.json loading
+    .env                                   — MOCK_MODE=false, ตั้งค่า External API
+    D_CommandLog.txt                       — เพิ่ม section Person API Cache,
+                                             อัปเดต uvicorn command --no-access-log
+
+■ เทคโนโลยีที่ใช้
+────────────────────────────────────────────────────────────────────────
+
+  - Vue 3 Composition API: watch, ref, computed, onUnmounted
+  - Python signal: SIGINT/SIGTERM → graceful shutdown flag
+  - OpenCV: destroyAllWindows + waitKey(1) สำหรับ macOS camera flush
+  - Python threading: thread.join(timeout) สำหรับ safe camera release
+  - PostgreSQL DISTINCT ON: ดึง latest IN record per person
+  - Python TTL Cache: dict + time.monotonic() ป้องกัน API flood
+  - FastAPI: uvicorn --no-access-log ลด HTTP log spam
+
+■ ปัญหาที่พบและแนวทางแก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  ปัญหา : กล้อง MacBook ไม่ปิดหลัง Ctrl+C
+  วิเคราะห์: KeyboardInterrupt ข้าม cleanup code ทำให้ OpenCV window
+             และ camera capture ยังค้างอยู่ใน macOS event loop
+  แก้ไข : แปลง SIGINT เป็น flag _stop_requested ให้ main loop exit
+             อย่าง graceful และรัน cleanup ทุกขั้นตอน
+
+  ปัญหา : PersonCard แสดงเฉพาะตัวอักษรแทนรูปและข้อมูลพนักงาน
+  วิเคราะห์: (1) photoError ไม่ reset เมื่อ URL เปลี่ยน
+             (2) _to_update ตรวจ per_id ผิด field (u[0] แทน u[-1])
+             (3) MOCK_MODE=true ทำให้ไม่ดึงข้อมูลจาก External API
+  แก้ไข : แก้ทั้ง 3 จุด และเปลี่ยนมาใช้ External API จริง
+
+  ปัญหา : Terminal ส่งค่ารัวเมื่อรัน api.py server
+  วิเคราะห์: /attendance/today poll ทุก 10s และ /session/live poll
+             ทุก 2s ทำให้ fetch_person_by_pid และ uvicorn access log
+             print ทุก request
+  แก้ไข : เพิ่ม TTL Cache ป้องกัน fetch ซ้ำ + ลบ verbose print
+             + เพิ่ม --no-access-log ใน uvicorn
+
+  ปัญหา : OUT time แสดง 22:00 แทนเวลา Verify ล่าสุด
+  วิเคราะห์: do_checkout ใช้ ref_time (เวลา trigger) แทน last_seen
+             (เวลา verify จริง); auto-checkout ใช้ fallback 22:00
+             เมื่อไม่มีข้อมูลจาก live_state
+  แก้ไข : เพิ่ม priority chain: last_seen → IN check_time → 22:00
+             และแก้ do_checkout() ให้ใช้ person.last_seen เสมอ
+
+════════════════════════════════════════════════════════════════════════
