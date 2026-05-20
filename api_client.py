@@ -11,9 +11,11 @@ api_client.py — HTTP client + mock สำหรับ Face Attendance
 """
 
 import os
+import json
 import requests
 from datetime import datetime
 from dotenv import load_dotenv
+from pathlib import Path
 
 load_dotenv()
 
@@ -27,6 +29,10 @@ EXTERNAL_API_URL = os.environ.get("EXTERNAL_API_URL", "")
 EXTERNAL_API_KEY = os.environ.get("EXTERNAL_API_KEY", "")
 
 # ─────────────────────────────────────────────────────────────────────────────
+# โหลด mock_persons.json (ถ้ามี) — เพิ่มคนได้โดยไม่ต้องแก้โค้ด
+# format: list of dict  [{ "per_id": "...", "per_name": "...", ... }]
+# หรือ dict keyed by per_id  { "per_id": { ... }, ... }
+_MOCK_JSON_PATH = Path(__file__).parent / "mock_persons.json"
 
 # ── Mock database (format เหมือน external API เป๊ะ) ────────────────────────
 # เพิ่ม per_id ของทุกคนที่มีโฟลเดอร์ใน known_faces/ ตรงนี้
@@ -73,9 +79,19 @@ _MOCK_PERSONS: dict[str, dict] = {
         "birthDate":      "1246-02-29",
         "per_picpath":    "",
     },
-    # เพิ่มคนอื่นๆ ตามโฟลเดอร์ใน known_faces/ ได้เลย เช่น:
-    # "1234567890123": { "per_id": "1234567890123", "per_name": "สมชาย", ... },
+    # เพิ่มคนอื่นๆ ใน mock_persons.json แทนการแก้โค้ดตรงนี้
 }
+
+# merge จาก mock_persons.json (ถ้ามี) — override ค่าในโค้ดด้วยข้อมูลในไฟล์
+if _MOCK_JSON_PATH.exists():
+    try:
+        _json_data = json.loads(_MOCK_JSON_PATH.read_text(encoding="utf-8"))
+        if isinstance(_json_data, list):
+            _json_data = {p["per_id"]: p for p in _json_data if p.get("per_id")}
+        _MOCK_PERSONS.update(_json_data)
+        print(f"[MOCK] โหลด mock_persons.json: {len(_json_data)} คน (รวม {len(_MOCK_PERSONS)} คนทั้งหมด)")
+    except Exception as _e:
+        print(f"[MOCK] ไม่สามารถโหลด mock_persons.json: {_e}")
 
 
 # ─── ดึงข้อมูลพนักงานจาก per_id ─────────────────────────────────────────────

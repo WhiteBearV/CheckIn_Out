@@ -40,6 +40,11 @@ app = FastAPI(title="Face Attendance API", version="2.0.0")
 @app.on_event("startup")
 async def _startup():
     _asyncio.create_task(_mode_watcher_task())
+    # ถ้า api.py เริ่ม/restart ในช่วงนอก active window (หลัง 22:00 หรือก่อน 05:00)
+    # ให้ checkout ทันที เพราะ scheduler ตรวจแค่ transition จะ miss ถ้า restart หลัง 22:00
+    _now = datetime.now()
+    if not _api_in_active_window(_now.time()):
+        _do_auto_checkout_all(_now)
 
 # ── Active Windows (อ่านจาก config.py เหมือน main.py) ────────────────────────
 try:
@@ -743,7 +748,7 @@ def attendance_today(_: dict = Depends(_require_perm("attendance.view"))):
                 rec["organize_th"] = p.get("organize_th", "") or rec["organize_th"]
                 rec["organize_id"] = p.get("organize_id", "") or rec["organize_id"]
                 # mark ให้ update DB ครั้งเดียวต่อ per_id (ไม่ update ซ้ำทุก record)
-                if pid not in {u[0] for u in _to_update}:
+                if pid not in {u[-1] for u in _to_update}:
                     _to_update.append((
                         rec["name"], rec["prename_th"], rec["per_name"],
                         rec["per_surname"], rec["posname_th"],
@@ -1050,10 +1055,20 @@ def system_mode():
 
 def _do_auto_checkout_all(now: datetime) -> int:
     """
-    checkout ทุกคนที่มี IN วันนี้แต่ยังไม่มี OUT
+    checkout ทุกคนที่มี IN ในวันทำงานปัจจุบันแต่ยังไม่มี OUT
     ใช้ชื่อ/หน่วยงานจาก IN record ล่าสุดของแต่ละคน
     คืนจำนวนคนที่ checkout สำเร็จ
+
+    target_date: ถ้ารันก่อน 05:00 (ข้ามเที่ยงคืน) → ดูวานนี้ ไม่ใช่วันนี้
     """
+    from datetime import time as _dtime
+    target_date = now.date()
+    if now.time() < _dtime(5, 0):   # ข้ามเที่ยงคืน: รอบวานยังไม่ปิด
+        target_date = target_date - timedelta(days=1)
+
+    # เวลา checkout มาตรฐาน = CHECKOUT_TIME (22:00) ของ target_date
+    checkout_time = datetime.combine(target_date, _ACTIVE_WINDOWS[-1][1])
+
     count = 0
     try:
         with get_connection() as conn:
@@ -1063,14 +1078,14 @@ def _do_auto_checkout_all(now: datetime) -> int:
                         a.per_id, a.name, a.prename_th, a.per_name, a.per_surname,
                         a.posname_th, a.organize_th, a.organize_id, a.camera_name
                     FROM attendance_logs a
-                    WHERE DATE(a.check_time) = CURRENT_DATE
+                    WHERE DATE(a.check_time) = %s
                       AND a.status = 'IN'
                       AND a.per_id NOT IN (
                           SELECT per_id FROM attendance_logs
-                          WHERE DATE(check_time) = CURRENT_DATE AND status = 'OUT'
+                          WHERE DATE(check_time) = %s AND status = 'OUT'
                       )
                     ORDER BY a.per_id, a.check_time DESC
-                """)
+                """, (target_date, target_date))
                 rows = cur.fetchall()
 
             for row in rows:
@@ -1083,13 +1098,13 @@ def _do_auto_checkout_all(now: datetime) -> int:
                              posname_th, organize_th, organize_id)
                         VALUES (%s, 'OUT', %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """, (
-                        per_id, camera_name or 'auto', now,
+                        per_id, camera_name or 'auto', checkout_time,
                         name, prename_th, per_name, per_surname,
                         posname_th, organize_th, organize_id,
                     ))
                 count += 1
             conn.commit()
-        print(f"[AUTO-CHECKOUT] checkout {count} คน  {now.strftime('%H:%M:%S')}")
+        print(f"[AUTO-CHECKOUT] checkout {count} คน  checkout_time={checkout_time.strftime('%Y-%m-%d %H:%M')}")
     except Exception as e:
         print(f"[AUTO-CHECKOUT] error: {e}")
     return count
@@ -1717,27 +1732,33 @@ def session_live(_: dict = Depends(_require_perm("cameras.view"))):
 
     # ── ถ้ามี per-camera files → ใช้ผลที่รวมมาแล้ว (แม้ไม่มีคนในกล้อง) ──
     if found_cam_files:
-        stale = not any_active
+        # stale = process หยุดทำงาน (ไม่มี file ที่ recent เลย)
+        # cctv_mode = process ยังรันอยู่แต่อยู่ใน CCTV mode (active=False)
+        any_recent = latest_ts is not None
+        stale      = not any_recent
+        cctv_mode  = any_recent and not any_active
         return {
-            "active":  any_active,
-            "ts":      latest_ts,
-            "stale":   stale,
-            "persons": list(merged.values()),
+            "active":    any_active,
+            "ts":        latest_ts,
+            "stale":     stale,
+            "cctv_mode": cctv_mode,
+            "persons":   list(merged.values()),
         }
 
     # ── Fallback: legacy live_state.json (เมื่อไม่มี per-camera files) ──────
     if not _LIVE_STATE_PATH.exists():
-        return {"active": False, "ts": None, "stale": True, "persons": []}
+        return {"active": False, "ts": None, "stale": True, "cctv_mode": False, "persons": []}
     try:
         data = _json.loads(_LIVE_STATE_PATH.read_text(encoding="utf-8"))
     except Exception:
-        return {"active": False, "ts": None, "stale": True, "persons": []}
+        return {"active": False, "ts": None, "stale": True, "cctv_mode": False, "persons": []}
     ts          = data.get("ts")
     data_active = data.get("active", True)
     is_recent   = ts is not None and (_now - ts <= 5)
-    # stale เมื่อ: ts เก่า หรือ main.py อยู่ใน CCTV mode (face recognition หยุด)
-    stale = not is_recent or not data_active
-    data["stale"] = stale
+    # stale เฉพาะเมื่อ process หยุดทำงาน (file เก่า) ไม่ใช่แค่อยู่ใน CCTV mode
+    stale           = not is_recent
+    data["stale"]    = stale
+    data["cctv_mode"] = is_recent and not data_active
     return data
 
 

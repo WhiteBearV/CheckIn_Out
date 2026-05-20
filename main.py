@@ -240,7 +240,7 @@ def _write_live_state(now_ts: float, session, active: bool, path=None, in_frame_
             "posname_th":   person.posname_th    or "",
             "status":       _status,
             "in_time":      person.first_seen.isoformat() if person.first_seen else None,
-            "out_time":     person.last_seen.isoformat()  if person.checked_out and person.last_seen else None,
+            "out_time":     person.checked_out_at.isoformat() if person.checked_out and person.checked_out_at else None,
             "checked_in":   person.checked_in,
             "checked_out":  person.checked_out,
             "first_seen":   person.first_seen.isoformat() if person.first_seen else None,
@@ -429,6 +429,15 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN",
             return -1
         return cv2.waitKey(ms)
 
+    # ─── helper: เวลา checkout มาตรฐาน (22:00 ของวันนั้น) ───────────────────────
+    def _checkout_at(dt: datetime) -> datetime:
+        """คืน CHECKOUT_TIME (22:00) ของวันที่ dt — ใช้เป็น check_time ของ OUT ทุกกรณี"""
+        return dt.replace(
+            hour=cfg.CHECKOUT_TIME.hour,
+            minute=cfg.CHECKOUT_TIME.minute,
+            second=0, microsecond=0,
+        )
+
     # ─── ตัวแปร loop ───
     start_ts           = datetime.now().timestamp()
     checkout_done      = False
@@ -468,6 +477,7 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN",
         _stop_requested = True
 
     signal.signal(signal.SIGTERM, _sigterm)
+    signal.signal(signal.SIGINT,  _sigterm)   # Ctrl+C → clean exit แทน KeyboardInterrupt
 
     while not _stop_requested:
         ret, frame = cam.read()
@@ -494,7 +504,7 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN",
             )
             if should_checkout and not checkout_done:
                 checkout_done = True
-                session.do_checkout(camera_name, now)
+                session.do_checkout(camera_name, _checkout_at(now))
             if cfg.TEST_MODE and checkout_done:
                 break
 
@@ -527,7 +537,7 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN",
                 # Face → CCTV mode: checkout คนที่ยังอยู่
                 if not checkout_done:
                     checkout_done = True
-                    session.do_checkout(camera_name, now)
+                    session.do_checkout(camera_name, _checkout_at(now))
                     session.save_snapshots()
                 print(f"[FACE→CCTV] เข้าโหมด CCTV {now.strftime('%H:%M')}")
 
@@ -558,7 +568,7 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN",
                 # active → idle: checkout คนที่ยังไม่ได้ออก แล้วพัก
                 if not checkout_done:
                     checkout_done = True
-                    session.do_checkout(camera_name, now)
+                    session.do_checkout(camera_name, _checkout_at(now))
                 session.save_snapshots()
                 print(f"[SCHEDULER] Idle mode เริ่ม {now.strftime('%H:%M:%S')}")
 
@@ -792,11 +802,19 @@ def run_camera(camera_index: int = 1, camera_name: str = "CAM_MAIN",
         elif key == ord("f"):
             _toggle_fullscreen()
 
+    # Safety checkout — checkout คนที่ยังไม่ได้ออกเมื่อ loop หยุด (crash / stop / ปิดระบบ)
+    # ใช้ CHECKOUT_TIME (22:00) ของวันนั้นเสมอ ไม่ใช่เวลาที่หยุดจริง
+    _exit_now = datetime.now()
+    session.do_checkout(camera_name, _checkout_at(_exit_now))
+    _write_live_state(_exit_now.timestamp(), session, False, path=live_state_path)
+
     session.save_snapshots()
     hands.close()
     cam.release()
+    _atexit.unregister(cam.release)   # กัน double-release จาก atexit
     if not _HEADLESS:
         cv2.destroyAllWindows()
+        cv2.waitKey(1)   # macOS: flush pending window/camera events
 
 
 if __name__ == "__main__":

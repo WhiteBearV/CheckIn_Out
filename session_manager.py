@@ -35,6 +35,7 @@ class PersonInfo:
         self.snapshot_out     = None  # อัปเดตทุกครั้งที่เจอหลัง check-in → รูปล่าสุด
         self.checked_in      = False
         self.checked_out     = False
+        self.checked_out_at  = None   # datetime ที่ checkout จริง (เซ็ตใน do_checkout)
         self.absence_reset   = False   # True เมื่อ absence reset → print log ครั้งเดียวตอน re-verify
 
     def update_last_detected(self, now_ts: float):
@@ -158,13 +159,12 @@ class SessionManager:
         print(f"[CHECKOUT] เวลา {now.strftime('%H:%M:%S')}")
         count = 0
         for name, person in self.persons.items():
-            last = person.last_seen or now
             if not person.checked_in or person.checked_out:
                 continue
             try:
                 mark_attendance(
                     person.per_id, "OUT", camera_name,
-                    check_time=last,
+                    check_time=now,
                     name=person.api_name,
                     prename_th=person.prename_th,
                     per_name=person.per_name,
@@ -173,9 +173,10 @@ class SessionManager:
                     organize_th=person.organize_th,
                     organize_id=person.organize_id,
                 )
-                person.checked_out = True
+                person.checked_out    = True
+                person.checked_out_at = now
                 count += 1
-                print(f"  [{person.display_name}] OUT ({last.strftime('%H:%M:%S')})")
+                print(f"  [{person.display_name}] OUT ({now.strftime('%H:%M:%S')})")
             except Exception as e:
                 print(f"  [{name}] ERROR: {e}")
         print(f"[CHECKOUT] สำเร็จ {count} คน\n{'='*50}\n")

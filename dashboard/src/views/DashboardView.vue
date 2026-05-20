@@ -152,7 +152,7 @@
 </template>
 
 <script setup>
-import { computed, ref, onUnmounted } from 'vue'
+import { computed, ref, watch, onUnmounted } from 'vue'
 
 import StatCard     from '@/components/StatCard.vue'
 import PersonCard   from '@/components/PersonCard.vue'
@@ -179,6 +179,8 @@ const {
   stale:   liveStale,
   persons: livePersons,
 } = useLiveSession()
+
+watch(liveStale, (isStale) => { if (isStale) refresh() })
 
 const mergedPersons = computed(() => {
   if (liveStale.value) return persons.value

@@ -174,11 +174,11 @@
                 </span>
                 <span class="text-[10px] text-gui-dim/60"> / {{ totalDays }} วัน</span>
               </td>
-              <!-- เข้ารอบแรก -->
+              <!-- เข้ารอบแรก (วันล่าสุด) -->
               <td class="px-3 py-3 text-center hidden sm:table-cell">
                 <span class="font-mono text-xs tabular-nums"
-                  :class="p.firstIn ? 'text-gui-in' : 'text-gui-dim/40'">
-                  {{ p.firstIn ? fmtDateTimeShort(p.firstIn) : '——' }}
+                  :class="p.latestIn ? 'text-gui-in' : 'text-gui-dim/40'">
+                  {{ p.latestIn ? fmtDateTimeShort(p.latestIn) : '——' }}
                 </span>
               </td>
               <!-- ออกล่าสุด -->
@@ -259,10 +259,10 @@
           </div>
           <div class="py-3 text-center col-span-2 sm:col-span-1 border-t sm:border-t-0 border-gui-border">
             <div class="font-mono font-bold text-gui-in leading-tight tabular-nums"
-              :class="selectedPerson.firstIn ? 'text-sm' : 'text-2xl'">
-              {{ selectedPerson.firstIn ? fmtDateTimeShort(selectedPerson.firstIn) : '——' }}
+              :class="selectedPerson.latestIn ? 'text-sm' : 'text-2xl'">
+              {{ selectedPerson.latestIn ? fmtDateTimeShort(selectedPerson.latestIn) : '——' }}
             </div>
-            <div class="text-[10px] text-gui-dim uppercase tracking-wider mt-0.5">เข้ารอบแรก</div>
+            <div class="text-[10px] text-gui-dim uppercase tracking-wider mt-0.5">เข้ารอบแรก (วันล่าสุด)</div>
           </div>
         </div>
 
@@ -586,19 +586,40 @@ const dateRangeLabel = computed(() => {
   )
 })
 
+// ── Export helpers ─────────────────────────────────────────────────────────────
+// สร้าง rows แบบ 1 แถว / คน / วัน สำหรับ export ทั้ง CSV และ PDF
+function buildExportRows() {
+  const rows = []
+  for (const p of filteredPersons.value) {
+    const name = displayName(p)
+    // dayEntries เรียง desc → เรียง asc เพื่อแสดงตามลำดับเวลา
+    const sorted = [...p.dayEntries].sort(([a], [b]) => a.localeCompare(b))
+    for (const [d, times] of sorted) {
+      const inTime  = times.in  ? fmtTime(times.in)  : '—'
+      const outTime = times.out ? fmtTime(times.out) : '—'
+      const dur     = calcDuration(times.in, times.out)
+      const status  = times.out ? 'ออกแล้ว' : 'ยังอยู่'
+      rows.push({
+        name,
+        organize_th: p.organize_th || '',
+        posname_th:  p.posname_th  || '',
+        date:        fmtDateFull(d),
+        dateISO:     d,
+        inTime, outTime, dur, status,
+      })
+    }
+  }
+  return rows
+}
+
 // ── Export CSV ─────────────────────────────────────────────────────────────────
 function exportCSV() {
-  const headers = ['ชื่อ-นามสกุล', 'หน่วยงาน', 'ตำแหน่ง', 'วันที่เข้า', 'เข้าล่าสุด', 'ออกล่าสุด', 'สถานะ']
-  const rows = filteredPersons.value.map(p => [
-    displayName(p),
-    p.organize_th || '',
-    p.posname_th  || '',
-    p.daysCount,
-    p.latestIn  ? fmtDateTimeShort(p.latestIn)  : '',
-    p.latestOut ? fmtDateTimeShort(p.latestOut) : '',
-    p.status === 'IN' ? 'ยังอยู่' : 'ออกแล้ว',
+  const headers = ['ชื่อ-นามสกุล', 'หน่วยงาน', 'ตำแหน่ง', 'วันที่', 'เข้างาน', 'ออกงาน', 'ระยะเวลา', 'สถานะ']
+  const dataRows = buildExportRows().map(r => [
+    r.name, r.organize_th, r.posname_th,
+    r.date, r.inTime, r.outTime, r.dur, r.status,
   ])
-  const csv = [headers, ...rows]
+  const csv = [headers, ...dataRows]
     .map(row => row.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))
     .join('\n')
   const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' })
@@ -612,5 +633,79 @@ function exportCSV() {
   setTimeout(() => URL.revokeObjectURL(url), 100)
 }
 
-function exportPDF() { window.print() }
+// ── Export PDF ─────────────────────────────────────────────────────────────────
+function exportPDF() {
+  const rows   = buildExportRows()
+  const title  = `รายงานการลงเวลา — ${dateRangeLabel.value}`
+  const now    = new Date().toLocaleString('th-TH')
+
+  // จัดกลุ่ม rows ตามชื่อ เพื่อแรเงาสลับ
+  let lastPerson = null
+  let shade = false
+  const trRows = rows.map(r => {
+    if (r.name !== lastPerson) { lastPerson = r.name; shade = !shade }
+    const bg = shade ? '#f9fafb' : '#ffffff'
+    const statusColor = r.status === 'ออกแล้ว' ? '#d97706' : '#16a34a'
+    return `
+      <tr style="background:${bg}">
+        <td>${r.name}</td>
+        <td>${r.organize_th}</td>
+        <td>${r.date}</td>
+        <td style="text-align:center;font-family:monospace">${r.inTime}</td>
+        <td style="text-align:center;font-family:monospace">${r.outTime}</td>
+        <td style="text-align:center">${r.dur}</td>
+        <td style="text-align:center;color:${statusColor};font-weight:600">${r.status}</td>
+      </tr>`
+  }).join('')
+
+  const html = `<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8"/>
+<title>${title}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Sarabun", "TH Sarabun New", sans-serif; font-size: 13px;
+         color: #111; padding: 20px 28px; }
+  h1 { font-size: 18px; font-weight: 700; margin-bottom: 4px; }
+  .meta { font-size: 11px; color: #666; margin-bottom: 16px; }
+  table { width: 100%; border-collapse: collapse; }
+  th { background: #1e293b; color: #fff; font-size: 11px; text-transform: uppercase;
+       letter-spacing: .04em; padding: 8px 10px; text-align: left; }
+  td { padding: 7px 10px; border-bottom: 1px solid #e5e7eb; font-size: 12.5px; }
+  tr:last-child td { border-bottom: none; }
+  .footer { margin-top: 16px; font-size: 10px; color: #999; text-align: right; }
+  @page { margin: 15mm 10mm; }
+  @media print { body { padding: 0; } }
+</style>
+</head>
+<body>
+<h1>${title}</h1>
+<div class="meta">พิมพ์เมื่อ: ${now} &nbsp;|&nbsp; จำนวน ${rows.length} รายการ</div>
+<table>
+  <thead>
+    <tr>
+      <th>ชื่อ-นามสกุล</th>
+      <th>หน่วยงาน</th>
+      <th>วันที่</th>
+      <th style="text-align:center">เข้างาน</th>
+      <th style="text-align:center">ออกงาน</th>
+      <th style="text-align:center">ระยะเวลา</th>
+      <th style="text-align:center">สถานะ</th>
+    </tr>
+  </thead>
+  <tbody>${trRows}</tbody>
+</table>
+<div class="footer">ระบบลงเวลา Face Attendance — ${now}</div>
+</body>
+</html>`
+
+  const win = window.open('', '_blank', 'width=900,height=700')
+  if (!win) return
+  win.document.write(html)
+  win.document.close()
+  win.focus()
+  // รอ font โหลดแล้วค่อย print
+  win.onload = () => { win.print() }
+}
 </script>

@@ -105,9 +105,14 @@ class ThreadedCamera:
             return self._ret, self._frame.copy()
 
     def release(self):
+        if self._stopped:
+            return
         self._stopped = True
-        self.cap.release()          # interrupt blocking cap.read() ใน thread
-        self._thread.join(timeout=2.0)
+        try:
+            self.cap.release()      # interrupt blocking cap.read() ใน thread
+        except Exception:
+            pass
+        self._thread.join(timeout=3.0)
         try:                        # release อีกครั้งถ้า reconnect เปิด cap ใหม่
             self.cap.release()
         except Exception:

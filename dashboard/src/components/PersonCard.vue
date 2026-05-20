@@ -156,7 +156,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import StatusBadge   from './StatusBadge.vue'
 import LivenessBadge from './LivenessBadge.vue'
 
@@ -182,6 +182,9 @@ const photoUrl = computed(() => {
   // default: รูปโปรไฟล์จาก External API (per_picpath) เท่านั้น
   return `${props.apiBase}/person-profile/${props.person.per_id}`
 })
+
+// reset error เมื่อ URL เปลี่ยน (เช่น status IN→OUT หรือ person ใหม่ใน key เดิม)
+watch(photoUrl, () => { photoError.value = false })
 
 // ── Display name ───────────────────────────────────────────────────
 const displayName = computed(() => {

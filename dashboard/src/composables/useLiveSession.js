@@ -13,6 +13,7 @@ const POLL_MS = 2_000
 // ── Shared state (module-level) ────────────────────────────────────
 const active     = ref(false)
 const stale      = ref(true)
+const cctv_mode  = ref(false)
 const persons    = ref([])
 const loading    = ref(false)
 const error      = ref(null)
@@ -23,16 +24,18 @@ async function fetchLive() {
   loading.value = true
   try {
     const data = await apiFetch('/session/live')
-    active.value     = data.active  ?? false
-    stale.value      = data.stale   ?? true
-    persons.value    = data.persons ?? []
+    active.value     = data.active    ?? false
+    stale.value      = data.stale     ?? true
+    cctv_mode.value  = data.cctv_mode ?? false
+    persons.value    = data.persons   ?? []
     lastUpdate.value = new Date()
     error.value      = null
   } catch (e) {
-    error.value   = e.message
-    active.value  = false
-    stale.value   = true
-    persons.value = []
+    error.value      = e.message
+    active.value     = false
+    stale.value      = true
+    cctv_mode.value  = false
+    // ไม่ clear persons เพื่อให้ last session ยังแสดงได้เมื่อ API มีปัญหาชั่วคราว
   } finally {
     loading.value = false
   }
@@ -57,5 +60,5 @@ export function useLiveSession() {
       _timer = null
     }
   })
-  return { active, stale, persons, loading, error, lastUpdate }
+  return { active, stale, cctv_mode, persons, loading, error, lastUpdate }
 }

@@ -962,6 +962,9 @@ const mergedPersons = computed(() => {
 })
 
 
+// เมื่อ live data กลายเป็น stale (main.py หยุด) → refresh DB ทันทีไม่รอ poll รอบถัดไป
+watch(liveStale, (isStale) => { if (isStale) refresh() })
+
 // ── Photo helpers ────────────────────────────────────────────────────
 const failedPhotos = ref(new Set())
 const photoRetry   = ref(new Map())
