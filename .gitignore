@@ -87,5 +87,4 @@ fortestFn/
 
 # Diagnostic / soak test (local debugging, not for git)
 logs/
-debug_camera_outage.sh
-soak_test_48h.sh
+scripts/

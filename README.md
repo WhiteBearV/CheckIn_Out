@@ -45,7 +45,7 @@ cd front_end && npm run dev      # จะ spawn stream_server + api.py + vite �
 | [db_config.example.json](db_config.example.json) | Deploy team | Template PG config |
 | [deploy/](deploy/) | Deploy team | systemd services, timers, nginx config, install script |
 | [migrations/setup_db.sql](migrations/setup_db.sql) | DBA | สร้าง schema PG ทั้งหมด |
-| [CLAUDE.md](CLAUDE.md) | Dev team | Context สำหรับ AI assistant (ไม่ใช่เอกสาร user) |
+| [CLAUDE.md](CLAUDE.md) | Dev team | Context สำหรับ AI assistant (Claude Code อ่านอัตโนมัติ — ต้องอยู่ root) |
 
 ---
 
