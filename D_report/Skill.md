@@ -1,253 +1,590 @@
 ---
-name: internship-report-for-supervisor
-description: สร้างรายงานการปฏิบัติงานฝึกประสบการณ์วิชาชีพ
-สำหรับส่งหัวหน้างาน/พี่เลี้ยง ในรูปแบบทางการ สื่อสารชัดเจน 
-มีสรุปภาพรวมและความคืบหน้า ครอบคลุมทั้งสิ่งที่ทำ ผลลัพธ์ 
-ปัญหาที่พบ และแผนงานต่อไป ใช้เมื่อผู้ใช้พิมพ์ "เขียนรายงาน
-ส่งหัวหน้า", "รายงานพี่เลี้ยง", "supervisor report", 
-"สรุปงานส่งหัวหน้า" หรือส่งข้อมูลการทำงานมาให้สรุปเป็น
-รายงานสำหรับนำเสนอผู้ใหญ่
+name: docx
+description: "Use this skill whenever the user wants to create, read, edit, or manipulate Word documents (.docx files). Triggers include: any mention of 'Word doc', 'word document', '.docx', or requests to produce professional documents with formatting like tables of contents, headings, page numbers, or letterheads. Also use when extracting or reorganizing content from .docx files, inserting or replacing images in documents, performing find-and-replace in Word files, working with tracked changes or comments, or converting content into a polished Word document. If the user asks for a 'report', 'memo', 'letter', 'template', or similar deliverable as a Word or .docx file, use this skill. Do NOT use for PDFs, spreadsheets, Google Docs, or general coding tasks unrelated to document generation."
+license: Proprietary. LICENSE.txt has complete terms
 ---
 
-# Internship Report for Supervisor
+# DOCX creation, editing, and analysis
 
-## 🎯 วัตถุประสงค์
-สร้างรายงานที่หัวหน้า/พี่เลี้ยง **อ่านแล้วเข้าใจทันที** ว่า
-นักศึกษาฝึกงานทำอะไรไปบ้าง มีความคืบหน้าแค่ไหน เจอปัญหาอะไร 
-และวางแผนต่ออย่างไร — เน้นการสื่อสารแบบมืออาชีพ ไม่ลงเทคนิค
-จนหัวหน้าที่ไม่ได้เขียนโค้ดอ่านไม่รู้เรื่อง
+## Overview
 
-## 📌 เมื่อไหร่ควรใช้ Skill นี้
+A .docx file is a ZIP archive containing XML files.
 
-ใช้เมื่อ:
-- ผู้ใช้ขอ "เขียนรายงานส่งหัวหน้า/พี่เลี้ยง"
-- ผู้ใช้ต้องการสรุปงานเพื่อ "review meeting"
-- ผู้ใช้ส่งข้อมูลงานพร้อมระบุ "สำหรับส่งให้ supervisor"
-- ต้องการรายงานที่ "เป็นทางการ" สำหรับผู้บริหาร
+## Quick Reference
 
-ไม่ใช้เมื่อ:
-- เป็นรายงานเชิงเทคนิคล้วนๆ สำหรับเก็บเป็นเอกสาร dev
-- เป็นบันทึกประจำวันส่วนตัว (diary)
+| Task | Approach |
+|------|----------|
+| Read/analyze content | `pandoc` or unpack for raw XML |
+| Create new document | Use `docx-js` - see Creating New Documents below |
+| Edit existing document | Unpack → edit XML → repack - see Editing Existing Documents below |
 
-## 🔄 ขั้นตอนการทำงาน
+### Converting .doc to .docx
 
-### Step 1: รวบรวมข้อมูลที่จำเป็น
-ถ้าข้อมูลไม่ครบ ถามผู้ใช้:
-1. **ช่วงเวลาที่รายงาน** (รายวัน / รายสัปดาห์)
-2. **ชื่อนักศึกษา + ตำแหน่ง/ทีม**
-3. **ชื่อโปรเจกต์/งานหลัก**
-4. **สิ่งที่ทำ + ผลลัพธ์ที่ได้**
-5. **ปัญหาที่เจอ** (ถ้ามี)
-6. **แผนสัปดาห์/วันต่อไป**
+Legacy `.doc` files must be converted before editing:
 
-### Step 2: คัดกรองข้อมูลให้เหมาะสม
-- **ตัด jargon ที่หัวหน้าไม่จำเป็นต้องรู้** เช่น ชื่อ function, 
-  variable name, syntax detail
-- **เก็บไว้:** ชื่อ feature, ผลลัพธ์, impact, ปัญหาเชิงระบบ
-- **เปลี่ยนภาษา:** "แก้ bug v-on → @click" → "แก้ปัญหาปุ่มกดไม่ได้บนหน้า login"
+```bash
+python scripts/office/soffice.py --headless --convert-to docx document.doc
+```
 
-### Step 3: เรียงตามลำดับความสำคัญ
-- งานที่ **สำเร็จและมี impact ชัดเจน** → ขึ้นก่อน
-- งานที่ **กำลังทำต่อ** → กลาง
-- งานที่ **ติดปัญหา/ต้องการความช่วยเหลือ** → flag ด้านบนให้เห็นชัด
+### Reading Content
 
-### Step 4: เขียนตาม Template
-ใช้รูปแบบมาตรฐานด้านล่าง
+```bash
+# Text extraction with tracked changes
+pandoc --track-changes=all document.docx -o output.md
 
-### Step 5: ตรวจสอบก่อนส่ง
-- ✅ หัวหน้าอ่าน 30 วินาทีแรกแล้วเข้าใจไหม?
-- ✅ มี action item ที่ต้องการการตัดสินใจไหม?
-- ✅ ใช้ภาษาทางการ ไม่กันเอง ไม่หยาบ?
-- ✅ มีตัวเลข/หลักฐานรองรับไหม?
+# Raw XML access
+python scripts/office/unpack.py document.docx unpacked/
+```
 
-## 📐 Template มาตรฐาน
+### Converting to Images
 
-\`\`\`
-═══════════════════════════════════════════════════════════════════════
-                  รายงานการปฏิบัติงานฝึกประสบการณ์วิชาชีพ
-═══════════════════════════════════════════════════════════════════════
+```bash
+python scripts/office/soffice.py --headless --convert-to pdf document.docx
+pdftoppm -jpeg -r 150 document.pdf page
+```
 
-  ผู้รายงาน    : [ชื่อ-นามสกุล]
-  ตำแหน่ง      : นักศึกษาฝึกงาน [ทีม/แผนก]
-  รายงานถึง    : [ชื่อหัวหน้า/พี่เลี้ยง]
-  ช่วงเวลา     : [วันที่เริ่ม] ถึง [วันที่สิ้นสุด]
-  สัปดาห์ที่    : [N]
+### Accepting Tracked Changes
 
-───────────────────────────────────────────────────────────────────────
-  สถานะภาพรวม : 🟢 เป็นไปตามแผน  |  🟡 มีประเด็นต้องติดตาม  |  🔴 ติดปัญหา
-───────────────────────────────────────────────────────────────────────
+To produce a clean document with all tracked changes accepted (requires LibreOffice):
 
+```bash
+python scripts/accept_changes.py input.docx output.docx
+```
 
-■ บทสรุปสำหรับผู้บริหาร (Executive Summary)
-───────────────────────────────────────────────────────────────────────
+---
 
-  [สรุป 2-3 ประโยค ที่ตอบคำถาม "วันนี้/สัปดาห์นี้ทำอะไรสำเร็จ
-  และยังเหลืออะไรต้องทำต่อ" ใช้ภาษาที่หัวหน้าอ่านแล้วเข้าใจทันที]
+## Creating New Documents
 
+Generate .docx files with JavaScript, then validate. Install: `npm install -g docx`
 
-■ งานที่ดำเนินการสำเร็จ
-───────────────────────────────────────────────────────────────────────
+### Setup
+```javascript
+const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, ImageRun,
+        Header, Footer, AlignmentType, PageOrientation, LevelFormat, ExternalHyperlink,
+        InternalHyperlink, Bookmark, FootnoteReferenceRun, PositionalTab,
+        PositionalTabAlignment, PositionalTabRelativeTo, PositionalTabLeader,
+        TabStopType, TabStopPosition, Column, SectionType,
+        TableOfContents, HeadingLevel, BorderStyle, WidthType, ShadingType,
+        VerticalAlign, PageNumber, PageBreak } = require('docx');
 
-  1. [ชื่องาน/ฟีเจอร์]
-     ─────────────────────────────────────────────────────────────────
-     วัตถุประสงค์ : [ทำเพื่ออะไร / แก้ปัญหาอะไร]
-     ผลลัพธ์      : [สิ่งที่ได้ออกมา + impact ที่วัดได้ถ้ามี]
-     สถานะ       : ✅ เสร็จสมบูรณ์
+const doc = new Document({ sections: [{ children: [/* content */] }] });
+Packer.toBuffer(doc).then(buffer => fs.writeFileSync("doc.docx", buffer));
+```
 
-  2. [ชื่องาน/ฟีเจอร์]
-     ─────────────────────────────────────────────────────────────────
-     วัตถุประสงค์ : [...]
-     ผลลัพธ์      : [...]
-     สถานะ       : ✅ เสร็จสมบูรณ์
+### Validation
+After creating the file, validate it. If validation fails, unpack, fix the XML, and repack.
+```bash
+python scripts/office/validate.py doc.docx
+```
 
+### Page Size
 
-■ งานที่กำลังดำเนินการ
-───────────────────────────────────────────────────────────────────────
+```javascript
+// CRITICAL: docx-js defaults to A4, not US Letter
+// Always set page size explicitly for consistent results
+sections: [{
+  properties: {
+    page: {
+      size: {
+        width: 12240,   // 8.5 inches in DXA
+        height: 15840   // 11 inches in DXA
+      },
+      margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 } // 1 inch margins
+    }
+  },
+  children: [/* content */]
+}]
+```
 
-  1. [ชื่องาน]
-     ความคืบหน้า  : [%] หรือ [ขั้นตอนที่อยู่]
-     คาดว่าจะเสร็จ : [วันที่]
-     หมายเหตุ      : [ถ้ามีประเด็นที่หัวหน้าควรทราบ]
+**Common page sizes (DXA units, 1440 DXA = 1 inch):**
 
+| Paper | Width | Height | Content Width (1" margins) |
+|-------|-------|--------|---------------------------|
+| US Letter | 12,240 | 15,840 | 9,360 |
+| A4 (default) | 11,906 | 16,838 | 9,026 |
 
-■ ปัญหา / อุปสรรค ที่พบ
-───────────────────────────────────────────────────────────────────────
+**Landscape orientation:** docx-js swaps width/height internally, so pass portrait dimensions and let it handle the swap:
+```javascript
+size: {
+  width: 12240,   // Pass SHORT edge as width
+  height: 15840,  // Pass LONG edge as height
+  orientation: PageOrientation.LANDSCAPE  // docx-js swaps them in the XML
+},
+// Content width = 15840 - left margin - right margin (uses the long edge)
+```
 
-  ประเด็น    : [ชื่อปัญหาแบบสรุป]
-  ผลกระทบ   : [กระทบงานไหน / มากน้อยแค่ไหน]
-  สถานะ     : [แก้ไขแล้ว / กำลังแก้ไข / ต้องการความช่วยเหลือ]
-  รายละเอียด : [คำอธิบายเพิ่มเติม ใช้ภาษาที่หัวหน้าเข้าใจ]
+### Styles (Override Built-in Headings)
 
+Use Arial as the default font (universally supported). Keep titles black for readability.
 
-■ สิ่งที่ต้องการการสนับสนุน / การตัดสินใจ
-───────────────────────────────────────────────────────────────────────
+```javascript
+const doc = new Document({
+  styles: {
+    default: { document: { run: { font: "Arial", size: 24 } } }, // 12pt default
+    paragraphStyles: [
+      // IMPORTANT: Use exact IDs to override built-in styles
+      { id: "Heading1", name: "Heading 1", basedOn: "Normal", next: "Normal", quickFormat: true,
+        run: { size: 32, bold: true, font: "Arial" },
+        paragraph: { spacing: { before: 240, after: 240 }, outlineLevel: 0 } }, // outlineLevel required for TOC
+      { id: "Heading2", name: "Heading 2", basedOn: "Normal", next: "Normal", quickFormat: true,
+        run: { size: 28, bold: true, font: "Arial" },
+        paragraph: { spacing: { before: 180, after: 180 }, outlineLevel: 1 } },
+    ]
+  },
+  sections: [{
+    children: [
+      new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun("Title")] }),
+    ]
+  }]
+});
+```
 
-  - [เรื่องที่ต้องการให้หัวหน้าตัดสินใจ หรือสนับสนุน]
-  - [ทรัพยากร/อุปกรณ์/access ที่ต้องการ]
-  - [ถ้าไม่มี ให้เขียน "ไม่มีในขณะนี้"]
+### Lists (NEVER use unicode bullets)
 
+```javascript
+// ❌ WRONG - never manually insert bullet characters
+new Paragraph({ children: [new TextRun("• Item")] })  // BAD
+new Paragraph({ children: [new TextRun("\u2022 Item")] })  // BAD
 
-■ แผนงานในช่วงต่อไป
-───────────────────────────────────────────────────────────────────────
+// ✅ CORRECT - use numbering config with LevelFormat.BULLET
+const doc = new Document({
+  numbering: {
+    config: [
+      { reference: "bullets",
+        levels: [{ level: 0, format: LevelFormat.BULLET, text: "•", alignment: AlignmentType.LEFT,
+          style: { paragraph: { indent: { left: 720, hanging: 360 } } } }] },
+      { reference: "numbers",
+        levels: [{ level: 0, format: LevelFormat.DECIMAL, text: "%1.", alignment: AlignmentType.LEFT,
+          style: { paragraph: { indent: { left: 720, hanging: 360 } } } }] },
+    ]
+  },
+  sections: [{
+    children: [
+      new Paragraph({ numbering: { reference: "bullets", level: 0 },
+        children: [new TextRun("Bullet item")] }),
+      new Paragraph({ numbering: { reference: "numbers", level: 0 },
+        children: [new TextRun("Numbered item")] }),
+    ]
+  }]
+});
 
-  เป้าหมายหลัก  : [สิ่งที่ตั้งใจจะทำให้สำเร็จ]
+// ⚠️ Each reference creates INDEPENDENT numbering
+// Same reference = continues (1,2,3 then 4,5,6)
+// Different reference = restarts (1,2,3 then 1,2,3)
+```
 
-  รายการงาน:
-   1. [งานสำคัญลำดับ 1]
-   2. [งานสำคัญลำดับ 2]
-   3. [งานสำคัญลำดับ 3]
+### Tables
 
+**CRITICAL: Tables need dual widths** - set both `columnWidths` on the table AND `width` on each cell. Without both, tables render incorrectly on some platforms.
 
-■ สิ่งที่ได้เรียนรู้ / ข้อสังเกต
-───────────────────────────────────────────────────────────────────────
+```javascript
+// CRITICAL: Always set table width for consistent rendering
+// CRITICAL: Use ShadingType.CLEAR (not SOLID) to prevent black backgrounds
+const border = { style: BorderStyle.SINGLE, size: 1, color: "CCCCCC" };
+const borders = { top: border, bottom: border, left: border, right: border };
 
-  [ทักษะ/ความรู้/บทเรียนที่ได้จากการทำงานในช่วงนี้
-  เขียนแบบสะท้อนความคิด แสดงให้เห็นถึงการพัฒนาตนเอง]
+new Table({
+  width: { size: 9360, type: WidthType.DXA }, // Always use DXA (percentages break in Google Docs)
+  columnWidths: [4680, 4680], // Must sum to table width (DXA: 1440 = 1 inch)
+  rows: [
+    new TableRow({
+      children: [
+        new TableCell({
+          borders,
+          width: { size: 4680, type: WidthType.DXA }, // Also set on each cell
+          shading: { fill: "D5E8F0", type: ShadingType.CLEAR }, // CLEAR not SOLID
+          margins: { top: 80, bottom: 80, left: 120, right: 120 }, // Cell padding (internal, not added to width)
+          children: [new Paragraph({ children: [new TextRun("Cell")] })]
+        })
+      ]
+    })
+  ]
+})
+```
 
+**Table width calculation:**
 
-═══════════════════════════════════════════════════════════════════════
-  ลงชื่อ ......................................  วันที่ .......................
-                    [ชื่อ-นามสกุล นักศึกษาฝึกงาน]
-═══════════════════════════════════════════════════════════════════════
-\`\`\`
+Always use `WidthType.DXA` — `WidthType.PERCENTAGE` breaks in Google Docs.
 
-## 🎨 หลักการเขียนแต่ละ Section
+```javascript
+// Table width = sum of columnWidths = content width
+// US Letter with 1" margins: 12240 - 2880 = 9360 DXA
+width: { size: 9360, type: WidthType.DXA },
+columnWidths: [7000, 2360]  // Must sum to table width
+```
 
-### Section: Executive Summary
-- **ความยาว 2-3 ประโยค** เท่านั้น
-- ตอบคำถาม: "ทำอะไรสำเร็จ" + "ยังเหลืออะไร"
-- ห้ามใส่ technical detail
-- ตัวอย่างที่ดี: "สัปดาห์นี้พัฒนาฟีเจอร์ X เสร็จสมบูรณ์ และเริ่มงาน Y 
-  คาดว่าจะแล้วเสร็จต้นสัปดาห์หน้า ระหว่างนี้พบปัญหาเรื่อง Z และได้
-  แก้ไขเรียบร้อยแล้ว"
+**Width rules:**
+- **Always use `WidthType.DXA`** — never `WidthType.PERCENTAGE` (incompatible with Google Docs)
+- Table width must equal the sum of `columnWidths`
+- Cell `width` must match corresponding `columnWidth`
+- Cell `margins` are internal padding - they reduce content area, not add to cell width
+- For full-width tables: use content width (page width minus left and right margins)
 
-### Section: งานที่ดำเนินการสำเร็จ
-- ใช้รูปแบบ **3 บรรทัด: วัตถุประสงค์ / ผลลัพธ์ / สถานะ**
-- "วัตถุประสงค์" = ทำเพื่อแก้ปัญหาอะไร (ภาษาธุรกิจ)
-- "ผลลัพธ์" = ระบุ impact ที่วัดได้ เช่น "ลดเวลาโหลด 50%"
-- ห้ามลงรายละเอียดเชิงโค้ด
+### Images
 
-### Section: ปัญหา/อุปสรรค
-- ระบุ **ผลกระทบ** ก่อนเทคนิค
-- ตัวอย่าง: "ระบบเช็คชื่อทำงานช้าบนเครื่อง production" ดีกว่า 
-  "MJPEG stream มี frame lag เพราะ Docker overlay filesystem"
-- บอก **สถานะ** ชัดเจน: แก้แล้ว / กำลังแก้ / ต้องการช่วย
+```javascript
+// CRITICAL: type parameter is REQUIRED
+new Paragraph({
+  children: [new ImageRun({
+    type: "png", // Required: png, jpg, jpeg, gif, bmp, svg
+    data: fs.readFileSync("image.png"),
+    transformation: { width: 200, height: 150 },
+    altText: { title: "Title", description: "Desc", name: "Name" } // All three required
+  })]
+})
+```
 
-### Section: สิ่งที่ต้องการการสนับสนุน
-- ส่วนสำคัญที่สุดสำหรับหัวหน้า
-- ถ้ามี ให้ flag ชัดเจน
-- ถ้าไม่มี เขียน "ไม่มีในขณะนี้" — แสดงว่าได้ตรวจแล้ว
+### Page Breaks
 
-### Section: แผนงานต่อไป
-- เลือก 3-5 รายการสำคัญที่สุด
-- เรียงตาม priority
-- ใช้กริยาแสดงการกระทำ เช่น "พัฒนา", "ทดสอบ", "ส่งมอบ"
+```javascript
+// CRITICAL: PageBreak must be inside a Paragraph
+new Paragraph({ children: [new PageBreak()] })
 
-### Section: สิ่งที่ได้เรียนรู้
-- แสดง **soft skill** + **technical skill**
-- เขียนแบบสะท้อนตัวเอง ไม่ใช่แค่ list ความรู้
-- ตัวอย่าง: "ได้เรียนรู้ว่าการสื่อสารกับทีมผ่าน daily standup 
-  ช่วยลดความซ้ำซ้อนของงาน"
+// Or use pageBreakBefore
+new Paragraph({ pageBreakBefore: true, children: [new TextRun("New page")] })
+```
 
-## 🎨 หลักการใช้ภาษา
+### Hyperlinks
 
-### โทน
-- **เป็นทางการเต็มรูปแบบ** ใช้ได้ในเอกสารทางการ
-- **สุภาพแต่ไม่ประจบ** ไม่ต้อง "ครับ/ค่ะ" ในเอกสาร
-- **มั่นใจแต่ไม่อวด** บอกผลงานตรงไปตรงมา ไม่เกินจริง
+```javascript
+// External link
+new Paragraph({
+  children: [new ExternalHyperlink({
+    children: [new TextRun({ text: "Click here", style: "Hyperlink" })],
+    link: "https://example.com",
+  })]
+})
 
-### การใช้คำ
-| ใช้ | แทน |
-|----|-----|
-| พัฒนา / ปรับปรุง | "ทำ" |
-| แก้ไข / ปรับแก้ | "ฟิกซ์" |
-| ดำเนินการ | "เริ่ม" |
-| ผลลัพธ์ / impact | "ผลที่ได้" |
-| ส่งมอบ | "เสร็จ" |
-| ติดตาม / ตรวจสอบ | "ดู" |
+// Internal link (bookmark + reference)
+// 1. Create bookmark at destination
+new Paragraph({ heading: HeadingLevel.HEADING_1, children: [
+  new Bookmark({ id: "chapter1", children: [new TextRun("Chapter 1")] }),
+]})
+// 2. Link to it
+new Paragraph({ children: [new InternalHyperlink({
+  children: [new TextRun({ text: "See Chapter 1", style: "Hyperlink" })],
+  anchor: "chapter1",
+})]})
+```
 
-### การแปลเทคนิค → ภาษาหัวหน้า
-| Technical | สำหรับหัวหน้า |
-|-----------|--------------|
-| "Refactor authentication module" | "ปรับปรุงระบบยืนยันตัวตน" |
-| "Fix race condition in API" | "แก้ปัญหาการเรียก API พร้อมกันที่ทำให้ข้อมูลผิดพลาด" |
-| "Optimize database query" | "ปรับปรุงประสิทธิภาพการดึงข้อมูล (เร็วขึ้น X เท่า)" |
-| "Implement JWT auth" | "เพิ่มระบบ login ที่ปลอดภัยมากขึ้น" |
-| "Deploy to staging" | "อัปขึ้นระบบทดสอบเพื่อให้ทีมรีวิว" |
+### Footnotes
 
-## ⚠️ ข้อห้ามและข้อควรระวัง
+```javascript
+const doc = new Document({
+  footnotes: {
+    1: { children: [new Paragraph("Source: Annual Report 2024")] },
+    2: { children: [new Paragraph("See appendix for methodology")] },
+  },
+  sections: [{
+    children: [new Paragraph({
+      children: [
+        new TextRun("Revenue grew 15%"),
+        new FootnoteReferenceRun(1),
+        new TextRun(" using adjusted metrics"),
+        new FootnoteReferenceRun(2),
+      ],
+    })]
+  }]
+});
+```
 
-### ห้ามทำ:
-- ❌ ใช้คำสแลง / ภาษาแชท ("อ่ะ", "ค่า", "55+")
-- ❌ ใส่ code snippet หรือ syntax โดยตรง
-- ❌ ใช้ emoji กระจายในเนื้อหา (ใช้ได้เฉพาะ status indicator)
-- ❌ บ่นหรือกล่าวโทษทีมอื่น/เครื่องมือ
-- ❌ ใส่ความคิดเห็นส่วนตัวที่ไม่เกี่ยวกับงาน
-- ❌ ปกปิดปัญหา — ต้องรายงานตรงไปตรงมา
+### Tab Stops
 
-### ระวัง:
-- ⚠️ **ความสมดุลของรายละเอียด** — มากไปจะยาวเกิน น้อยไปจะดูไม่ได้ทำอะไร
-- ⚠️ **ตัวเลข/ผลลัพธ์** — ถ้ามี ให้ใส่ ทำให้รายงานน่าเชื่อถือ
-- ⚠️ **ปัญหาที่ยังแก้ไม่ได้** — ต้อง flag ขึ้นไปด้วย ห้ามซ่อน
+```javascript
+// Right-align text on same line (e.g., date opposite a title)
+new Paragraph({
+  children: [
+    new TextRun("Company Name"),
+    new TextRun("\tJanuary 2025"),
+  ],
+  tabStops: [{ type: TabStopType.RIGHT, position: TabStopPosition.MAX }],
+})
 
-## 💡 Tips สำคัญ
+// Dot leader (e.g., TOC-style)
+new Paragraph({
+  children: [
+    new TextRun("Introduction"),
+    new TextRun({ children: [
+      new PositionalTab({
+        alignment: PositionalTabAlignment.RIGHT,
+        relativeTo: PositionalTabRelativeTo.MARGIN,
+        leader: PositionalTabLeader.DOT,
+      }),
+      "3",
+    ]}),
+  ],
+})
+```
 
-### 1. คิดในมุมหัวหน้า
-หัวหน้ามีเวลา 5 นาที อ่านรายงานนี้แล้วต้องตอบได้ 3 คำถาม:
-- น้องคนนี้ทำงานคืบหน้าแค่ไหน?
-- มีปัญหาที่ฉันต้องช่วยไหม?
-- พรุ่งนี้/สัปดาห์หน้าน้องจะทำอะไร?
+### Multi-Column Layouts
 
-### 2. หลักการ "Inverted Pyramid"
-- **บนสุด**: สรุปสำคัญที่สุด (Executive Summary)
-- **กลาง**: รายละเอียดงาน
-- **ล่าง**: รายละเอียดปลีกย่อย
+```javascript
+// Equal-width columns
+sections: [{
+  properties: {
+    column: {
+      count: 2,          // number of columns
+      space: 720,        // gap between columns in DXA (720 = 0.5 inch)
+      equalWidth: true,
+      separate: true,    // vertical line between columns
+    },
+  },
+  children: [/* content flows naturally across columns */]
+}]
 
-### 3. สมดุลระหว่าง "ทำได้" กับ "ติดปัญหา"
-- รายงานที่มีแต่ ✅ ดูไม่จริง
-- รายงานที่มีแต่ ❌ ดูไม่มีศักยภาพ
-- **บาลานซ์**: ทำได้เป็นส่วนใหญ่ + ติดปัญหาบางจุด + วางแผนต่อชัดเจน
+// Custom-width columns (equalWidth must be false)
+sections: [{
+  properties: {
+    column: {
+      equalWidth: false,
+      children: [
+        new Column({ width: 5400, space: 720 }),
+        new Column({ width: 3240 }),
+      ],
+    },
+  },
+  children: [/* content */]
+}]
+```
 
-## 🎯 ตัวอย่างการแปลงข้อมูล
+Force a column break with a new section using `type: SectionType.NEXT_COLUMN`.
 
-### Input (จากนักศึกษา):
+### Table of Contents
+
+```javascript
+// CRITICAL: Headings must use HeadingLevel ONLY - no custom styles
+new TableOfContents("Table of Contents", { hyperlink: true, headingStyleRange: "1-3" })
+```
+
+### Headers/Footers
+
+```javascript
+sections: [{
+  properties: {
+    page: { margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 } } // 1440 = 1 inch
+  },
+  headers: {
+    default: new Header({ children: [new Paragraph({ children: [new TextRun("Header")] })] })
+  },
+  footers: {
+    default: new Footer({ children: [new Paragraph({
+      children: [new TextRun("Page "), new TextRun({ children: [PageNumber.CURRENT] })]
+    })] })
+  },
+  children: [/* content */]
+}]
+```
+
+### Critical Rules for docx-js
+
+- **Set page size explicitly** - docx-js defaults to A4; use US Letter (12240 x 15840 DXA) for US documents
+- **Landscape: pass portrait dimensions** - docx-js swaps width/height internally; pass short edge as `width`, long edge as `height`, and set `orientation: PageOrientation.LANDSCAPE`
+- **Never use `\n`** - use separate Paragraph elements
+- **Never use unicode bullets** - use `LevelFormat.BULLET` with numbering config
+- **PageBreak must be in Paragraph** - standalone creates invalid XML
+- **ImageRun requires `type`** - always specify png/jpg/etc
+- **Always set table `width` with DXA** - never use `WidthType.PERCENTAGE` (breaks in Google Docs)
+- **Tables need dual widths** - `columnWidths` array AND cell `width`, both must match
+- **Table width = sum of columnWidths** - for DXA, ensure they add up exactly
+- **Always add cell margins** - use `margins: { top: 80, bottom: 80, left: 120, right: 120 }` for readable padding
+- **Use `ShadingType.CLEAR`** - never SOLID for table shading
+- **Never use tables as dividers/rules** - cells have minimum height and render as empty boxes (including in headers/footers); use `border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: "2E75B6", space: 1 } }` on a Paragraph instead. For two-column footers, use tab stops (see Tab Stops section), not tables
+- **TOC requires HeadingLevel only** - no custom styles on heading paragraphs
+- **Override built-in styles** - use exact IDs: "Heading1", "Heading2", etc.
+- **Include `outlineLevel`** - required for TOC (0 for H1, 1 for H2, etc.)
+
+---
+
+## Editing Existing Documents
+
+**Follow all 3 steps in order.**
+
+### Step 1: Unpack
+```bash
+python scripts/office/unpack.py document.docx unpacked/
+```
+Extracts XML, pretty-prints, merges adjacent runs, and converts smart quotes to XML entities (`&#x201C;` etc.) so they survive editing. Use `--merge-runs false` to skip run merging.
+
+### Step 2: Edit XML
+
+Edit files in `unpacked/word/`. See XML Reference below for patterns.
+
+**Use "Claude" as the author** for tracked changes and comments, unless the user explicitly requests use of a different name.
+
+**Use the Edit tool directly for string replacement. Do not write Python scripts.** Scripts introduce unnecessary complexity. The Edit tool shows exactly what is being replaced.
+
+**CRITICAL: Use smart quotes for new content.** When adding text with apostrophes or quotes, use XML entities to produce smart quotes:
+```xml
+<!-- Use these entities for professional typography -->
+<w:t>Here&#x2019;s a quote: &#x201C;Hello&#x201D;</w:t>
+```
+| Entity | Character |
+|--------|-----------|
+| `&#x2018;` | ‘ (left single) |
+| `&#x2019;` | ’ (right single / apostrophe) |
+| `&#x201C;` | “ (left double) |
+| `&#x201D;` | ” (right double) |
+
+**Adding comments:** Use `comment.py` to handle boilerplate across multiple XML files (text must be pre-escaped XML):
+```bash
+python scripts/comment.py unpacked/ 0 "Comment text with &amp; and &#x2019;"
+python scripts/comment.py unpacked/ 1 "Reply text" --parent 0  # reply to comment 0
+python scripts/comment.py unpacked/ 0 "Text" --author "Custom Author"  # custom author name
+```
+Then add markers to document.xml (see Comments in XML Reference).
+
+### Step 3: Pack
+```bash
+python scripts/office/pack.py unpacked/ output.docx --original document.docx
+```
+Validates with auto-repair, condenses XML, and creates DOCX. Use `--validate false` to skip.
+
+**Auto-repair will fix:**
+- `durableId` >= 0x7FFFFFFF (regenerates valid ID)
+- Missing `xml:space="preserve"` on `<w:t>` with whitespace
+
+**Auto-repair won't fix:**
+- Malformed XML, invalid element nesting, missing relationships, schema violations
+
+### Common Pitfalls
+
+- **Replace entire `<w:r>` elements**: When adding tracked changes, replace the whole `<w:r>...</w:r>` block with `<w:del>...<w:ins>...` as siblings. Don't inject tracked change tags inside a run.
+- **Preserve `<w:rPr>` formatting**: Copy the original run's `<w:rPr>` block into your tracked change runs to maintain bold, font size, etc.
+
+---
+
+## XML Reference
+
+### Schema Compliance
+
+- **Element order in `<w:pPr>`**: `<w:pStyle>`, `<w:numPr>`, `<w:spacing>`, `<w:ind>`, `<w:jc>`, `<w:rPr>` last
+- **Whitespace**: Add `xml:space="preserve"` to `<w:t>` with leading/trailing spaces
+- **RSIDs**: Must be 8-digit hex (e.g., `00AB1234`)
+
+### Tracked Changes
+
+**Insertion:**
+```xml
+<w:ins w:id="1" w:author="Claude" w:date="2025-01-01T00:00:00Z">
+  <w:r><w:t>inserted text</w:t></w:r>
+</w:ins>
+```
+
+**Deletion:**
+```xml
+<w:del w:id="2" w:author="Claude" w:date="2025-01-01T00:00:00Z">
+  <w:r><w:delText>deleted text</w:delText></w:r>
+</w:del>
+```
+
+**Inside `<w:del>`**: Use `<w:delText>` instead of `<w:t>`, and `<w:delInstrText>` instead of `<w:instrText>`.
+
+**Minimal edits** - only mark what changes:
+```xml
+<!-- Change "30 days" to "60 days" -->
+<w:r><w:t>The term is </w:t></w:r>
+<w:del w:id="1" w:author="Claude" w:date="...">
+  <w:r><w:delText>30</w:delText></w:r>
+</w:del>
+<w:ins w:id="2" w:author="Claude" w:date="...">
+  <w:r><w:t>60</w:t></w:r>
+</w:ins>
+<w:r><w:t> days.</w:t></w:r>
+```
+
+**Deleting entire paragraphs/list items** - when removing ALL content from a paragraph, also mark the paragraph mark as deleted so it merges with the next paragraph. Add `<w:del/>` inside `<w:pPr><w:rPr>`:
+```xml
+<w:p>
+  <w:pPr>
+    <w:numPr>...</w:numPr>  <!-- list numbering if present -->
+    <w:rPr>
+      <w:del w:id="1" w:author="Claude" w:date="2025-01-01T00:00:00Z"/>
+    </w:rPr>
+  </w:pPr>
+  <w:del w:id="2" w:author="Claude" w:date="2025-01-01T00:00:00Z">
+    <w:r><w:delText>Entire paragraph content being deleted...</w:delText></w:r>
+  </w:del>
+</w:p>
+```
+Without the `<w:del/>` in `<w:pPr><w:rPr>`, accepting changes leaves an empty paragraph/list item.
+
+**Rejecting another author's insertion** - nest deletion inside their insertion:
+```xml
+<w:ins w:author="Jane" w:id="5">
+  <w:del w:author="Claude" w:id="10">
+    <w:r><w:delText>their inserted text</w:delText></w:r>
+  </w:del>
+</w:ins>
+```
+
+**Restoring another author's deletion** - add insertion after (don't modify their deletion):
+```xml
+<w:del w:author="Jane" w:id="5">
+  <w:r><w:delText>deleted text</w:delText></w:r>
+</w:del>
+<w:ins w:author="Claude" w:id="10">
+  <w:r><w:t>deleted text</w:t></w:r>
+</w:ins>
+```
+
+### Comments
+
+After running `comment.py` (see Step 2), add markers to document.xml. For replies, use `--parent` flag and nest markers inside the parent's.
+
+**CRITICAL: `<w:commentRangeStart>` and `<w:commentRangeEnd>` are siblings of `<w:r>`, never inside `<w:r>`.**
+
+```xml
+<!-- Comment markers are direct children of w:p, never inside w:r -->
+<w:commentRangeStart w:id="0"/>
+<w:del w:id="1" w:author="Claude" w:date="2025-01-01T00:00:00Z">
+  <w:r><w:delText>deleted</w:delText></w:r>
+</w:del>
+<w:r><w:t> more text</w:t></w:r>
+<w:commentRangeEnd w:id="0"/>
+<w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:commentReference w:id="0"/></w:r>
+
+<!-- Comment 0 with reply 1 nested inside -->
+<w:commentRangeStart w:id="0"/>
+  <w:commentRangeStart w:id="1"/>
+  <w:r><w:t>text</w:t></w:r>
+  <w:commentRangeEnd w:id="1"/>
+<w:commentRangeEnd w:id="0"/>
+<w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:commentReference w:id="0"/></w:r>
+<w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:commentReference w:id="1"/></w:r>
+```
+
+### Images
+
+1. Add image file to `word/media/`
+2. Add relationship to `word/_rels/document.xml.rels`:
+```xml
+<Relationship Id="rId5" Type=".../image" Target="media/image1.png"/>
+```
+3. Add content type to `[Content_Types].xml`:
+```xml
+<Default Extension="png" ContentType="image/png"/>
+```
+4. Reference in document.xml:
+```xml
+<w:drawing>
+  <wp:inline>
+    <wp:extent cx="914400" cy="914400"/>  <!-- EMUs: 914400 = 1 inch -->
+    <a:graphic>
+      <a:graphicData uri=".../picture">
+        <pic:pic>
+          <pic:blipFill><a:blip r:embed="rId5"/></pic:blipFill>
+        </pic:pic>
+      </a:graphicData>
+    </a:graphic>
+  </wp:inline>
+</w:drawing>
+```
+
+---
+
+## Dependencies
+
+- **pandoc**: Text extraction
+- **docx**: `npm install -g docx` (new documents)
+- **LibreOffice**: PDF conversion (auto-configured for sandboxed environments via `scripts/office/soffice.py`)
+- **Poppler**: `pdftoppm` for images
