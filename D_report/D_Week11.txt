@@ -1,0 +1,457 @@
+════════════════════════════════════════════════════════════════════════
+  รายงานการปฏิบัติงานฝึกประสบการณ์วิชาชีพ
+  วันที่  : จันทร์ที่ 25 พฤษภาคม 2569
+  สัปดาห์ : สัปดาห์ที่ 11
+  โปรเจกต์: Glorytun Channel Bonding Router
+════════════════════════════════════════════════════════════════════════
+
+■ งานที่ดำเนินการในวันนี้
+────────────────────────────────────────────────────────────────────────
+
+1. สร้าง Test Framework + ค้นหาสาเหตุ Bug 23 ระดับลึก (ช่วงเช้า)
+   ─────────────────────────────────────────────────────────────────
+   Bug 23 ที่ค้างมาจาก session 22 พ.ค. — TCP single-stream ผ่าน bonded
+   tunnel ตันที่ ~120 Mbps ทั้งที่ทุก resource ของ Mini PC ยังว่าง
+   (CPU/NIC/rate cap headroom 50–87%) ก่อนจะลอง workaround ใด
+   ต้องวัดได้ก่อน จึงสร้าง bench harness เก็บไว้ที่
+   /home/maeb/glorytun-debug/bench/ ก่อนเลย:
+
+     - bench-tunnel.sh  — TCP matrix (1/4/8 streams × up/down × 3 runs × 30s)
+     - bench-paths.sh   — single iperf3 run พร้อม sample byte counter wan1/wan2
+                          ทุก 1 วินาที (เพื่อดู per-WAN distribution)
+     - bench-summary.py — parser JSON ของ iperf3 → markdown
+     - probe-ports.sh   — ตรวจ outbound reachability ของแต่ละ WAN
+
+   deploy ไปบน Mini PC (ผ่าน Tailscale) แล้วรัน baseline TCP matrix
+   + UDP ceiling test ที่ rate 400 Mbps ทั้ง upload/download ทันที
+
+   ผลลัพธ์ UDP test ได้ insight สำคัญ:
+     - glorytun split packet 50/50 perfectly ทั้ง 2 paths ทั้ง 2 ทิศทาง
+       (wan1 tx 202.1 vs wan2 tx 202.5 / wan1 rx 198.0 vs wan2 rx 198.2)
+     - tunnel UDP carry ได้ ~365–385 Mbps decrypted → ไม่ได้ตันที่ tunnel/CPU
+     - ตัด hypothesis "packet ไปขาเดียว" + "tunnel capacity" ออกได้
+
+   ทดลอง rate sweep — ลด rate cap 500m → 200m:
+     - TX-LOSS ลดจาก 1.18% → 0.39% (ดีขึ้นจริง) แต่ throughput ตก 44%
+       (net negative) → ตัด hypothesis rate cap อีกตัว
+
+   ทดลอง MTU sweep:
+     - ตรวจ path PMTU จริงพบว่า PC→server = 1492 (server-side ISP hop
+       จำกัด) ส่วน PC→8.8.8.8 ได้ 1500 (server-side bottleneck คุมไม่ได้)
+     - ตอนนั้น gt0 MTU = 1442 → outer packet 1492 = ชน path MTU เป๊ะ
+       ไม่มี safety margin
+     - A/B test MTU 1442 vs 1280: 3/4 case ช้าลง → revert
+     - A/B test MTU 1438 (vs 1442): retx ดีขึ้นเล็กน้อย → apply 1438 ใน
+       script ของทั้ง Pi และ Mini PC + server ให้ persist
+     - ค้นพบสำคัญ: glorytun-mud มี MTU 2 ค่า — link MTU (kernel) ตั้งได้
+       ผ่าน ip link set แต่ glorytun-internal MTU เป็น 1442 เสมอ
+       (auto-probe, override ไม่ได้) อย่างไรก็ตาม link MTU 1438 ยังมีผล
+       ต่อ TCP MSS clamping ใน nftables (rt mtu) → MSS = 1398 ช่วยลด
+       queue pressure ได้บ้าง
+
+   ตรวจสอบสมมติฐาน "fast.com ช้า = peering server-Netflix แย่":
+     - ใช้ fast.com API จาก server ตรงๆ ไม่ผ่าน tunnel
+     - Netflix Open Connect ใน TOT-BKK (อยู่ใน datacenter เดียวกับ server!):
+       517–533 Mbps direct
+     - Netflix OCA ในยุโรป (Budapest/Sofia/Warsaw): 4.6–6.6 Mbps direct
+     - fast.com test ที่เห็น 5–10 Mbps ผ่าน tunnel ไม่ใช่ peering issue
+       แต่เป็น methodology — fast.com ขอ 5 server, ได้ Thai 2 ตัว + EU 3 ตัว
+       parallel แล้วเฉลี่ย → ผลถูก European OCAs ฉุดลง
+     - Netflix streaming จริงไม่กระทบ (Netflix เลือก Thai OCA เท่านั้น)
+
+2. Migration กลับ Pi 4 + เทียบสมรรถนะ (ช่วงบ่าย)
+   ─────────────────────────────────────────────────────────────────
+   Apply MTU 1438 ถาวร — แก้ glorytun-start.sh + glorytun-server.service
+   ทั้ง 2 ฝั่ง + backup ไฟล์เดิมก่อน ปรากฏว่าเมื่อ service restart,
+   glorytun reset link MTU กลับเป็น 1442 ทันที (ตั้ง MTU เองจาก probe)
+   พบว่าต้อง stop sync timer ก่อนถึงจะตั้ง 1438 stable ได้
+
+   ตรวจดู Pi เก่า (offline 2 วันบน Tailscale) — Pi ปิดอยู่ เปิด Pi
+   โดยจ่ายไฟผ่าน USB จาก laptop (USB-C ของ Pi 4 = power only ไม่ใช่
+   network gadget mode)
+
+   หา Pi บน network ไม่เจอในตอนแรก — scan 192.168.1.0/24 +
+   10.255.255.0/24 + Tailscale หมด ไม่เจอ Raspberry Pi MAC
+   (b8:27:eb/dc:a6:32/e4:5f:01) จนกระทั่ง SSH ผ่านทันทีที่ 192.168.1.6
+   พบว่า DTC (Debian 13 trixie, ARM64) — user ถอด USB ASIX (wan2 ของ PC)
+   ไปเสียบ Pi ตอนแรก Pi ได้ DHCP IP เดิมของ adapter นั้น (.6) เพราะ
+   MAC เดียวกัน
+
+   Audit Pi 6 จุดเทียบกับ PC พบว่า config ส่วนใหญ่ถูกแล้ว ยกเว้น:
+     - script MTU 1350 (ของเก่า ไม่ใช่ 1438 ที่เป็น new standard)
+     - dispatcher + sync.sh ใช้ beat 30ms (ของเก่า ไม่ใช่ 50ms)
+     - Tailscale: NoState, logged out, DNS resolve fail (Bug 15 อาการกลับมา)
+     - Pi clock เพี้ยน 3 วัน (ไม่ sync เพราะ Tailscale ดับ → DNS เพี้ยน
+       → NTP UDP 123 timeout)
+
+   แก้ทั้งหมด:
+     - sed แก้ MTU 1350 → 1438 + beat 30ms → 50ms (พร้อม backup)
+     - manual set Pi clock จาก laptop time (NTP ผ่าน gt0 ไม่ผ่าน — UDP 123
+       ถูก block somewhere; ทีหลังเมื่อ tunnel ทำงานเต็ม Tailscale ค่อย sync เอง)
+     - tailscale up --accept-dns=false → กลับมาออนไลน์ 100.82.150.4
+
+   Hardware cutover — Pi รับช่วงต่อจาก Mini PC:
+     - stop PC, ย้าย USB ASIX อีกตัว + LAN cable ไป Pi, ปิด PC
+     - clients re-DHCP ผ่าน Pi's eth0 ภายใน ~30s
+     - รอบแรกหลังย้าย eth2 ยังโชว์ NO-CARRIER (USB เสียบแต่ไม่มีสาย
+       Ethernet) — ตรวจพบว่าสาย ISP B เสียบไม่แน่น
+
+   เปรียบเทียบ Pi (rate 200m) vs Mini PC (rate 500m) — Pi ชนะทุก case:
+
+              PC (500m)   Pi (200m)   Δ
+     down p1     5.4        41.3      +665%   ← 8 เท่า!
+     down p4    21.3        41.5       +95%
+     down p8    25.9        43.1       +66%
+     up   p1    42.0        46.9       +12%
+     up   p8    39.9        62.7       +57%
+
+   สาเหตุ: rate cap เล็กกว่า → queue ไม่ล้น → loss ต่ำกว่า
+   (PC paths เคยมี RX-LOSS 0.78% ส่วน Pi 0% ระหว่าง bench)
+   ตรงกับสูตร Mathis: throughput TCP แปรผกผันกับ √loss
+
+   บันทึกไว้ใน bench/results/COMPARE-PC-vs-Pi-20260525.{md,txt}
+   พร้อมอ้างหลักฐาน + Mathis prediction match กับตัวเลขจริง
+
+3. Verify Bug 23 + ทดลอง Workarounds (ช่วงเย็น)
+   ─────────────────────────────────────────────────────────────────
+   ทำ controlled test (ทาง software, ไม่ต้องถอดสาย) — ตั้ง pref 0/1
+   เพื่อ disable ทีละ path:
+
+              Bonded   ISP A only   ISP B only
+     up   p1    5.5       11.0        17.5      ← B alone 3× bonded
+     down p1   10.1       13.9        30.1      ← B alone 3× bonded
+     up   p8   38.5       43.8        28.5
+     retx     2906       1032          290      ← B alone 10× cleaner
+
+   Confirm 100% ว่า bonding ทำให้ TCP ช้ากว่า ISP เดียว
+   เป็น "reorder penalty" ตรงตามที่ Bug 23 ระบุไว้ตั้งแต่ต้น
+
+   เสนอ Active/Backup mode (ISP B primary, ISP A backup) — user reject
+   ทันที "เราต้องการ Bandwidth Bonding มากๆ" → บันทึก preference ไว้
+   เพื่อ session หน้าไม่ต้องเสนอซ้ำ
+
+   ทดลอง Workaround 2 ทาง:
+
+   Option β — Asymmetric rate weighting (ISP B 300m, ISP A 100m):
+     hypothesis: glorytun-mud split proportional → ส่งไป B มากกว่า
+     → reorder น้อยลง ผลที่ได้:
+       - up p1: 5.5 → 1.7 Mbps (-69%)
+       - up p8: 38.5 → 10.3 Mbps (-73%)
+       - ISP B RX-LOSS spike เป็น 4.31%
+     เข้าใจผิด — glorytun ไม่ split proportional, มัน push ตาม rate
+     ที่ตั้ง → ตั้ง 300m แต่ ISP B รับไม่ไหว → loss เพิ่ม → Revert
+
+   Option α — losslimit 5% (auto-disable path เมื่อ loss สูง):
+     หวังว่าจะช่วยตอน burst loss monitor 60 วินาที ผลที่ได้:
+       - path B ที่เคยมี RX-LOSS 4.31% ยังโชว์ "running" ไม่ถูก disable
+         เพราะ glorytun ใช้ running-average ของช่วง 10s ล่าสุด ไม่ใช่
+         cumulative
+       - ปกติ loss ~0% → losslimit ไม่ kick
+     losslimit ช่วยแค่ตอน ISP outage event ไม่ช่วยแก้ Bug 23 → Revert
+
+   ข้อสรุป Bug 23: ไม่มี glorytun config ใดที่จะแก้ reorder penalty ได้
+   ต้องเปลี่ยน architecture (OpenMPTCPRouter หรือ patch glorytun source
+   ให้ทำ per-flow hashing) เก็บไว้ดำเนินการ session หน้า
+
+   อัปเดต CLAUDE.md ให้ตรงกับ production state ปัจจุบัน:
+     - Architecture diagram: miniPC → Pi 4
+     - Active machine, Tailscale state, SSH aliases
+     - เพิ่ม Session 2026-05-25 พร้อมตัวเลข bench Pi vs PC +
+       workaround ที่ลองแล้วไม่ work
+     - update "🔜 งานต่อไป" ให้สะท้อนว่าเหลือแต่ architectural changes
+
+■ สรุปไฟล์ที่สร้าง / แก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  สร้างใหม่ (บน Mini PC → ย้ายไป Pi):
+    /home/maeb/glorytun-debug/bench/bench-tunnel.sh
+      — TCP matrix: 1/4/8 streams × up/down × 3 runs × 30s
+    /home/maeb/glorytun-debug/bench/bench-paths.sh
+      — single iperf3 run + per-WAN byte counter ทุก 1 วินาที
+    /home/maeb/glorytun-debug/bench/bench-summary.py
+      — parser JSON iperf3 → markdown
+    /home/maeb/glorytun-debug/bench/probe-ports.sh
+      — ตรวจ outbound reachability ของแต่ละ WAN
+    bench/results/COMPARE-PC-vs-Pi-20260525.md
+    bench/results/COMPARE-PC-vs-Pi-20260525.txt
+      — รายงานเปรียบเทียบ Pi (200m) vs Mini PC (500m) + Mathis analysis
+
+  แก้ไข (บน Pi + Mini PC + Server):
+    glorytun-start.sh              — MTU link 1442 → 1438 (+ backup)
+    glorytun-server.service        — MTU 1442 → 1438 (+ backup)
+    Pi: glorytun-start.sh          — MTU 1350 → 1438
+    Pi: glorytun-sync.sh           — beat 30ms → 50ms
+    CLAUDE.md                      — Architecture, active machine,
+                                     Session 2026-05-25, งานต่อไป
+
+  Config ปัจจุบัน (สิ้นสุดวันนี้):
+    Active machine : Pi 4 (DTC, Tailscale 100.82.150.4)
+    Hot spare      : Mini PC (powered off, configs ตรงกัน)
+    Rate cap       : 200m × 200m (ต่อ path)
+    Beat           : 50ms
+    MTU (link)     : 1438 (Pi + PC + server)
+    MTU (internal) : 1442 (glorytun auto-probe, เปลี่ยนไม่ได้)
+    Paths          : 2 (ISP A + ISP B) — both pref 0, LOSS=0.00%
+
+■ เทคโนโลยีที่ใช้
+────────────────────────────────────────────────────────────────────────
+
+  - iperf3        — TCP matrix + UDP ceiling test, JSON output
+  - Glorytun-mud  — MTU tuning (link vs internal 2 ชั้น),
+                    rate cap, beat, pref, losslimit
+  - Tailscale     — remote access ผ่าน Pi (100.82.150.4)
+  - Raspberry Pi  — สลับจาก Mini PC เป็น active gateway
+  - Python        — bench-summary.py: iperf3 JSON → markdown
+  - bash          — bench-tunnel.sh, bench-paths.sh, probe-ports.sh
+  - nftables      — TCP MSS clamping ผ่าน rt mtu (link MTU 1438)
+  - fast.com API  — ทดสอบ Netflix OCA selection methodology
+  - Mathis formula — TCP throughput ≈ MSS / (RTT × √loss)
+
+■ ปัญหาที่พบและแนวทางแก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  ปัญหา : LAN noise สูง — variance ±20–30% ระหว่างชั่วโมง
+  วิเคราะห์: ครอบครัวใช้ tunnel 7–8 client พร้อมกัน ทำให้ A/B test
+             1-byte MTU difference (1438 vs 1439) อ่านไม่ออก
+  แก้ไข : ต้องรัน A/B test back-to-back ทันที (ห่างกัน 25 นาที
+             ยังต่างกัน 50%+ จาก noise) session หน้าถ้า tune ละเอียด
+             ต้องรันตอนดึกที่ household idle
+
+  ปัญหา : glorytun MTU 2 ชั้น — link MTU กับ internal MTU ทำงานต่างกัน
+  วิเคราะห์: glorytun-mud probe internal MTU อัตโนมัติ (= 1442) และ
+             ไม่ยอมให้ override — ต่างจาก link MTU ที่ตั้งผ่าน ip link set
+  แก้ไข : ยอมรับว่า internal MTU = 1442 เปลี่ยนไม่ได้ แค่ตั้ง link
+             MTU 1438 ให้ MSS clamping ทำงาน ก็พอ
+
+  ปัญหา : Pi หาบน network ไม่เจอ — scan ทุก subnet แล้วไม่พบ
+  วิเคราะห์: user ถอด USB ASIX adapter ออกจาก Mini PC ไปเสียบ Pi
+             Pi ได้ DHCP IP เดิม (.6) เพราะ MAC adapter เดียวกัน
+             ทำให้ IP ไม่ตรงกับที่คาด
+  แก้ไข : user ช่วยบอกว่าน่าจะอยู่ .6 เพราะ MAC คุ้น — SSH ผ่านทันที
+             เรียนรู้ว่า user observation มีค่า ควรถามก่อน scan เอง
+
+  ปัญหา : glorytun reset link MTU กลับ 1442 หลัง service restart
+  วิเคราะห์: glorytun probe MTU ตอน start และ override ค่าที่ตั้งไว้
+  แก้ไข : ต้อง stop sync timer ก่อน แล้วตั้ง MTU 1438 หลัง glorytun start
+
+  ปัญหา : Pi clock เพี้ยน 3 วัน
+  วิเคราะห์: Tailscale พัง → DNS fail → NTP UDP 123 timeout loop
+             ทำให้ไม่ได้ sync เวลานาน 3 วัน
+  แก้ไข : manual set clock จาก laptop time ก่อน รอ Tailscale
+             ขึ้นมาออนไลน์แล้วค่อย sync เอง (NTP UDP 123 ยังถูก block)
+
+  ปัญหา : Asymmetric rate weighting ทำให้ loss spike ไม่ได้ช่วย
+  วิเคราะห์: เข้าใจผิดว่า glorytun-mud split proportional ตาม rate
+             ความจริง glorytun push ตาม target rate → ตั้ง 300m แต่
+             ISP B รับไม่ไหว → loss เพิ่ม
+  แก้ไข : เรียนรู้ algorithm จริงและบันทึกใน CLAUDE.md เพื่อไม่ลองซ้ำ
+
+  ปัญหา : ISP B สาย Ethernet หลวมรอบแรกหลังย้าย hardware
+  วิเคราะห์: สาย Ethernet ของ ISP B เสียบไม่แน่นหลัง cutover
+  แก้ไข : user ตรวจสอบและเสียบใหม่ให้แน่น eth2 กลับมา carrier ปกติ
+
+════════════════════════════════════════════════════════════════════════
+
+════════════════════════════════════════════════════════════════════════
+  รายงานการปฏิบัติงานฝึกประสบการณ์วิชาชีพ
+  วันที่  : อังคารที่ 26 พฤษภาคม 2569
+  สัปดาห์ : สัปดาห์ที่ 11
+════════════════════════════════════════════════════════════════════════
+
+■ งานที่ดำเนินการในวันนี้
+────────────────────────────────────────────────────────────────────────
+
+1. ซ้อมนำเสนอผลงานโครงการฝึกงาน — Face Attendance System +
+   Glorytun Channel Bonding Router (ทั้งวัน)
+   ─────────────────────────────────────────────────────────────────
+   ซ้อมนำเสนอรายงานสรุปผลการฝึกงาน ร่วมกับสมาชิกในกลุ่ม 2 คน ได้แก่
+   นายวีรภัทร สาลีผล และ นายเนติ อนันต์กุล โดยใช้ไฟล์ Presentation
+   (Overview_Internproject.pdf, 20 slides) ครอบคลุมงาน 2 โปรเจกต์หลัก
+   ตลอด 11 สัปดาห์ของการฝึกงาน (16 มีนาคม – 29 พฤษภาคม 2569)
+
+   ── ส่วนที่ 1: Face Attendance System ──────────────────────────────
+
+   (1.1) Project Overview
+     - ระบบบันทึกเวลาเข้าออกงานด้วยการจดจำใบหน้าแบบเรียลไทม์
+       ไม่ต้องใช้บัตร ไม่ต้องสัมผัส พนักงานถูกระบุตัวตนและบันทึกเวลา
+       เข้างานอัตโนมัติเมื่อเดินเข้าใกล้กล้อง
+     - เทคโนโลยีหลัก: InsightFace ArcFace 512d, MediaPipe, FastAPI,
+       Vue 3 / React
+
+   (1.2) Development Timeline — กว่า 10 Version
+     - v1–v4  (Foundation)    : OpenCV face detection, SQLite storage
+     - v5     (ArcFace)       : Migrate ไป InsightFace buffalo_l,
+                                Accuracy +90% (75% → 95%)
+     - v6     (Infrastructure): Database migration, GPU fix
+     - v7     (Security Layer): Anti-Spoofing 6 ชั้น, IP Camera,
+                                Profile system
+     - v8     (Hardening)     : FAS tuning, absence re-verification
+     - v9     (Integration)   : External Personnel API, security hardening
+     - v10    (Scale)         : Multi-camera, Web Dashboard,
+                                Camera Management GUI
+     - v11    (Present)       : Mask PID, PicSAVE/Race Fix,
+                                External API Photo UI
+
+   (1.3) System Architecture
+     - 3 โปรเซสทำงานอิสระแบบขนานกัน สื่อสารผ่าน Shared State + REST API:
+       * main.py              — สร้าง thread แยกต่ละกล้อง จัดการ frame
+                               buffer รันลูปการจดจำใบหน้า
+       * api.py (port 8000)   — FastAPI backend CRUD การเข้างาน +
+                               ข้อมูลบุคลากร
+       * stream_server.py     — stream server (port 8001) พร้อม Web UI
+                               ผู้ดูแลระบบ
+     - ตั้งค่าทั้งหมดผ่าน cameras.json และ .env
+
+   (1.4) Web Dashboard
+     - Vue 3 + FastAPI ให้มองเห็นข้อมูลการเข้างานแบบเรียลไทม์
+       จากทุกกล้อง ทุกแผนกในที่เดียว
+     - หน้าหลัก: กล้องสด (LIVE · FACE RECOGNITION), แดชบอร์ด,
+       ประวัติเวลา, รายงาน, จัดการผู้ใช้
+
+   (1.5) Docker Architecture
+     - Base image: CUDA 12.2 + Ubuntu 22.04 (GPU Acceleration)
+     - Service layer: PG_ADMIN (Admin & Management),
+       PostgreSQL (Database), ServerAPI (Backend API)
+     - Data flow: กล้อง → OpenCV → MediaPipe → InsightFace → DB → แสดงผล
+     - คุณสมบัติ: Containerized, GPU Accelerated (NVIDIA CUDA),
+       Secure & Reliable, Scalable Architecture, Real-time Monitoring
+
+   (1.6) Data Encryption & Security Pipeline (End-to-End)
+     - ชั้น 1 Network Layer   : HTTPS/TLS 1.3, Load Balancer, Access Control
+     - ชั้น 2 Server API      : API Authentication, Validated Request
+     - ชั้น 3 Face API        : OAuth 2.0/SSO, Identity Analysis,
+                               Zero-Trust Policy
+     - ชั้น 4 Response        : CDN & Caching, CDN Delivery, Edge Caching
+     - ชั้น 5 SIEM & Monitor  : 24/7 Auditing, Centralized Logs,
+                               Anomaly Detection, Security Alerts
+     - Security Standard: Confidentiality + Integrity + Availability
+
+   (1.7) Network Architecture (Advanced Docker)
+     - Public Network (port 80/443): Nginx / Reverse Proxy
+     - Secure Data Network: Inference Worker 1 & 2, PostgreSQL
+       (ไม่มี public access)
+     - Backend Private Network: ServerAPI
+     - Queue: Redis / RabbitMQ รับ job จาก ServerAPI → ส่งให้ Inference Worker
+     - CCTV Cameras ส่ง Encrypted Stream (HTTPS/RTSP) เข้า Nginx
+
+   (1.8) Program Flow
+     - Startup     : โหลด Config → Resolve ตัวแปร Environment → Spawn Thread
+     - Per Frame   : จับภาพ → ตรวจจับใบหน้าด้วย InsightFace → สร้าง Embedding
+                    ด้วย ArcFace → จับคู่ด้วย Cosine Similarity
+     - Anti-Spoofing: Anti-Spoofing Pipeline 6 ชั้น → ยืนยันว่าเป็นคนจริง
+     - Check-in    : ส่ง POST ไปยัง API พร้อม Snapshot ข้อมูลบุคลากร
+     - Checkout    : เช็กเอาต์อัตโนมัติเมื่อถึงเวลา CHECKOUT_TIME
+     - UI          : แท็บบาร์หลายกล้อง จัดการกล้องแบบเรียลไทม์
+                    สตรีมวิดีโอผ่านเว็บด้วย MJPEG
+
+   (1.9) ปัญหาสำคัญที่นำเสนอ — Face Attendance System
+
+   Problem 1: Screen Border False Positive จากกล้อง IP RTSP
+     - ปัญหา: Anti-Spoofing ตรวจคนจริงเป็นจอปลอมหลังย้ายไปใช้กล้อง IP
+       (FFT score = 0.000 ตลอด, screen_ok = False ค้างถาวร)
+     - สาเหตุ: H.264 DCT block artifact ทำให้ FFT จับ pattern คล้าย LCD grid,
+       Wide-angle lens ทำให้ขอบโต๊ะ/ประตูถูกตรวจเป็นขอบจอ,
+       Bug จาก refactor ที่ลบ early return ออก
+     - แก้ไข: Re-calibrate FFT Formula (peak_rate weight 25→12, ปรับ
+       radial_cov offset), Time-based Confirmation (ยืนยัน 3 วินาทีก่อน Fail),
+       Tuning Margin Zone (จำกัดพื้นที่ตรวจ)
+
+   Problem 2: ArcFace Migration (v5)
+     - ปัญหา: face_recognition library accuracy ต่ำกับคนเอเชีย ช้า ไม่ใช้ GPU
+       (accuracy ~75%, FPS 6–8, ทำ multi-cam ไม่ได้)
+     - สาเหตุ: dlib ResNet มี training bias (เน้นคนผิวขาว),
+       Embedding แค่ 128d ใช้ Euclidean distance, Library รองรับเฉพาะ CPU
+     - แก้ไข: Migrate ไป InsightFace buffalo_l (ArcFace + ResNet50, 512d),
+       Cosine Similarity (FACE_TOLERANCE = 0.35), Re-encode dataset ทั้งหมด
+       ด้วย encode_faces_arcface.py, Re-tune anti-spoofing threshold
+       (MOTION_VAR_MIN = 1.2)
+     - ผลลัพธ์: Accuracy 75% → 95%, FPS 6–8 → 22–25, รองรับกล้อง ≥ 1 ตัว
+
+   ── ส่วนที่ 2: Glorytun Channel Bonding Router ─────────────────────
+
+   (1.10) ปัญหาที่ต้องการแก้ (ก่อนมีระบบ)
+     - Unstable Connection Quality: ISP เดียวส่งผลกระทบกับ Video Call
+       ต้องการ multi-path เพื่อกระจาย risk
+     - Wasted Bandwidth: มีอินเทอร์เน็ต 2 เส้น แต่ใช้ได้เพียงเส้นเดียว
+     - No Auto Failover: เมื่อเส้นหลักหลุด ต้องสลับด้วยมือทุกครั้ง
+     - No Auto-Recovery: ระบบไม่กลับมาเองหลัง WAN เปลี่ยน IP, Reboot,
+       หรือ Hotplug
+
+   (1.11) Channel Bonding Architecture Overview
+     - Raspberry Pi 4 (hostname: DTC) เป็น Central Bonding Node
+       รับ WAN 2 เส้นผ่าน eth1 (ISP A, dynamic IP) + eth2 (ISP B, dynamic IP)
+     - สร้าง Glorytun UDP Tunnel (port 65001, chacha20poly1305)
+       ไปยัง VPN Server TH (61.91.251.238)
+     - แจก IP อัตโนมัติให้ Client ผ่าน eth0 (Range 10.255.255.10–200)
+     - Security Layer: fail2ban, nftables, pcap capture, logrotate
+     - Backup: restic Daily 02:00, Retention 7d/4w/3m, NVMe 931GB
+
+   (1.12) Phase 1–2: Channel Bonding + Router Setup
+     - Glorytun + Watchdog: Service พร้อม Auto-restart รักษา Tunnel ตลอดเวลา
+     - Policy Routing: แยก Routing Table eth1 → table 100, eth2 → table 101
+       Rate Fixed tx/rx 100m ทั้ง 2 ทิศทาง
+     - dnsmasq + nftables: แจก DHCP + DNS อัตโนมัติบน eth0, FORWARD
+       eth0 ↔ gt0 พร้อม MSS Clamping และ NAT Masquerade 10.255.255.0/24
+
+   (1.13) Phase 3: Auto-Recovery System
+     - NetworkManager wan-auto: Profile แบบ multi-connect รองรับทุก WAN
+       Interface โดยไม่ต้องตั้งค่าเพิ่ม
+     - NM Dispatcher: อัปเดต Routing + Path อัตโนมัติทันทีเมื่อ IP เปลี่ยน
+     - glorytun-sync.timer: ทำงานทุก 5 วินาที ตรวจสอบและ sync สถานะ Tunnel
+     - Auto-Recovery ทุกกรณี: Reboot / Hotplug / IP Change → ระบบกลับมา
+       เองอัตโนมัติโดยไม่ต้องแทรกแซง
+
+   (1.14) Phase 4–5: Security Hardening + Backup
+     - fail2ban: maxretry 10 / 30 min / ban 1h (nftables backend)
+     - SSH: port 22 → 4822, ปิด PasswordAuthentication
+     - nftables: DROP + log ทุก connection บน port 22
+     - pcap capture gt0: snaplen 96 bytes, max 590GB
+     - logrotate: daily ตี 1, จำกัด 600GB รวม
+     - restic Full Backup ทุกวัน ตี 2, Retention 7d/4w/3m,
+       LVM Expansion 100GB → 700GB, NVMe ความจุรวม 931GB
+
+   (1.15) สรุปผลงาน + Next Steps
+     สิ่งที่ทำได้สำเร็จ:
+       - Channel Bonding รวม 2 เส้น
+       - Auto-Failover 5–10 วินาที ไม่หลุด
+       - Auto-Recovery ทุกกรณี (Reboot/Hotplug/IP Change)
+       - Security + Backup (fail2ban, pcap, restic, LVM)
+       - ระบบพร้อม Production Use — ผ่าน Reboot Test 10/10 ครั้ง
+     Next Steps:
+       - เพิ่ม Monitoring Dashboard (Grafana + Prometheus)
+       - ปรับปรุง Alerting ผ่าน Telegram/Email
+       - พิจารณา IPv6 Support ใน Tunnel
+
+■ สรุปไฟล์ที่สร้าง / แก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  ใช้งาน (ไม่มีการแก้ไขโค้ด — วันซ้อมพรีเซนต์):
+    Overview_Internproject.pdf (20 slides)
+      — Presentation สรุปผลการฝึกงาน 2 โปรเจกต์ ใช้ซ้อมนำเสนอทั้งวัน
+
+■ เทคโนโลยีที่ใช้
+────────────────────────────────────────────────────────────────────────
+
+  Face Attendance System:
+    - InsightFace (buffalo_l, ArcFace 512d) + ONNX Runtime (GPU)
+    - MediaPipe — Anti-Spoofing (Liveness Detection) 6 ชั้น
+    - FastAPI + PostgreSQL — REST API backend + Database
+    - Vue 3 / React — Web Dashboard frontend
+    - Docker (CUDA 12.2 + Ubuntu 22.04) — Container deployment
+    - Redis / RabbitMQ — Job queue สำหรับ Inference Worker
+    - Nginx — Reverse Proxy + Network Isolation
+
+  Glorytun Channel Bonding Router:
+    - Glorytun-mud — Channel bonding ผ่าน UDP tunnel (chacha20poly1305)
+    - Raspberry Pi 4 — Central Bonding Node (Debian 13 Trixie)
+    - NetworkManager + NM Dispatcher — Auto-recovery เมื่อ IP เปลี่ยน
+    - dnsmasq + nftables — DHCP/DNS + Firewall + MSS Clamping + NAT
+    - fail2ban + pcap + restic — Security hardening + Backup
+    - Tailscale — Remote management
+
+■ ปัญหาที่พบและแนวทางแก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  (ไม่มีปัญหาด้านเทคนิค — วันนี้เป็นวันซ้อมนำเสนอผลงาน)
+
+════════════════════════════════════════════════════════════════════════
