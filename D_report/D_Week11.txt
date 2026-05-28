@@ -261,7 +261,105 @@
 ■ งานที่ดำเนินการในวันนี้
 ────────────────────────────────────────────────────────────────────────
 
-1. ซ้อมนำเสนอผลงานโครงการฝึกงาน — Face Attendance System +
+1. ติดตั้ง OpenMPTCPRouter (OMR) บน Mini PC อีกเครื่อง (ช่วงเช้า)
+   ─────────────────────────────────────────────────────────────────
+   Bug 23 (TCP single-stream slow over bonded tunnel) ยังเป็น architectural
+   limitation ที่ glorytun-mud แก้ไม่ได้ ทางเลือกที่จดไว้ใน CLAUDE.md
+   คือเปลี่ยนไปใช้ OMR ที่ทำ real MPTCP per-flow bonding (ไม่ใช่
+   packet-level reorder แบบ glorytun) จึงเตรียม Mini PC อีกเครื่องมาลง
+   OMR เป็น test bed แยกออกจากระบบ production ของ Pi 4
+
+   ทำให้สามารถเปรียบเทียบทั้ง 2 แนวทางได้ในสภาพแวดล้อมจริงโดยไม่กระทบ
+   ของเดิม และยังเก็บ Pi 4 ไว้เป็น primary ที่ทำงานต่อเนื่อง
+
+2. แก้ Bug 27 (Clock Skew) บน Pi + วางระบบป้องกันระยะยาว (ช่วงบ่าย)
+   ─────────────────────────────────────────────────────────────────
+   พบว่า Tailscale ของ Pi เข้าไม่ได้ — อาการเดิม (key sha256 ตรง,
+   glorytun version ตรง, cipher ตรง แต่ tunnel ไม่ handshake) จึงเข้า
+   ทาง LAN ที่ IP 192.168.1.2
+
+     ผลตรวจ: Pi clock ช้ากว่า server 3 ชั่วโมง 7 นาที
+     → glorytun-mud silently drop packet เพราะ timestamp นอก replay window
+
+   แก้ทันที:
+     SERVER_TIME=$(ssh glorytun-server 'date -u +"%Y-%m-%d %H:%M:%S"')
+     ssh dtc@192.168.1.2 "sudo date -u -s '$SERVER_TIME'"
+     sudo systemctl restart glorytun-pi.service
+
+   Tunnel กลับมาภายใน 10 วินาที แต่ Tailscale ยัง "logged out" ต้อง
+   restart tailscaled + tailscale up อีกครั้งจึงกลับมา 100.82.150.4
+
+   เพราะปัญหานี้จะกลับมาทุกครั้งที่ Pi reboot (ไม่มี RTC battery +
+   NTP UDP 123 ถูก ISP block) จึงวางระบบป้องกันถาวร 2 ชั้น:
+
+   ชั้นที่ 1 — Boot-time: htpdate ผ่าน HTTPS
+     สร้าง htpdate-boot.service บน Pi เป็น one-shot รัน
+     Before=glorytun-pi.service ดึงเวลาจาก HTTPS Date header ของ
+     google.com / cloudflare.com / apple.com ผ่าน port 443
+     (ISP ไม่เคย block) accuracy ~1 วินาที อยู่ใน replay window ของ glorytun
+
+   ชั้นที่ 2 — Runtime: chrony ผ่าน Tailscale ไป server
+     ติดตั้ง chrony บน server + เพิ่ม "allow 100.64.0.0/10" ใน chrony.conf
+     เพื่อ serve NTP ให้ subnet Tailscale (verify ผ่าน tcpdump)
+     ติดตั้ง chrony บน Pi + ใส่ "server 100.65.195.27 iburst" ใน chrony.conf
+     เลือก Tailscale IP เพราะไม่ถูก ISP block
+
+   เพิ่ม drop-in /etc/systemd/system/glorytun-server.service.d/wait-for-time.conf
+   บน server ให้ After=chrony.service time-sync.target กัน race condition
+   ตอน server reboot โดยไม่ต้อง restart tunnel ที่รันอยู่
+
+   ทดสอบหลังแก้:
+     - Pi ↔ Server drift = 0 วินาที (verify ผ่าน date -u +%s ทั้ง 2 ฝั่ง)
+     - ping 10.255.255.1 และ ping Tailscale server 100.65.195.27 ผ่านทั้ง 2
+
+3. เก็บ Bandwidth Log ระหว่าง Client โหลดเกม (ช่วงเย็น)
+   ─────────────────────────────────────────────────────────────────
+   User เริ่มโหลดเกมบน client จึงใช้โอกาสเก็บ bandwidth log จริงระหว่าง
+   ใช้งานเป็นหลักฐานสำหรับ presentation วันพรุ่งนี้
+
+   เก็บ log 15 นาที ทุก 2 วินาที (441 samples) จับ:
+     - bytes counter ของ eth1, gt0
+     - glorytun TX-LOSS / RX-LOSS แต่ละช่วง
+
+   หมายเหตุ: Pi เสียบ USB ASIX แค่ตัวเดียว (single path) — user ยืนยัน
+   ว่าตั้งใจเพื่อทดสอบว่าขาเดียววิ่งเต็มไหม
+
+   วิเคราะห์ log ได้:
+     - p50 download:  82 Mbps
+     - p95 download:  107 Mbps
+     - max download:  118 Mbps
+     - eth1 RX max:   137 Mbps  (~ISP A line speed)
+     - encapsulation overhead: 22%
+     - RX-LOSS = 0% ตลอดช่วง burst
+     - bottleneck = ISP A เอง ไม่ใช่ Pi/tunnel
+
+   พบ event 1 จุดที่ ISP A สะดุด 26 วินาที ที่ 20:47:44–20:48:10
+   TX-LOSS สะสมถึง 44.7% แล้ว recover เองตอน 20:48:12 โดยไม่ต้อง
+   restart — หลักฐานว่า self-healing ทำงานได้จริง
+
+4. สร้าง Evidence Pack สำหรับนำเสนอวันพรุ่งนี้ (ตอนเย็น)
+   ─────────────────────────────────────────────────────────────────
+   สร้างชุดเอกสารหลักฐานที่ตรวจสอบได้ที่
+   /home/maeb/glorytun-debug/evidence-20260526/ :
+
+     SUMMARY.txt                    — main file อ่านง่าย plain text
+     01-services-status.txt         — ทุก service active+enabled
+     02-time-sync.txt               — Pi/Server time sync + drift
+     03-tunnel-state.txt            — tunnel state + lifetime bytes
+     04-self-healing.txt            — watchdog history 24h
+     05-boot-ordering.txt           — systemd dependencies
+     06-backup-inventory.txt        — backup files inventory
+     07-speedlog-15min.log          — 15-min bandwidth log (441 samples)
+     08-bench-PC-vs-Pi.md           — bench: PC vs Pi
+     09-bench-bonded-vs-single.md   — bench: bonded vs single
+
+   ข้อมูลสำคัญที่เป็นหลักฐาน:
+     - Lifetime tunnel data: Server→Pi 30 GB / Pi→Server 703 MB
+     - Watchdog log: 100+ events ใน 7 วัน ไม่เคยถึง threshold 3/3
+     - Bug log 27 รายการ ทุกตัวมี root cause + fix
+     - Time sync verify: Pi–Server drift = 0 sec
+
+5. ซ้อมนำเสนอผลงานโครงการฝึกงาน — Face Attendance System +
    Glorytun Channel Bonding Router (ทั้งวัน)
    ─────────────────────────────────────────────────────────────────
    ซ้อมนำเสนอรายงานสรุปผลการฝึกงาน ร่วมกับสมาชิกในกลุ่ม 2 คน ได้แก่
@@ -425,6 +523,23 @@
 ■ สรุปไฟล์ที่สร้าง / แก้ไข
 ────────────────────────────────────────────────────────────────────────
 
+  สร้างใหม่ (บน Pi + Server):
+    /etc/systemd/system/htpdate-boot.service
+      — one-shot boot-time time sync ผ่าน HTTPS port 443 Before=glorytun
+    /etc/systemd/system/glorytun-server.service.d/wait-for-time.conf
+      — drop-in: After=chrony.service time-sync.target บน server
+    /home/maeb/glorytun-debug/evidence-20260526/SUMMARY.txt
+    /home/maeb/glorytun-debug/evidence-20260526/01–09-*.txt/.log/.md
+      — evidence pack 10 ไฟล์สำหรับนำเสนอ
+    /home/maeb/glorytun-debug/speedlog-15min-20260526.log
+      — 15-min bandwidth log 441 samples
+
+  แก้ไข:
+    /etc/chrony.conf (server) — เพิ่ม allow 100.64.0.0/10
+    /etc/chrony.conf (Pi)     — เพิ่ม server 100.65.195.27 iburst
+    memory/bug27-clock-skew.md — เพิ่ม section "Permanent fix deployed
+                                  2026-05-26"
+
   ใช้งาน (ไม่มีการแก้ไขโค้ด — วันซ้อมพรีเซนต์):
     Overview_Internproject.pdf (20 slides)
       — Presentation สรุปผลการฝึกงาน 2 โปรเจกต์ ใช้ซ้อมนำเสนอทั้งวัน
@@ -432,7 +547,7 @@
 ■ เทคโนโลยีที่ใช้
 ────────────────────────────────────────────────────────────────────────
 
-  Face Attendance System:
+  Face Attendance System (ซ้อมพรีเซนต์):
     - InsightFace (buffalo_l, ArcFace 512d) + ONNX Runtime (GPU)
     - MediaPipe — Anti-Spoofing (Liveness Detection) 6 ชั้น
     - FastAPI + PostgreSQL — REST API backend + Database
@@ -444,14 +559,239 @@
   Glorytun Channel Bonding Router:
     - Glorytun-mud — Channel bonding ผ่าน UDP tunnel (chacha20poly1305)
     - Raspberry Pi 4 — Central Bonding Node (Debian 13 Trixie)
-    - NetworkManager + NM Dispatcher — Auto-recovery เมื่อ IP เปลี่ยน
-    - dnsmasq + nftables — DHCP/DNS + Firewall + MSS Clamping + NAT
-    - fail2ban + pcap + restic — Security hardening + Backup
-    - Tailscale — Remote management
+    - OpenMPTCPRouter (OMR) — ติดตั้งบน Mini PC เป็น test bed
+    - chrony — NTP client/server ผ่าน Tailscale IP (runtime time sync)
+    - htpdate — HTTPS-based time sync ผ่าน port 443 (boot-time)
+    - systemd drop-in — After=chrony.service กัน race condition บน server
+    - Tailscale — Remote management + NTP transport path
+    - bash + awk — เก็บ bandwidth log ทุก 2 วินาที 441 samples
 
 ■ ปัญหาที่พบและแนวทางแก้ไข
 ────────────────────────────────────────────────────────────────────────
 
-  (ไม่มีปัญหาด้านเทคนิค — วันนี้เป็นวันซ้อมนำเสนอผลงาน)
+  ปัญหา : Pi clock ช้ากว่า server 3 ชั่วโมง 7 นาที ทำให้ tunnel handshake
+           silently fail (glorytun drop packet ที่ timestamp นอก replay window)
+  วิเคราะห์: Pi ไม่มี RTC battery + NTP UDP 123 ถูก ISP block → เวลาไม่ sync
+             ตั้งแต่ครั้งก่อนที่ Tailscale พัง
+  แก้ไข : sync เวลาด้วยมือทันที → ติดตั้งระบบ 2 ชั้น (htpdate HTTPS boot +
+            chrony Tailscale runtime)
+
+  ปัญหา : Tailscale ของ Pi ขึ้น "logged out" หลัง tunnel กลับมา
+  วิเคราะห์: network unreachable ผ่าน IPv6 ระหว่างที่ tunnel ดับ ทำให้
+             tailscaled ออก session
+  แก้ไข : systemctl restart tailscaled → tailscale up --accept-dns=false
+
+  ปัญหา : chrony บน server หลัง install ใหม่ ไม่ฟัง UDP 123 ทันที
+  วิเคราะห์: ต้อง restart service หลังเพิ่ม "allow" rule ใน chrony.conf
+             จึงจะ bind port
+  แก้ไข : sudo systemctl restart chrony หลังแก้ config
+
+  ปัญหา : htpdate บน server คำนวณ offset เพี้ยน ขึ้น "Setting -1779801834
+           seconds" (พยายามตั้งเวลาเป็นปี 1970) เมื่อ apple.com timeout
+  วิเคราะห์: offset เพี้ยนเมื่อ target host timeout เพียง 1 ใน 3 ตัว
+  แก้ไข : ตัด htpdate ออกจาก server เพราะ x86 มี CMOS battery + NTP
+            ไม่ถูก block อยู่แล้ว ใช้ chrony อย่างเดียวพอ ลด attack surface
+
+════════════════════════════════════════════════════════════════════════
+
+════════════════════════════════════════════════════════════════════════
+  รายงานการปฏิบัติงานฝึกประสบการณ์วิชาชีพ
+  วันที่  : พุธที่ 27 พฤษภาคม 2569
+  สัปดาห์ : สัปดาห์ที่ 11
+  โปรเจกต์: Glorytun/OMR Channel Bonding Router + Face Attendance System
+════════════════════════════════════════════════════════════════════════
+
+■ งานที่ดำเนินการในวันนี้
+────────────────────────────────────────────────────────────────────────
+
+1. ประชุมศูนย์ รายงานความคืบหน้าโปรเจค (ช่วงเช้า)
+   ─────────────────────────────────────────────────────────────────
+   เข้าประชุมศูนย์ตามตาราง รายงานความคืบหน้าของโปรเจคทั้ง 2 ตัว:
+
+   โปรเจค FaceReg
+     - สรุปสถานะปัจจุบันจาก commits/รายงานวันก่อน ๆ
+     - แจ้งแผนงานต่อตามที่วางไว้
+
+   โปรเจค Glorytun/OMR Channel Bonding
+     - รายงานผลการทดสอบ Mini PC (OMR) จากวันที่ 26 ที่ทำเป็น test bed
+       ขนานกับ Pi 4 (glorytun)
+     - แจ้งทิศทางต่อ: ถ้าผล OMR ดีตามคาด จะ migrate Pi 4 ไป OMR
+       เพื่อแก้ Bug 23 (TCP single-stream slow over bonded tunnel)
+       ที่เป็น architectural limitation ของ glorytun-mud
+     - รายงาน Bug 27 (clock skew) ที่แก้ไปแล้วเมื่อวานด้วยระบบ 2 ชั้น
+       (htpdate boot + chrony runtime ผ่าน Tailscale)
+
+2. Migrate Pi 4 จาก glorytun → OMR (ช่วงบ่าย, in progress)
+   ─────────────────────────────────────────────────────────────────
+   ตามที่วันก่อนยืนยันว่า OMR บน Mini PC ทำงานดี (per-flow MPTCP bonding
+   แก้ Bug 23 ได้จริง) วันนี้จึง migrate Pi 4 ตามไปด้วย โดยใช้โหมด
+   "switch / hot-spare" ระหว่าง Pi ↔ PC — ใช้ client slot openmptcprouter
+   ตัวเดียวกัน เปิดได้ทีละเครื่อง (key + IP ชนกันถ้าเปิดคู่)
+
+   Step 1 — เปิด SSH + แก้ firewall บน OMR server (Debian)
+     OMR server ติดตั้งบน Debian 13 (trixie) เครื่องเดียวกับ vpnserver
+     เดิม (public IP 125.25.38.138) เข้าได้ทาง RustDesk แต่ยังไม่มี SSH:
+       - ติดตั้ง openssh-server + ตั้ง port = 65022 (หลีกเลี่ยง bot scan)
+       - ติดตั้ง RustDesk client บน laptop (Ubuntu 24.04, v1.4.6)
+       - Copy SSH key จาก laptop → ~/.ssh/authorized_keys ของ user vpnserver
+
+     หลังเปิด SSH แล้วยังเข้าไม่ได้ผ่าน Tailscale (100.97.114.42) —
+     SYN ถึง tailscale0 แต่ไม่มี SYN-ACK กลับ tcpdump ยืนยัน:
+       ผลตรวจ: OMR ติดตั้ง nftables filter table INPUT + OUTPUT policy DROP
+               พร้อม allowlist per-interface (enp1s0, gt-tun, mlvpn, ...)
+               แต่ tailscale0 ไม่อยู่ในรายการ → traffic ถูก drop (Bug 28)
+
+     แก้:
+       iptables -I INPUT 1 -i tailscale0 -j ACCEPT
+       iptables -I OUTPUT 1 -o tailscale0 -j ACCEPT
+       + เขียน hook script /etc/network/if-up.d/99-tailscale-accept
+         ให้ re-apply rule อัตโนมัติทุกครั้งที่ tailscale0 ขึ้น
+
+     เพิ่ม SSH alias ใน ~/.ssh/config:
+       ssh omr-server     → Tailscale 100.97.114.42:65022 (default)
+       ssh omr-server-pub → public 125.25.38.138:65022 (Tailscale-down fallback)
+
+   Step 2 — Survey OMR server
+     - omr-vps-admin version 0.16+20260113
+     - Admin Web UI: port 65500 (HTTPS, self-signed)
+     - Client slot "openmptcprouter" provisioned อยู่แล้ว (Mini PC ใช้)
+     - VPN backends ที่รัน parallel: shadowsocks-rust, glorytun UDP 65001,
+       mlvpn 65201–65208, openvpn 65301/65351/65352, xray 65252
+     - Config หลัก: /etc/openmptcprouter-vps-admin/omr-admin-config.json
+     - ตั้ง NOPASSWD sudo ให้ user vpnserver
+
+   Step 3 — Backup Pi 4 configs ก่อน flash SD
+     ต่อสาย LAN laptop → Pi (eth0 10.255.255.254/24) แล้ว backup ของสำคัญ:
+       sudo tar czf /tmp/pi-glorytun-backup-$(date +%Y%m%d-%H%M).tar.gz \
+           /etc/glorytun /etc/systemd/system/glorytun-* \
+           /etc/NetworkManager /usr/local/bin/glorytun* \
+           /etc/dnsmasq.conf /etc/nftables.conf /etc/sysctl.d \
+           /root/.ssh /home/dtc/.ssh /etc/ssh/sshd_config /etc/ssh/ssh_host_*
+
+     ผล: 39 ไฟล์ tarball 126 KB — scp ลง laptop ที่
+     ~/glorytun-debug/backups/pi-glorytun-backup-20260527-1619.tar.gz
+
+   Step 4 — Flash OMR image ลง SD card
+     ดาวน์โหลด OMR Pi 4 factory image จาก releases.openmptcprouter.com:
+       v0.63-6.12-r0+30806-070d8eb4d5-bcm27xx-bcm2711-rpi-4-squashfs-factory
+       ขนาด 68.5 MB เก็บที่ ~/glorytun-debug/omr-pi/omr-rpi4-factory.img.gz
+
+     ยืนยัน device path 2 รอบก่อน flash (กัน dd ผิด device):
+       sudo umount /dev/sdb1 /dev/sdb2
+       zcat ~/glorytun-debug/omr-pi/omr-rpi4-factory.img.gz | \
+           sudo dd of=/dev/sdb bs=4M status=progress conv=fsync
+
+     ผล: 135 MB เขียนใน 6.7 วินาที, partition layout = boot vfat 64M +
+     squashfs rootfs 512M (ตรงกับ OMR format)
+
+   Step 5 — Boot Pi กับ OMR สำเร็จ
+     เสียบ SD กลับ Pi → boot → laptop ได้ DHCP IP 192.168.100.241 จาก OMR
+     SSH root@192.168.100.1 ผ่าน ยืนยัน:
+       - OpenMPTCProuter v0.63-6.12 r0+30806-070d8eb4d5
+       - Kernel 6.12.40 aarch64 (Cortex-A72)
+       - LAN: 192.168.100.1/24 บน built-in eth0
+
+   Step 6 — แก้ Bug 29 (OMR MACVLAN vepa ทำให้ไม่ได้ IP จาก router)
+     ย้าย USB ASIX 1 ตัวจาก PC → Pi เพื่อเป็น WAN แต่ wan1, wan2
+     ไม่ได้ IP จาก DHCP
+
+     ผลตรวจ:
+       network.wan1.type = macvlan, mode = vepa
+       VEPA ต้องการ switch ที่ reflect frame กลับ — router บ้านไม่รองรับ
+       → DHCP silently timeout
+
+     ทดสอบ udhcpc -i eth1 ตรง ๆ ได้ IP 192.168.1.3 ทันที = link/สาย/router ดีหมด
+     ปัญหาเป็นที่ OMR config
+
+     แก้ (bypass MACVLAN):
+       uci set network.wan1.proto=dhcp
+       uci delete network.wan1.type
+       uci delete network.wan1.masterintf
+       uci set network.wan1.device=eth1
+       uci set network.wan1.defaultroute=1
+       uci set network.wan1.peerdns=1
+       uci delete network.wan1_dev
+       uci set network.wan2.auto=0
+       uci set network.wan2.disabled=1
+       uci delete network.wan2_dev
+       uci commit network && /etc/init.d/network reload
+
+     ผล: wan1 ได้ 192.168.1.3 ✅, ping 1.1.1.1 30ms ✅,
+     reach https://125.25.38.138:65500/ ได้
+
+   Step 7 — Pairing Pi ↔ OMR server (paused)
+     ติดต่อ OMR server ได้แล้วแต่ยังไม่ได้ทำ pairing เพราะใกล้จบวัน
+     + PC ยังเหลือ WAN 1 ตัวอยู่ (ยังใช้งานได้ไม่ขาด) + Pair แล้วต้อง
+     stop OMR ที่ PC ก่อนเพื่อหลีกเลี่ยง conflict — เลื่อนไป cutover
+     เต็มรูปแบบวันพรุ่งนี้
+
+     อัปเดต CLAUDE.md เพิ่ม "Session 2026-05-27" + บันทึก memory:
+       omr-server-debian.md     — SSH alias, admin endpoint, Bug 28 fix
+       bug29-omr-macvlan-vepa.md — fix recipe ถ้าเจออีก
+
+■ สรุปไฟล์ที่สร้าง / แก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  สร้างใหม่ (บน OMR server + laptop):
+    /etc/network/if-up.d/99-tailscale-accept (OMR server)
+      — hook script: iptables ACCEPT tailscale0 ทุกครั้งที่ interface ขึ้น
+    /etc/sudoers.d/vpnserver-nopasswd (OMR server)
+      — NOPASSWD sudo สำหรับ user vpnserver
+    ~/.ssh/config (laptop) — เพิ่ม alias omr-server + omr-server-pub
+    ~/glorytun-debug/backups/pi-glorytun-backup-20260527-1619.tar.gz (laptop)
+      — backup 39 ไฟล์ configs glorytun ของ Pi 4 ก่อน flash (126 KB)
+    ~/glorytun-debug/omr-pi/omr-rpi4-factory.img.gz (laptop)
+      — OMR Pi 4 factory image v0.63-6.12 (68.5 MB)
+    memory/omr-server-debian.md
+      — SSH alias, admin endpoint :65500, Bug 28 fix
+    memory/bug29-omr-macvlan-vepa.md
+      — root cause VEPA + uci fix recipe
+
+  แก้ไข:
+    SD card ของ Pi 4    — flash OMR image แทน glorytun image
+    CLAUDE.md           — เพิ่ม Session 2026-05-27, SSH alias, Bug 28/29
+    MEMORY.md           — เพิ่ม pointer omr-server-debian + bug29
+
+■ เทคโนโลยีที่ใช้
+────────────────────────────────────────────────────────────────────────
+
+  - OpenMPTCProuter (OMR) v0.63 — MPTCP bonding router บน Pi 4 (OpenWrt)
+  - OMR VPS Admin v0.16        — server-side daemon (Debian 13)
+  - RustDesk v1.4.6            — remote desktop ใช้เข้า Debian GUI บน laptop
+  - nftables / iptables        — firewall บน OMR server, Bug 28 fix
+  - Tailscale                  — remote access + SSH transport
+  - dd + zcat                  — flash SD card จาก compressed image
+  - uci (OpenWrt UCI)          — แก้ network config บน OMR Pi (Bug 29)
+  - MACVLAN / VEPA             — รูปแบบ network virtualization ที่ OMR ใช้
+                                 (เข้าใจแล้วว่าใช้ไม่ได้กับ consumer router)
+  - openssh-server             — ติดตั้งบน Debian OMR server
+  - bash + tar + scp           — backup Pi configs + transfer ลง laptop
+
+■ ปัญหาที่พบและแนวทางแก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  ปัญหา : Bug 28 — SSH via Tailscale ไปยัง OMR server timeout
+           (SYN ถึงแต่ไม่มี SYN-ACK กลับ)
+  วิเคราะห์: OMR ติดตั้ง nftables policy DROP ทั้ง INPUT/OUTPUT
+             โดย allowlist เฉพาะ interface เดิม (enp1s0, gt-tun, mlvpn ฯลฯ)
+             tailscale0 ไม่อยู่ในรายการ → ถูก drop ทุก packet
+  แก้ไข : iptables -I INPUT/OUTPUT 1 -i/-o tailscale0 -j ACCEPT
+            + hook /etc/network/if-up.d/99-tailscale-accept ให้ persist
+
+  ปัญหา : Bug 29 — wan1/wan2 บน OMR Pi ไม่ได้ IP จาก DHCP ของ router บ้าน
+  วิเคราะห์: OMR factory image ตั้ง wan เป็น MACVLAN mode vepa ซึ่งต้องการ
+             switch ที่รองรับ VEPA frame reflection — router บ้านไม่รองรับ
+             ทำให้ DHCP silently timeout แม้สาย/router/link ปกติ
+  แก้ไข : uci bypass MACVLAN ให้ wan1 ใช้ eth1 physical ตรง + DHCP protocol
+            ลบ .type / .masterintf / wan1_dev device entry ออก
+
+  ปัญหา : heredoc ผ่าน RustDesk paste ปิดด้วย EOF ที่มี indent ทำให้ shell
+           ค้างรอ EOF ไม่สิ้นสุด
+  วิเคราะห์: RustDesk paste เพิ่ม leading whitespace ก่อน EOF token ทำให้
+             shell ไม่รู้จัก closing delimiter
+  แก้ไข : เปลี่ยนเป็น printf '...' | sudo tee แทน heredoc เพื่อหลบ
+            indentation issue
+
+════════════════════════════════════════════════════════════════════════
 
 ════════════════════════════════════════════════════════════════════════
