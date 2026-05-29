@@ -1053,3 +1053,224 @@
   แก้ไข : ใช้ flag scp -O บังคับ legacy SCP protocol แทน
 
 ════════════════════════════════════════════════════════════════════════
+
+════════════════════════════════════════════════════════════════════════
+  รายงานการปฏิบัติงานฝึกประสบการณ์วิชาชีพ
+  วันที่  : ศุกร์ที่ 29 พฤษภาคม 2569
+  สัปดาห์ : สัปดาห์ที่ 11
+  โปรเจกต์: Face Attendance System
+════════════════════════════════════════════════════════════════════════
+
+■ งานที่ดำเนินการในวันนี้
+────────────────────────────────────────────────────────────────────────
+
+1. Merge maevVersion เข้า main + เตรียม Requirements สำหรับ Jetson (ช่วงเช้า)
+   ─────────────────────────────────────────────────────────────────
+   Push branch maevVersion ขึ้น remote แล้ว merge เข้า main แบบ merge commit
+   (--no-ff) รวมงาน Version 14–17 ทั้งหมด (JWT auth, offline queue,
+   user management, watchdog monotonic fix) เข้า main สำเร็จ
+   (111 ไฟล์, ~16,000 บรรทัด)
+
+   จากนั้นตรวจสอบ requirements.txt เพื่อเตรียมลงระบบบน NVIDIA Jetson Orin Nano
+   พบว่า requirements.txt เดิมเป็น pip freeze จากเครื่อง x86_64 + GPU desktop
+   ใช้บน Jetson (aarch64/JetPack) ไม่ได้ — torch+cu126, nvidia-*-cu12,
+   onnxruntime-gpu (PyPI) เป็น x86 ทั้งหมด
+
+   วิเคราะห์แล้วพบว่าโค้ดจริงใช้เพียง cv2, insightface, onnxruntime, mediapipe,
+   fastapi stack, psycopg และ auth libs ส่วน torch/tensorflow ติดมาเพราะด่าน 6
+   MiniFASNet (DeepFace) เท่านั้น จึงสร้าง requirements-jetson.txt แยก
+   พร้อมคู่มือติดตั้งสำหรับ Jetson โดยเฉพาะ
+
+2. Deploy ระบบลง Jetson Orin Nano (JetPack 6.2) ครบทั้งระบบ (ช่วงเช้า-บ่าย)
+   ─────────────────────────────────────────────────────────────────
+   SSH เข้า Jetson (ตั้ง SSH key ก่อน) สำรวจสเปค:
+     JetPack 6.2 (L4T R36.4.7), Ubuntu 22.04, Python 3.10, CUDA 12.6, aarch64,
+     RAM 7.4 GB
+
+   ติดตั้งทีละขั้นตอน:
+     - onnxruntime-gpu 1.23.0 + mediapipe 0.10.14 จาก jetson-ai-lab.io/jp6/cu126
+     - แก้ปัญหา mediapipe ดึง numpy 2.x มา (insightface ต้อง <2)
+       → downgrade numpy==1.26.4 + ถอน opencv ที่ซ้อนกัน เหลือ
+       opencv-contrib-python-headless
+     - ตั้ง FAS_ENABLED=False (ตัดด่าน 6 MiniFASNet ที่ต้องใช้ torch/tensorflow)
+     - PostgreSQL local + migrations/setup_db.sql + admin user (bootstrap)
+     - copy encodings.pkl + .env + สร้าง db_config.json
+     - ลด cameras.json เหลือ IP cam ตัวเดียว เนื่องจาก 4 InsightFace instance
+       พร้อมกันทำให้เกิด GPU OOM (CUBLAS_STATUS_ALLOC_FAILED) บน Orin Nano
+     - nginx + build static (deploy ที่ /var/www/facereg) + แก้ config เพิ่ม
+       location /attendance + /person → api_backend:8000
+       (เดิมขาด ทำให้ Dashboard พัง)
+
+   ทดสอบผ่าน: InsightFace บน GPU 19 FPS, ทุก endpoint ตอบ 200,
+   START spawn main+api สำเร็จ เข้าเว็บที่ http://192.168.1.101 ได้
+
+3. ฟีเจอร์ใหม่ — 3 โหมดการทำงานต่อกล้อง (ช่วงบ่าย)
+   ─────────────────────────────────────────────────────────────────
+   ออกแบบให้แต่ละกล้องเลือกโหมดได้และ admin สลับได้ผ่าน Web UI:
+     - faceatten : ระบบเดิม (oval guide + liveness + บันทึกลงเวลา)
+     - detect    : ตรวจจับ + ระบุตัวตน แสดงข้อมูลคน แต่ไม่ liveness/
+                   ไม่บันทึก/ไม่มี oval
+     - cctv      : ดูภาพสดอย่างเดียว ไม่ inference
+                   (ข้ามโหลด InsightFace ประหยัด GPU)
+
+   ไฟล์ที่แก้ไข:
+     - config.py         — เพิ่ม CAMERA_MODES
+     - main.py           — run_camera แตกกิ่งตาม mode + ข้ามโหลด InsightFace
+                           ถ้า cctv
+     - stream_server.py  — mode ใน config + endpoint
+                           POST /cameras/config/{id}/mode
+                           (เลี่ยงปัญหา URL ถูก mask)
+     - LiveCam.jsx       — dropdown โหมด + mode switcher บนการ์ด
+
+   ทดสอบ 3 โหมดบน Jetson: cctv FPS พุ่ง 44.9 (vs faceatten 7.7)
+   เพราะไม่ inference, detect ไม่บันทึกลงเวลาจริง (attendance count ไม่เพิ่ม)
+
+4. แก้บั๊กการสลับโหมดขณะกล้องทำงาน (ช่วงบ่าย)
+   ─────────────────────────────────────────────────────────────────
+   บั๊ก 1: สลับโหมดขณะรัน → กล้องดับ (บางทีพากล้องอื่นดับด้วย)
+     สาเหตุ: race condition — cam_start watcher spawn worker ใหม่ทันที
+              โดยไม่รอ worker เก่าตาย → 2 worker แย่งกล้องตัวเดียว
+              + graceful exit ออกกลางคันถ้ากล้องเดียว
+     แก้ไข : main.py — cam_start watcher join worker เก่าก่อน spawn
+              + graceful exit ไม่ออกถ้ามี cam_start flag ค้าง
+              + front_end เรียก start อย่างเดียว (atomic)
+
+   บั๊ก 2: IP cam เปลี่ยนไป CCTV → ทุกกล้องดับหมด (USB ไม่เป็น)
+     สาเหตุจริง (เจอจาก log):
+       "Assertion fctx->async_lock failed at
+       libavcodec/pthread_frame.c:175"
+       ThreadedCamera.release() เรียก cap.release() ขณะ reader thread
+       ยัง cap.read() อยู่ → 2 thread แตะ FFmpeg context เดียวกัน
+       → abort() ทั้ง process
+       (USB ใช้ V4L2 ไม่มี frame-threading นี้จึงไม่เจอ)
+     แก้ไข : camera.py — release() join reader thread ก่อนปล่อย capture
+
+   reproduce + verify บนเครื่อง dev จริง (cam2 USB + cam3 IP):
+   สลับโหมดแล้ว main ไม่ crash, กล้องอื่นไม่ดับ, assertion count = 0
+
+5. แยก Port dev/Jetson + ปรับ UI หลายจุด (ช่วงเย็น)
+   ─────────────────────────────────────────────────────────────────
+   - แยก port: dev ใช้ 8010(api)/8011(stream)/5180(vite)
+               Jetson คง 8000/8001 (production nginx)
+               แก้ปัญหา VS Code port-forward จาก Jetson ชน dev
+               เวลา npm run dev (แก้ stream_server hardcode 8000
+               → _API_PORT env)
+   - detect mode แสดงกรอบข้อมูลบนวิดีโอ: เพิ่ม
+     ui_renderer.draw_face_info() วาดกรอบ + ชื่อ/แผนก/ตำแหน่ง
+     ทั้ง local frame และ stream_frame + PersonCard แสดงแผนก/ตำแหน่ง
+   - การ์ดกล้องจัด 2 บรรทัด (ชื่อบน / ประเภท+โหมด+ปุ่ม ล่าง)
+     แก้ไอคอนล้นกรอบ
+   - dark mode dropdown: เพิ่ม color-scheme + บังคับสี <option>
+     กัน text กลืนพื้นขาว
+
+6. Sync Jetson ให้เหมือน dev + Verify (ช่วงเย็น)
+   ─────────────────────────────────────────────────────────────────
+   sync code ทั้งหมดจาก dev → Jetson (backend + frontend + dist)
+   โดยคง environment-specific (FAS_ENABLED=False, cameras.json,
+   .env, db_config) ไว้
+
+   Verify: compile ผ่าน, FFmpeg fix ทำงาน (IP cctv switch ไม่ crash,
+   assertion=0), ทุก endpoint ผ่าน nginx 200 OK
+
+■ สรุปไฟล์ที่สร้าง / แก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  สร้างใหม่:
+    requirements-jetson.txt
+      — dependencies สำหรับ aarch64/JetPack โดยเฉพาะ
+        (onnxruntime-gpu, mediapipe จาก jetson-ai-lab)
+
+  แก้ไข:
+    config.py         — เพิ่ม CAMERA_MODES (faceatten/detect/cctv)
+    main.py           — cam_start watcher join ก่อน spawn,
+                        graceful exit guard, run_camera แตกกิ่งตาม mode
+    camera.py         — release() join reader thread ก่อน cap.release()
+    stream_server.py  — mode field ใน camera config + endpoint
+                        POST /cameras/config/{id}/mode,
+                        อ่าน API_PORT จาก env (แยก dev/Jetson)
+    ui_renderer.py    — เพิ่ม draw_face_info() สำหรับ detect mode
+    LiveCam.jsx       — dropdown โหมด + PersonCard แผนก/ตำแหน่ง +
+                        การ์ด 2 บรรทัด
+    index.css         — color-scheme + บังคับสี <option> dark mode
+
+  สถานะปัจจุบัน (สิ้นสุดวันนี้):
+    Merge maevVersion → main           : ✅ เสร็จ + push แล้ว
+    Deploy Jetson (ครบระบบ)            : ✅ GPU 19 FPS เข้าเว็บได้
+    ฟีเจอร์ 3 โหมดกล้อง                 : ✅ ทดสอบผ่านทั้ง dev + Jetson
+    แก้บั๊ก mode switch (race)          : ✅ verify แล้ว
+    แก้บั๊ก IP→CCTV crash (FFmpeg)     : ✅ assertion=0
+    แยก port dev/Jetson                : ✅
+    UI (detect info/การ์ด/dark mode)    : ✅ build ผ่าน
+    Sync Jetson = dev                  : ✅ code ตรง + verify
+    เว็บ Jetson แสดง UI ใหม่            : ⏳ /var/www อัปแล้ว แต่ติด
+                                           browser/nginx cache index.html
+                                           — รอทดสอบ incognito/hard refresh
+    Commit งานวันนี้                    : ⏳ ยังไม่ commit (11 ไฟล์ค้าง)
+
+■ เทคโนโลยีที่ใช้
+────────────────────────────────────────────────────────────────────────
+
+  - InsightFace (buffalo_l, ArcFace 512d) + ONNX Runtime — GPU inference
+    บน Jetson Orin Nano (aarch64, JetPack 6.2)
+  - Python threading — cam_start watcher join/spawn, FFmpeg thread-safe
+    camera release
+  - FFmpeg / libavcodec — pthread_frame async_lock (root cause IP cam crash)
+  - FastAPI — endpoint /cameras/config/{id}/mode, env-based port config
+  - React + Vite + TailwindCSS — dropdown โหมด, การ์ด 2 บรรทัด,
+    dark mode dropdown fix
+  - OpenCV (cv2) — draw_face_info() overlay บน frame
+  - nginx — reverse proxy บน Jetson + static file serving
+  - PostgreSQL — local setup บน Jetson ผ่าน migrations/setup_db.sql
+  - pip index (jetson-ai-lab.io/jp6/cu126) — onnxruntime-gpu / mediapipe
+    สำหรับ aarch64
+
+■ ปัญหาที่พบและแนวทางแก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  ปัญหา : requirements.txt เดิมใช้บน Jetson (aarch64) ไม่ได้
+  วิเคราะห์: เป็น pip freeze จาก x86_64 + CUDA desktop มี torch+cu126
+             และ nvidia-*-cu12 wheel ที่ไม่มี aarch64 binary บน PyPI
+  แก้ไข : วิเคราะห์ dependency จริงที่ใช้ + สร้าง requirements-jetson.txt
+            แยก ลง onnxruntime-gpu/mediapipe จาก jetson-ai-lab index แทน
+
+  ปัญหา : mediapipe ดึง numpy 2.x มาและชนกับ insightface + opencv ซ้อนกัน
+  วิเคราะห์: mediapipe 0.10.14 ต้องการ numpy ≥ 2.x แต่ insightface
+             ต้องการ numpy <2; opencv ถูกติดตั้งซ้ำจาก 2 package
+  แก้ไข : downgrade numpy==1.26.4 + ใช้ opencv-contrib-python-headless
+            ตัวเดียว ถอน opencv ที่ซ้อน
+
+  ปัญหา : 4 InsightFace instance รันพร้อมกัน → GPU OOM บน Orin Nano
+  วิเคราะห์: CUBLAS_STATUS_ALLOC_FAILED เพราะ VRAM ไม่พอสำหรับ 4 instance
+  แก้ไข : ลด cameras.json เหลือ IP cam ตัวเดียว (1 InsightFace instance)
+
+  ปัญหา : สลับโหมดกล้องขณะรัน → กล้องดับ (บางครั้งพากล้องอื่นดับด้วย)
+  วิเคราะห์: race condition — cam_start watcher spawn worker ใหม่
+             ก่อน worker เก่าตาย ทำให้ 2 worker เปิด VideoCapture
+             อุปกรณ์เดียวกันพร้อมกัน + graceful exit ออกกลางคัน
+             เมื่อกล้องเหลือตัวเดียว
+  แก้ไข : cam_start watcher join worker เก่าก่อน spawn ใหม่
+            + guard graceful exit เมื่อมี cam_start flag ค้าง
+
+  ปัญหา : IP cam เปลี่ยนโหมดไป CCTV → process abort ทุกกล้องดับหมด
+           (USB camera ไม่เป็น)
+  วิเคราะห์: "Assertion fctx->async_lock failed at
+             libavcodec/pthread_frame.c:175" — cap.release() ถูกเรียก
+             ขณะ reader thread ยังอยู่ใน cap.read() → 2 thread
+             แตะ FFmpeg context เดียวกัน → abort() ทั้ง process
+             USB/V4L2 ไม่มี frame-threading จึงไม่เจอปัญหานี้
+  แก้ไข : camera.py release() join reader thread ก่อนปล่อย capture
+
+  ปัญหา : VS Code port-forward จาก Jetson ชน dev เวลา npm run dev
+  วิเคราะห์: stream_server.py hardcode port 8000 ซึ่งตรงกับ port-forward
+             ที่ VS Code เปิดไว้จาก Jetson ทำให้ frontend dev
+             ไปชน Jetson API แทน local API
+  แก้ไข : แยก port dev (8010/8011/5180) + stream_server อ่าน API_PORT
+            จาก environment variable
+
+  ปัญหา : dark mode dropdown: native <select> options พื้นขาว ตัวอักษรกลืน
+  วิเคราะห์: browser กำหนดสี <option> เอง ไม่สนใจ CSS color
+             ที่ตั้งบน parent element
+  แก้ไข : เพิ่ม color-scheme: dark ใน index.css + บังคับสี
+            text/background บน <option> โดยตรง
+
+════════════════════════════════════════════════════════════════════════
