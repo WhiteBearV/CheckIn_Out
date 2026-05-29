@@ -1,0 +1,86 @@
+# ════════════════════════════════════════════════════════════════════
+#  requirements-jetson.txt — สำหรับ NVIDIA Jetson Orin Nano (aarch64 / JetPack)
+# ════════════════════════════════════════════════════════════════════
+#
+#  ⚠️  อย่าใช้ requirements.txt ตัวเดิม — นั่น freeze มาจากเครื่อง x86_64 + GPU desktop
+#      (torch+cu126, nvidia-*-cu12, onnxruntime-gpu PyPI ฯลฯ ลง Jetson ไม่ได้)
+#
+#  Jetson: CUDA / cuDNN / TensorRT มากับ JetPack ในระบบอยู่แล้ว
+#          → ไม่ต้องลง nvidia-*-cu12 ใดๆ ผ่าน pip
+#
+#  ตั้งค่าก่อนรันบน Jetson (ตัดด่าน 6 MiniFASNet ที่ลาก torch/tensorflow มา):
+#      config.py / profile :  FAS_ENABLED = False
+#      → liveness_engine จะไม่ import deepface เลย (lazy import ถูก guard ด้วย flag)
+#      → anti-spoof ยังทำงานครบ ด่าน 1-5 (depth, motion, blink, texture, finger)
+#
+# ─────────────────────────────────────────────────────────────────────
+#  ขั้นที่ 1 — ติดตั้งด้วย "วิธีเฉพาะ Jetson" ก่อน (อย่า pip install จากไฟล์นี้)
+# ─────────────────────────────────────────────────────────────────────
+#
+#  [onnxruntime-gpu]  หัวใจของ InsightFace — ต้องเป็น wheel ที่ build กับ CUDA ของ JetPack
+#      ดาวน์โหลด wheel aarch64 ให้ตรง JetPack/Python จาก Jetson Zoo:
+#        https://elinux.org/Jetson_Zoo#ONNX_Runtime
+#      เช่น (เวอร์ชันต้อง match JetPack จริง):
+#        pip install onnxruntime_gpu-<ver>-cp310-cp310-linux_aarch64.whl
+#
+#  [opencv]  แนะนำใช้ตัวที่มากับ JetPack (build พร้อม CUDA แล้ว) — ตรวจด้วย:  python3 -c "import cv2; print(cv2.__version__)"
+#            ถ้าไม่มีค่อย  pip install opencv-python  (จะได้ build CPU ธรรมดา)
+#
+#  [mediapipe]  PyPI aarch64 wheel มีจำกัด/ไม่รองรับ GPU บน Jetson
+#               ดู wheel เฉพาะ Jetson:  https://github.com/jetson-nano-wheels หรือ Jetson Zoo
+#
+# ─────────────────────────────────────────────────────────────────────
+#  ขั้นที่ 2 — ตัวที่เหลือ ลงผ่าน pip ได้ (มี aarch64 wheel หรือ pure-python)
+#      pip install -r requirements-jetson.txt
+# ─────────────────────────────────────────────────────────────────────
+
+# ── Core: Face recognition ──
+insightface==0.7.3        # build จาก source (ต้องมี Cython + cmake) — ครั้งแรกช้า
+numpy==1.26.4             # ตรึงไว้ <2 (insightface 0.7.3 ยังไม่รองรับ numpy 2.x)
+onnx==1.20.1
+# onnxruntime-gpu        → ดูขั้นที่ 1 (ลงจาก wheel Jetson ก่อน — อย่าให้ pip ดึงจาก PyPI)
+
+# ── InsightFace dependencies ──
+Cython==3.2.4
+scikit-image==0.26.0
+scikit-learn==1.8.0
+scipy==1.17.1
+albumentations==2.0.8
+easydict==1.13
+prettytable==3.17.0
+matplotlib==3.10.8
+pillow==12.1.1
+tqdm==4.67.3
+
+# ── MediaPipe (finger challenge / hands) ──
+# mediapipe==0.10.14    → ดูขั้นที่ 1 (หา wheel aarch64 เฉพาะ Jetson)
+
+# ── Web / API ──
+fastapi==0.135.2
+uvicorn==0.42.0
+slowapi==0.1.9
+pydantic==2.12.5
+
+# ── Auth ──
+PyJWT==2.10.1
+bcrypt==4.2.1
+
+# ── Database (PostgreSQL) ──
+psycopg==3.3.3
+psycopg-binary==3.3.3
+
+# ── Utils ──
+python-dotenv==1.2.2
+requests==2.32.5
+
+# ════════════════════════════════════════════════════════════════════
+#  ตัดทิ้งทั้งหมด (มีใน requirements.txt เดิมแต่ Jetson ไม่ต้อง):
+#
+#  • torch / torchvision / triton          → ติดมาเพราะ DeepFace เท่านั้น (ตัดด่าน 6 แล้ว)
+#  • tensorflow / tf_keras / keras / jax    → เหมือนกัน — DeepFace backend
+#  • deepface / dlib / face-recognition     → ด่าน 6 MiniFASNet (ปิดด้วย FAS_ENABLED=False)
+#    / retina-face / mtcnn / face_recognition_models
+#  • ultralytics / clip / timm              → ไม่ถูก import ในโค้ดจริงเลย (ติดจาก freeze)
+#  • nvidia-cublas/cudnn/cufft/nccl-cu12 …  → CUDA ของ JetPack ทำหน้าที่นี้แล้ว
+#  • onnxruntime-gpu (PyPI x86)             → ใช้ wheel Jetson แทน (ขั้นที่ 1)
+# ════════════════════════════════════════════════════════════════════
