@@ -1,0 +1,24 @@
+{
+    "_comment": "FaceReg PostgreSQL config — คัดลอกเป็น db_config.json แล้วใส่ค่าจริง (ห้าม commit ไฟล์ db_config.json)",
+    "_usage": "เปลี่ยน 'mode' เป็น 'local' หรือ 'server' ตาม environment ที่จะใช้",
+
+    "mode": "local",
+
+    "local": {
+        "_desc":    "PG ที่รันบนเครื่องเดียวกัน",
+        "host":     "localhost",
+        "port":     5432,
+        "database": "face_attendance",
+        "user":     "face_user",
+        "password": "CHANGE_ME_TO_REAL_PASSWORD"
+    },
+
+    "server": {
+        "_desc":    "PG remote (อีกเครื่อง / cloud / ngrok tunnel)",
+        "host":     "db.example.com",
+        "port":     5432,
+        "database": "face_attendance",
+        "user":     "face_user",
+        "password": "CHANGE_ME_TO_REAL_PASSWORD"
+    }
+}

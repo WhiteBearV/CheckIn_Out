@@ -1,0 +1,50 @@
+นายวีรภัทร สาลีผล  6610301006                                        2026-04-10
+
+รายงานการฝึกงาน
+
+ประจำสัปดาห์ที่ 4  7 เมษายน 2569 ถึง 10 เมษายน 2569
+
+        วันที่ 7 เมษายน 2569 เข้าร่วมการประชุมสภากาแฟในช่วงเช้า เพื่อฟังการรายงานความคืบหน้าของงานที่ปฏิบัติในช่วงที่ผ่านมา จากนั้นเดินทางไปประจำกองการศึกษา วิจัย และพัฒนา และลงมือพัฒนาโปรแกรมระบบบันทึกเวลาเข้างาน–ออกงานด้วยการจดจำใบหน้าต่อ โดยที่ในวันนี้ดำเนินการพัฒนาฟีเจอร์ Headless Mode เพื่อให้ระบบสามารถรันบนเครื่องที่ไม่มีจอแสดงผลหรือไม่ต้องการเปิดหน้าต่าง OpenCV และแสดงผลผ่าน Web UI เพียงอย่างเดียว
+
+แนวคิดหลักคือเพิ่ม flag ชื่อ CV_WINDOW ใน config.py โดยเมื่อตั้งค่าเป็น False ระบบจะปิดการแสดงผลหน้าต่าง OpenCV ทั้งหมดและ push frame ไปที่ stream_server เพื่อให้ผู้ใช้เข้าชมผ่านเว็บแทน เมื่อตั้งค่าเป็น True ระบบทำงานเหมือนเดิมทุกประการ
+
+การเปลี่ยนแปลงใน config.py ได้แก่ เพิ่ม CV_WINDOW = True พร้อมคำอธิบายประโยชน์ในการประหยัด CPU/GPU ที่สูญเสียไปกับการ render ส่วนการเปลี่ยนแปลงใน main.py ได้แก่ เพิ่ม import signal และ time เพิ่มกลไก graceful shutdown ด้วย SIGINT (Ctrl+C) ผ่าน _running flag แทนการ break จาก while loop โดยตรง รวมทั้งปรับให้ cv2.namedWindow() เรียกเฉพาะเมื่อ CV_WINDOW เป็น True และปรับ idle loop และ main loop ให้ใช้ time.sleep() แทน cv2.waitKey() เมื่ออยู่ในโหมดที่ไม่มีหน้าต่าง นอกจากนี้ยังปรับให้ cv2.destroyAllWindows() เรียกเฉพาะเมื่อมีหน้าต่างเปิดอยู่เท่านั้น
+
+        วันที่ 8 เมษายน 2569 เข้าร่วมการประชุมสภากาแฟในช่วงเช้า เพื่อฟังการรายงานความคืบหน้าของงานที่ปฏิบัติในช่วงที่ผ่านมา จากนั้นเดินทางไปประจำกองการศึกษา วิจัย และพัฒนา และลงมือพัฒนาโปรแกรมระบบบันทึกเวลาเข้างาน–ออกงานด้วยการจดจำใบหน้าต่อ โดยที่ในวันนี้ดำเนินการ 2 งานหลักควบคู่กัน ได้แก่ การออกแบบ UI หน้าเว็บใหม่ทั้งหมด และการพัฒนาระบบ Web Stream พร้อม Canvas Overlay สำหรับหน้า Live Cam
+
+งานแรกคือการ redesign หน้าเว็บ React ให้ตรงกับ DESIGN.md ที่กำหนด design system ในลักษณะ "dark terminal aesthetic" ประกอบด้วย Void Black (#0f0f0f), Electric Cyan (#00ffff), JetBrains Mono font และ Border Mist (rgba(255,255,255,0.10)) โดยมีไฟล์ที่ได้รับการแก้ไขดังนี้ front_end/src/index.css สำหรับ CSS variables และ import JetBrains Mono, front_end/tailwind.config.js สำหรับ custom colors และ font-mono, front_end/src/App.jsx สำหรับ background และ PlaceholderPage, Sidebar.jsx ปรับ nav items ให้มี active state เป็น cyan และเพิ่มปุ่ม theme toggle, StatCard.jsx ออกแบบใหม่พร้อม radial gradient glow, AttendanceTable.jsx ปรับ StatusBadge และ dividers และ Dashboard.jsx ปรับ section label และ table container
+
+งานที่สองคือการแก้ไขหน้า Live Cam ที่ไม่อัปเดตตาม backend เนื่องจาก stream_server.py ยังขาด /state endpoint และ LiveCam.jsx ยังไม่มี canvas overlay ดำเนินการแก้ไข stream_server.py โดยเพิ่ม push_state() สำหรับ buffer state ที่ main.py ส่งมาทุก frame, เพิ่ม push_snapshot() สำหรับ face thumbnail, เพิ่ม endpoint GET /state, GET /snap/{name}, GET /window และ POST /window สำหรับ toggle OpenCV window ส่วน main.py ได้เพิ่ม push_state() calls ทั้งในส่วน idle และ active section พร้อมเพิ่มฟังก์ชัน _compute_guide_state() ที่คืนค่า dict สำหรับ canvas overlay สำหรับ LiveCam.jsx ได้เขียนใหม่ทั้งหมดพร้อม canvas overlay ในรูปแบบ RAF loop สำหรับวาด oval, face box, HUD และ idle screen รวมทั้ง PersonPanel แสดงรายชื่อและสถานะแบบ real-time ด้วยการ poll /state ทุก 66 มิลลิวินาที และอัปเดต vite.config.js proxy สำหรับ endpoint ใหม่ทั้งหมด
+
+นอกจากนี้ยังพบ bug สำคัญคือ main.py crash ทันทีที่กล้องตรวจพบใบหน้าที่ไม่อยู่ในฐานข้อมูล (Unknown) โดย error ที่เกิดขึ้นคือ AttributeError: 'NoneType' object has no attribute 'failed' สาเหตุเกิดจาก _face_with_names.append() ถูกเรียกก่อนการตรวจสอบ Unknown ทำให้ใบหน้า Unknown เข้าไปใน list และเมื่อ push_state วน loop หา liveness ของ Unknown ซึ่งคืนค่า None จึง crash ดำเนินการแก้ไขโดยย้าย append มาหลัง if name == 'Unknown': continue ทำให้ใบหน้า Unknown ไม่เข้า list อีกต่อไป
+
+        วันที่ 10 เมษายน 2569 เข้าร่วมการประชุมสภากาแฟในช่วงเช้า เพื่อฟังการรายงานความคืบหน้าของงานที่ปฏิบัติในช่วงที่ผ่านมา จากนั้นเดินทางไปประจำกองการศึกษา วิจัย และพัฒนา และลงมือพัฒนาโปรแกรมระบบบันทึกเวลาเข้างาน–ออกงานด้วยการจดจำใบหน้าต่อ โดยที่ในวันนี้ดำเนินการอัปเกรดสถาปัตยกรรมระบบให้รองรับกล้องหลายตัวพร้อมกัน (Multi-Camera Architecture) และแก้ไขปัญหา Data bleeding ที่ยังค้างอยู่จากรอบก่อนหน้า
+
+สำหรับ Multi-Camera Architecture ได้ออกแบบให้แต่ละกล้องรันใน daemon thread ของตัวเอง ส่วน display loop ทั้งหมดรวมอยู่บน main thread เพื่อความปลอดภัยของ X11 โดยมีการเปลี่ยนแปลงดังนี้ ใน config.py เพิ่ม CAMERAS list ซึ่งแต่ละ entry ประกอบด้วย id, name, url หรือ index และ flip โดยอ่านค่าจาก environment variables (CAM1, CAM2) รองรับทั้ง IP camera และ USB webcam และสามารถเพิ่มกล้องใหม่ได้โดยเพิ่ม entry เพียงรายการเดียว ใน main.py ได้ refactor ออกเป็นฟังก์ชัน run_camera(cam_cfg: dict) โดย spawn daemon thread หนึ่งตัวต่อกล้องหนึ่งตัว เพิ่มกลไก graceful failure คือหากกล้องใดเชื่อมต่อไม่ได้ thread จะออกเงียบๆ โดยระบบยังทำงานต่อกับกล้องที่เหลือ เพิ่ม _disp_slot single-slot pattern โดยกล้อง active เท่านั้นที่เขียน frame เข้า display slot และ display loop รันบน main thread พร้อมแถบ tab แสดงชื่อกล้องทุกตัว กดปุ่มหมายเลข 1, 2, 3 เพื่อสลับได้ รองรับ fullscreen ด้วยปุ่ม F หรือ ด หรือ โ โดยใช้ cv2.waitKeyEx() เพื่อรองรับ Unicode keycode ของภาษาไทย ส่วน stream_server.py ได้เขียนใหม่ทั้งหมดโดยเปลี่ยน buffer ทั้งหมดเป็น per-camera dict (_cam_frames, _cam_states, _cam_snaps) เพิ่ม endpoint ใหม่ /stream/{cam_id}, /state/{cam_id}, /snap/{cam_id}/{name}, GET /cameras และ GET /admin ซึ่งเป็นหน้า HTML สำหรับเลือกกล้อง พร้อม POST /cameras/{cam_id}/activate
+
+สำหรับการแก้ไขปัญหา Data bleeding คือปัญหา "Detected Persons" ของกล้องที่ 1 กระพริบขึ้นมาในหน้าต่างของกล้องที่ 2 ได้ทำการสืบหา root cause โดยอ่าน ui_renderer.py ทั้งหมด พบว่า _panel_cache ที่บรรทัด 476 เป็น module-level shared mutable state ในรูปแบบ dict ที่ทั้งสอง camera worker ใช้ร่วมกัน เมื่อทั้งสองเรียก ui.build_panel() พร้อมกัน กล้องที่ 1 เขียน panel ลง cache แล้วกล้องที่ 2 อาจอ่าน tick ที่ไม่เป็น 0 และ cache key ยังตรง จึงได้รับ panel ของกล้องที่ 1 กลับไปแทน ดำเนินการแก้ไขโดยลบ _panel_cache global ออกจาก ui_renderer.py และเพิ่ม parameter _cache: dict = None ใน build_panel() แทน จากนั้นใน main.py สร้าง _local_panel_cache ภายใน run_camera() ซึ่งเป็น scope ของกล้องนั้นเท่านั้น แล้วส่งเข้า ui.build_panel() ทุก frame ทำให้แต่ละกล้องมี cache แยกกันโดยสมบูรณ์
+
+ปัญหาและอุปสรรค์ที่พบ
+
+  - main.py crash ด้วย AttributeError: 'NoneType' object has no attribute 'failed' เมื่อกล้องตรวจพบใบหน้า Unknown
+  - _compute_guide_state ไม่มีอยู่ใน main.py (Pylance error) หลังจากเพิ่ม push_state code
+  - vite proxy ขาด endpoint /state /snap /window ทำให้ frontend เรียกใช้งานไม่ได้
+  - X11 crash เมื่อ cv2.namedWindow() ถูกเรียกจาก background thread
+  - Fullscreen แสดงผลแค่ขนาด native ของกล้อง (letterboxed) แทนที่จะเต็มจอ
+  - Thai keys ด และ โ ไม่ทำงานเนื่องจาก waitKey() & 0xFF ตัด Unicode ที่มีค่าเกิน 255
+  - Data bleeding ยังคงเกิดขึ้นซ้ำแม้หลังแก้ไข race condition ใน display loop หลายรอบ เนื่องจาก root cause ที่แท้จริงซ่อนอยู่ใน module-level cache ของ ui_renderer.py
+
+แนวทางการแก้ปัญหาดังกล่าว แก้ไขได้โดย
+
+  - ย้าย _face_with_names.append() มาหลัง if name == 'Unknown': continue เพื่อกรองใบหน้า Unknown ออกจาก list
+  - implement ฟังก์ชัน _compute_guide_state() จาก logic ใน ui_renderer.draw_face_guide()
+  - เพิ่ม proxy entries ใน vite.config.js ให้ครบทุก stream server endpoint
+  - guard cv2.namedWindow() ด้วย if stream_server.get_cv_window() ก่อนเรียกใช้
+  - resize combined frame ก่อน imshow ด้วย cv2.resize(combined, (SCREEN_W, SCREEN_H)) แทนการใช้ setWindowProperty เพียงอย่างเดียว
+  - เปลี่ยน waitKey() เป็น waitKeyEx() และใช้ frozenset ของ keycodes ที่รวม Thai Unicode (3604, 3650)
+  - ลบ _panel_cache global ออกจาก ui_renderer.py และเปลี่ยนเป็น parameter _cache ที่ส่งจาก caller แต่ละตัว ทำให้แต่ละกล้องมี cache เป็นของตัวเอง
+
+
+                              ลงชื่อผู้ควบคุมการฝึกงาน.........................................................
+                                              (.......................................................)
+                                               วันที่.........................................................

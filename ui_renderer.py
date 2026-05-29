@@ -9,6 +9,7 @@ import numpy as np
 import mediapipe as mp
 import config as cfg
 from config import Color as C
+from api_client import mask_pid
 
 
 # ─── Thai text rendering ───────────────────
@@ -623,7 +624,7 @@ def build_panel(persons: dict, liveness_map: dict, frame_height: int,
         row = y + 14
         GAP = 28 #
         display = getattr(person, "display_name", name) or name
-        pid      = str(getattr(person, "per_id",       None) or "-")
+        pid      = mask_pid(getattr(person, "per_id", None) or "") or "-"
         dept     = str(getattr(person, "organize_th",  None) or "-")
         in_str   = person.first_seen.strftime("%H:%M:%S") if person.first_seen else "-"
         lst_str  = person.last_seen.strftime("%H:%M:%S")  if person.last_seen  else "-"

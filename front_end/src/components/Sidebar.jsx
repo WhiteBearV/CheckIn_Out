@@ -1,123 +1,179 @@
+import { useRef, useState, useEffect, useCallback } from 'react'
 import { NavLink } from 'react-router-dom'
 import { useTheme } from '../context/ThemeContext'
+import { useAuth } from '../context/AuthContext'
+import Logo from './Logo'
+import ConfirmModal from './ConfirmModal'
 
-const navItems = [
-  {
-    to: '/live',
-    label: 'Live Cam',
-    icon: (
-      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-          d="M15 10l4.553-2.069A1 1 0 0121 8.876V15.124a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z" />
-      </svg>
-    ),
-  },
+
+const NAV = [
   {
     to: '/',
-    label: 'Dashboard',
-    icon: (
-      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-          d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
-      </svg>
-    ),
+    label: 'กล้องสด',
+    icon: <svg viewBox="0 0 24 24"><path d="M15 10l4.553-2.069A1 1 0 0121 8.876V15.124a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"/></svg>,
+  },
+  {
+    to: '/dashboard',
+    label: 'แดชบอร์ด',
+    icon: <svg viewBox="0 0 24 24"><path d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2"/></svg>,
   },
   {
     to: '/history',
     label: 'ประวัติลงเวลา',
-    icon: (
-      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-          d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-      </svg>
-    ),
+    icon: <svg viewBox="0 0 24 24"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>,
   },
   {
     to: '/reports',
     label: 'รายงาน',
-    icon: (
-      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-          d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-      </svg>
-    ),
+    icon: <svg viewBox="0 0 24 24"><path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>,
   },
 ]
 
+const MIN_W = 160
+const MAX_W = 320
+const DEFAULT_W = 224
+
 export default function Sidebar() {
   const { theme, toggleTheme } = useTheme()
+  const { user, logout } = useAuth()
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
+  const [width, setWidth] = useState(() => {
+    const saved = localStorage.getItem('sb-width')
+    return saved ? Number(saved) : DEFAULT_W
+  })
+  const dragging = useRef(false)
+  const startX   = useRef(0)
+  const startW   = useRef(0)
+
+  const onMouseDown = useCallback((e) => {
+    dragging.current = true
+    startX.current   = e.clientX
+    startW.current   = width
+    document.body.style.cursor    = 'col-resize'
+    document.body.style.userSelect = 'none'
+  }, [width])
+
+  useEffect(() => {
+    const onMove = (e) => {
+      if (!dragging.current) return
+      const delta = e.clientX - startX.current
+      const next  = Math.min(MAX_W, Math.max(MIN_W, startW.current + delta))
+      setWidth(next)
+    }
+    const onUp = () => {
+      if (!dragging.current) return
+      dragging.current = false
+      document.body.style.cursor    = ''
+      document.body.style.userSelect = ''
+      setWidth(w => { localStorage.setItem('sb-width', w); return w })
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup',   onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup',   onUp)
+    }
+  }, [])
 
   return (
-    <aside className="
-      w-64 min-h-screen flex flex-col
-      bg-white dark:bg-slate-900
-      border-r border-slate-200 dark:border-slate-700
-    ">
+    <aside className="sidebar" style={{ width }}>
       {/* Logo */}
-      <div className="h-16 flex items-center gap-3 px-6 border-b border-slate-200 dark:border-slate-700">
-        <div className="w-8 h-8 rounded-lg bg-blue-500 flex items-center justify-center flex-shrink-0">
-          {/* Person icon */}
-          <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
-            <path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z" />
-          </svg>
-        </div>
-        <span className="font-semibold text-slate-800 dark:text-white text-sm tracking-wide">
-          Face Attendance
-        </span>
+      <div className="sb-logo">
+        <Logo size={28} />
+        <div className="wm">Face Attendance</div>
       </div>
 
-      {/* Navigation */}
-      <nav className="flex-1 px-3 py-4 space-y-1">
-        {navItems.map(item => (
+      {/* Nav */}
+      <nav className="sb-nav">
+        {NAV.map(item => (
           <NavLink
             key={item.to}
             to={item.to}
-            end={item.to === '/' || item.to === '/live'}
-            className={({ isActive }) => `
-              flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors
-              ${isActive
-                ? 'bg-blue-500 text-white'
-                : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
-              }
-            `}
+            end={item.to === '/'}
+            className={({ isActive }) => 'sb-item' + (isActive ? ' active' : '')}
           >
             {item.icon}
             {item.label}
           </NavLink>
         ))}
+        {user?.role === 'admin' && (
+          <NavLink to="/users"
+            className={({ isActive }) => 'sb-item' + (isActive ? ' active' : '')}>
+            <svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>
+            จัดการผู้ใช้
+          </NavLink>
+        )}
       </nav>
 
-      {/* Theme Toggle */}
-      <div className="p-4 border-t border-slate-200 dark:border-slate-700">
-        <button
-          onClick={toggleTheme}
-          className="
-            w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium
-            text-slate-600 dark:text-slate-400
-            hover:bg-slate-100 dark:hover:bg-slate-800
-            hover:text-slate-900 dark:hover:text-white
-            transition-colors
-          "
-        >
+      {/* User + Theme + Logout */}
+      <div className="sb-foot" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {user && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 10,
+            padding: '12px 14px',
+            borderRadius: 6,
+            background: 'var(--c-accent-bg)',
+            border: '1px solid var(--c-accent-border)',
+            fontSize: 15, color: 'var(--c-text-1)',
+            overflow: 'hidden',
+          }} title={`${user.username} (${user.role})`}>
+            <span style={{
+              width: 10, height: 10, borderRadius: '50%',
+              background: user.role === 'admin' ? 'var(--c-accent)' : '#888',
+              flexShrink: 0,
+            }} />
+            <div style={{
+              display: 'flex', flexDirection: 'column',
+              minWidth: 0, flex: 1,
+            }}>
+              <span style={{ fontWeight: 600, fontSize: 15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {user.username}
+              </span>
+              <span style={{ fontSize: 12, color: 'var(--c-text-3)', textTransform: 'uppercase', letterSpacing: 1 }}>
+                {user.role}
+              </span>
+            </div>
+          </div>
+        )}
+
+        <button className="sb-theme" onClick={toggleTheme}>
           {theme === 'dark' ? (
-            <>
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                  d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364-6.364l-.707.707M6.343 17.657l-.707.707M17.657 17.657l-.707-.707M6.343 6.343l-.707-.707M12 8a4 4 0 100 8 4 4 0 000-8z" />
-              </svg>
-              เปลี่ยนเป็น Light
-            </>
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 3v1M12 20v1M3 12h1M20 12h1M5.6 5.6l.7.7M17.7 17.7l.7.7M5.6 18.4l.7-.7M17.7 6.3l.7-.7"/></svg>
           ) : (
-            <>
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                  d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
-              </svg>
-              เปลี่ยนเป็น Dark
-            </>
+            <svg viewBox="0 0 24 24"><path d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/></svg>
           )}
+          {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
         </button>
+
+        {user && (
+          <NavLink to="/change-password"
+            className={({ isActive }) => 'sb-theme' + (isActive ? ' active' : '')}
+            style={{ textDecoration: 'none' }}>
+            <svg viewBox="0 0 24 24"><path d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+            เปลี่ยนรหัสผ่าน
+          </NavLink>
+        )}
+        {user && (
+          <button className="sb-theme" onClick={() => setShowLogoutConfirm(true)}
+            style={{ color: '#ff8a8a' }}>
+            <svg viewBox="0 0 24 24"><path d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
+            ออกจากระบบ
+          </button>
+        )}
+        {showLogoutConfirm && (
+          <ConfirmModal
+            title="ออกจากระบบ"
+            message="ยืนยันออกจากระบบใช่ไหม?"
+            confirmLabel="ออกจากระบบ"
+            danger
+            onConfirm={logout}
+            onCancel={() => setShowLogoutConfirm(false)}
+          />
+        )}
       </div>
+
+      {/* Resize handle */}
+      <div className="sb-resize" onMouseDown={onMouseDown} />
     </aside>
   )
 }

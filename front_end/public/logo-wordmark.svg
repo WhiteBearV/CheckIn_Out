@@ -1,0 +1,47 @@
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 64" width="280" height="64" role="img" aria-label="Face Attendance">
+  <defs>
+    <radialGradient id="wg-dark" cx="30%" cy="50%" r="26%">
+      <stop offset="0%" stop-color="#00ffff" stop-opacity="0.5"></stop>
+      <stop offset="55%" stop-color="#00ffff" stop-opacity="0.10"></stop>
+      <stop offset="100%" stop-color="#00ffff" stop-opacity="0"></stop>
+    </radialGradient>
+    <radialGradient id="wg-light" cx="30%" cy="50%" r="26%">
+      <stop offset="0%" stop-color="#007a7a" stop-opacity="0.40"></stop>
+      <stop offset="55%" stop-color="#007a7a" stop-opacity="0.08"></stop>
+      <stop offset="100%" stop-color="#007a7a" stop-opacity="0"></stop>
+    </radialGradient>
+  </defs>
+
+  <g id="dark">
+    
+    <g transform="translate(8 8)">
+      <rect x="0" y="0" width="48" height="48" fill="url(#wg-dark)"></rect>
+      <g fill="none" stroke="#00ffff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M 6 10 L 6 6 L 10 6"></path>
+        <path d="M 38 6 L 42 6 L 42 10"></path>
+        <path d="M 42 38 L 42 42 L 38 42"></path>
+        <path d="M 10 42 L 6 42 L 6 38"></path>
+        <circle cx="24" cy="20" r="5.2"></circle>
+        <path d="M 14 38 C 14 30, 19 27, 24 27 C 29 27, 34 30, 34 38"></path>
+      </g>
+    </g>
+    
+    <text x="72" y="39.5" font-family="&#39;JetBrains Mono&#39;, ui-monospace, monospace" font-size="15" font-weight="400" letter-spacing="-0.3" fill="#ffffff">Face Attendance</text>
+  </g>
+
+  <g id="light" style="display:none">
+    <g transform="translate(8 8)">
+      <rect x="0" y="0" width="48" height="48" fill="url(#wg-light)"></rect>
+      <g fill="none" stroke="#007a7a" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M 6 10 L 6 6 L 10 6"></path>
+        <path d="M 38 6 L 42 6 L 42 10"></path>
+        <path d="M 42 38 L 42 42 L 38 42"></path>
+        <path d="M 10 42 L 6 42 L 6 38"></path>
+        <circle cx="24" cy="20" r="5.2"></circle>
+        <path d="M 14 38 C 14 30, 19 27, 24 27 C 29 27, 34 30, 34 38"></path>
+      </g>
+    </g>
+    <text x="72" y="39.5" font-family="&#39;JetBrains Mono&#39;, ui-monospace, monospace" font-size="15" font-weight="400" letter-spacing="-0.3" fill="#0a0a0a">Face Attendance</text>
+  </g>
+</svg>

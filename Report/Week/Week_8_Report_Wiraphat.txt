@@ -1,0 +1,81 @@
+นายวีรภัทร สาลีผล  6610301006                                        2026-05-08
+
+รายงานการฝึกงาน
+
+ประจำสัปดาห์ที่ 8  5 พฤษภาคม 2569 ถึง 7 พฤษภาคม 2569
+
+        วันที่ 5 พฤษภาคม 2569 เข้าร่วมการประชุมสภากาแฟในช่วงเช้า เพื่อฟังการรายงานความคืบหน้าของงานที่ปฏิบัติในช่วงที่ผ่านมา จากนั้นเดินทางไปประจำกองบริการ และลงมือพัฒนาโปรแกรมระบบบันทึกเวลาเข้างาน–ออกงานด้วยการจดจำใบหน้าต่อ โดยที่ในวันนี้เริ่มจากการ Audit สถานะ Production Readiness ของระบบรอบใหม่หลังจาก Version 13 (Watchdog) Merge เสร็จไปแล้ว สรุปประเด็นที่ยังเหลือออกเป็น 3 กลุ่ม กลุ่ม Critical ได้แก่ Authentication และ Authorization ที่ Mutating Endpoint ของ stream_server ทุกตัวยังเปิดให้คนภายใน LAN เรียกได้, การใช้ HTTPS หรือ TLS เพื่อกันรหัส RTSP และ ADMIN_API_KEY รั่วผ่าน HTTP Plain และระบบ Logging ที่ยังใช้ print() อยู่ทั้งหมด กลุ่ม Important ได้แก่ การลบไฟล์ live_snap_*.jpg และ live_snapfull_*.jpg เมื่อกด Stop, การวาง DB Backup กับ PicSAVE Retention Policy, Monitoring/Alerting และการ Deploy Frontend ผ่าน systemd ส่วนกลุ่ม Nice to have เป็นเรื่อง Tests, Config Validation, Docker และ Secrets Management
+
+        จากการ Audit ดังกล่าวจึงตัดสินใจเลือกทำกลุ่ม Critical ก่อน โดยเลือกระบบ Login User/Password แทนการใช้ Admin Key เปล่าเพราะรองรับ User หลายคน ทำ Audit ได้ว่าใครทำอะไร เปลี่ยนรหัสไม่ต้อง Redeploy และเป็นมาตรฐาน UX มากกว่า กำหนด Role เป็น Admin กับ Viewer, เก็บ Token แบบ localStorage เพราะเป็นโปรเจกต์ On-Prem ภายใน LAN และมี Default User 2 คนคือ admin/Admin12345 และ viewer/User12345 พร้อม Auto-bootstrap Seed อัตโนมัติเมื่อตาราง users ว่าง
+
+        การพัฒนาฝั่ง Backend ได้ติดตั้ง Dependency PyJWT 2.10.1 และ bcrypt 4.2.1 เลี่ยง passlib เนื่องจากมีปัญหาเรื่อง bcrypt warning จากนั้นสร้างไฟล์ใหม่ 4 ไฟล์ ได้แก่ migrate_v13_users.sql สำหรับสร้างตาราง users พร้อม Index, auth.py ที่รวม hash_password/verify_password ด้วย bcrypt, create_token/decode_token ด้วย JWT HS256 อายุ 8 ชั่วโมง, ฟังก์ชัน login/change_password/list_users/add_user/delete_user, bootstrap_default_users(), และ FastAPI Dependency get_current_user/require_admin โดยอ่าน JWT_SECRET จาก .env, manage_users.py เป็น CLI สำหรับจัดการ User และ test_auth_flow.py สำหรับ Sanity Test 15 เคส แก้ stream_server.py โดยเปลี่ยน CORS จาก allow_origins=["*"] เป็น Whitelist จาก env, เพิ่ม Endpoint POST /auth/login, GET /auth/me, POST /auth/change-password และครอบ Depends(require_admin) ที่ Mutating Endpoint 9 ตัว พร้อมเรียก bootstrap_default_users() ตอน Startup
+
+        ระหว่างพัฒนาเจอปัญหา DB Permission ที่ face_user ไม่มีสิทธิ์ CREATE ใน Schema public แก้โดยรัน Migration ผ่าน sudo -u postgres ต่อมา face_user ก็ยัง SELECT ตาราง users ไม่ได้เพราะ Owner เป็น postgres จึงต้อง GRANT SELECT/INSERT/UPDATE/DELETE และ USAGE บน Sequence เพิ่ม แต่การ paste คำสั่ง GRANT มี Quote หายทำให้ Shell ติด Continuation Prompt จึงสร้าง grant_users.sql แล้วรันด้วย -f flag แทน นอกจากนี้ postgres user ก็เข้า /home/maeb/ ไม่ได้ ต้อง cp ไป /tmp/ และ chmod 644 ก่อน หลังจากแก้เสร็จรัน test_auth_flow.py ผ่านครบทั้ง 15 เคส
+
+        ฝั่ง Frontend สร้างไฟล์ใหม่ 3 ไฟล์ ได้แก่ src/api/client.js ที่มี getToken/setToken/clearToken และ authFetch wrapper แนบ Authorization Bearer ทุก Request พร้อมจัดการ 401 ให้ล้าง Token และ Redirect /login, src/context/AuthContext.jsx เป็น AuthProvider เก็บ User State และ Verify Token ตอน Mount พร้อม useAuth hook กับ RequireAuth wrapper, และ src/pages/Login.jsx เป็นฟอร์ม Username/Password พร้อมแสดง Error เมื่อ Login Fail แก้ App.jsx ให้ Wrap AuthProvider, แก้ Sidebar.jsx ให้แสดง User Pill พร้อมปุ่มออกจากระบบ, แก้ LiveCam.jsx ให้เปลี่ยน fetch เป็น authFetch ทุก Mutating Call และ Disable ปุ่ม Start/Stop/Clear/Reload สำหรับ Viewer พร้อม Tooltip "admin เท่านั้น", แก้ vite.config.js เพิ่ม Proxy /auth ไป Port 8001 ทดสอบ End-to-End ผ่าน Vite Proxy ใช้งานได้จริง พร้อมขยายหน้า Login ให้ใหญ่ขึ้น เพิ่มข้อมูลหน่วยงานและตำแหน่งใน PersonFoundCard และ FaceModal บนหน้า Dashboard
+
+        วันที่ 6 พฤษภาคม 2569 เข้าร่วมการประชุมสภากาแฟในช่วงเช้า เพื่อฟังการรายงานความคืบหน้าของงานที่ปฏิบัติในช่วงที่ผ่านมา จากนั้นเดินทางไปประจำกองบริการ และลงมือพัฒนาโปรแกรมระบบบันทึกเวลาเข้างาน–ออกงานด้วยการจดจำใบหน้าต่อ โดยที่ในวันนี้เริ่มจากการ Audit Production Readiness รอบใหม่หลัง Version 14 และวางแผน 14 วันสำหรับ Phase 1 Security Hardening จากนั้นลงมือทำ Phase 1.1 ถึง 1.5 ครบในวันเดียว
+
+        Phase 1.1 ทำการ Migrate Authentication ของ api.py จากเดิมที่ใช้ X-Admin-Key static header มาเป็น Hybrid รับทั้ง Authorization Bearer JWT ที่มี Role admin และ X-Admin-Key เป็น Legacy Fallback แก้ _require_admin ให้ลอง JWT ก่อน ถ้าไม่ได้ค่อย Fallback X-Admin-Key พร้อม Bump Version 2.0.0 เป็น 2.1.0 และเพิ่ม Test 6 เคส ระหว่างนี้พบว่า face_user มี UPDATE บน attendance_logs แต่ไม่มี DELETE ทำให้ DELETE attendance_logs จะ 500 ใน Production จึง Defer ไว้ก่อน
+
+        Phase 1.2 ทำการ Guard Endpoint รูปภาพและ State รวม 13+ จุด ทั้งใน Multi-cam และ Legacy Single-cam ปัญหาใหญ่คือ <img src="..."> ใน HTML แนบ Authorization Header ไม่ได้ จึงต้อง Refactor FaceSnap เป็น Blob Loader ใช้ fetch + URL.createObjectURL พร้อม Revoke ใน Cleanup และให้ FaceModal โหลด Blob เองอย่าง Independent Lifecycle เพื่อกัน Edge Case ที่ Modal พังเมื่อ FaceSnap effect rerun ตอนแรก Guard /cameras/config เป็น require_admin แต่ Viewer พังเพราะดึง Cam List ไม่ได้ ตรวจ Response แล้วเจอว่า _mask_url() Mask Credential อยู่แล้ว จึง Revert เป็น get_current_user ส่วน Endpoint /stream/cam1 ทดสอบยากเพราะ TestClient ค้างที่ MJPEG Infinite Generator แก้โดยทดสอบเฉพาะ no-token ที่ Auth Dep Raise ก่อน Enter Generator
+
+        Phase 1.3 ติดตั้ง slowapi 0.1.9 ตั้ง Rate Limit /auth/login ที่ 5 ครั้ง/นาที/IP และ /auth/change-password ที่ 10 ครั้ง/นาที/IP จากนั้นผู้ใช้ขอเพิ่มฟีเจอร์ให้แสดงข้อความภาษาไทยเมื่อโดน 429 จึงเขียน custom _rate_limit_handler ที่ Inject Headers ก่อน ดึง Retry-After ที่ slowapi คำนวณ คำนวณ wait_text เป็นวินาทีหรือนาที ดึง amount จาก request.state.view_rate_limit แล้ว Branch ตาม URL Path เช่นกรณี /auth/login จะแสดง "คุณใส่รหัสผิด {amount} ครั้งติดต่อกัน — กรุณาลองใหม่ในอีก {wait_text}" Return JSONResponse ให้ Frontend อ่านจาก data.detail เหมือน Error 401/403 ปกติ
+
+        Phase 1.4 เพิ่ม Schema migrate_v15_must_change_password.sql เพิ่มคอลัมน์ must_change_password ในตาราง users และ Update User admin/viewer ให้ Flag เป็น TRUE แก้ auth.py ให้ login() include Flag ใน Response, change_password() Set Flag เป็น FALSE เมื่อสำเร็จและ Reject ถ้ารหัสใหม่เท่ากับเก่า, set_password()/add_user()/bootstrap_default_users() Set Flag เป็น TRUE แก้ stream_server.py ให้ /auth/me อ่าน must_change_password จาก DB ทุกครั้งเพื่อกัน Stale State ฝั่ง Frontend แก้ AuthContext ให้ Track mustChangePassword, แก้ RequireAuth ให้ Bounce ทุก Route ยกเว้น /change-password ถ้า Flag เป็น TRUE, สร้าง ChangePassword.jsx รองรับทั้ง Forced และ Voluntary Mode, แก้ Login.jsx ให้ Redirect ไป /change-password เมื่อ Flag เป็น TRUE และเพิ่ม Yellow Warning "⚠ Dev only — ลบก่อน deploy production" ที่หน้า Login ตามที่ผู้ใช้ขอ
+
+        Phase 1.5 เพิ่ม Schema migrate_v16_audit_logs.sql สร้างตาราง audit_logs ที่มี id BIGSERIAL, ts, user_id, username, action, target, ip, user_agent, details JSONB, success พร้อม Index บน ts DESC, user_id, action และ GRANT SELECT, INSERT ให้ face_user สร้าง Module ใหม่ audit.py 116 บรรทัด มีฟังก์ชัน log() ที่ INSERT row และ Swallow Exception ห้าม Break User Request ถ้า DB ดับ, fetch() Query พร้อม Filter, _extract_request_meta() ดึง IP และ User-Agent จาก FastAPI Request จากนั้น Hook Event 13 จุดในระบบ ครอบคลุม auth.login, auth.password.change, camera CRUD, system control และ attendance update/delete พร้อมเพิ่ม Endpoint GET /audit/logs สำหรับ Admin เท่านั้น Cap 500 Rows/Page รวม Test ที่เพิ่มทั้งวันรวม 45+ เคสผ่านครบ
+
+        วันที่ 7 พฤษภาคม 2569 เข้าร่วมการประชุมสภากาแฟในช่วงเช้า เพื่อฟังการรายงานความคืบหน้าของงานที่ปฏิบัติในช่วงที่ผ่านมา จากนั้นเดินทางไปประจำกองบริการ และลงมือพัฒนาโปรแกรมระบบบันทึกเวลาเข้างาน–ออกงานด้วยการจดจำใบหน้าต่อ โดยที่ในวันนี้เน้นไปที่การจัดทำเอกสารสรุปและ Polish UI ของระบบ เริ่มจากการเขียนเอกสาร Report/DataFlow.txt ความยาว 391 บรรทัด เป็น ASCII Diagram และคำอธิบายภาพรวม Data Flow ของระบบทั้งหมด ตั้งแต่ Camera ผ่าน main.py, stream_server.py ไปยัง React UI, api.py และ /admin จนถึง PostgreSQL ที่เก็บ attendance_logs, users และ audit_logs รวมถึง External Personnel API ที่ดึงชื่อ แผนก ตำแหน่งจากระบบ HR และ Authentication Flow ของ Phase 1.4 ใช้ไฟล์นี้เป็น Snapshot สถานะระบบหลัง Phase 1 เสร็จเพื่ออ้างอิงภาพรวมก่อนเริ่ม Phase 2 Offline Mode
+
+        ต่อมาได้สร้าง Component Logo.jsx ใหม่ในรูปแบบ Inline SVG 68 บรรทัด ใช้ currentColor ผูกกับ var(--c-accent) ของ Theme ทำให้ Logo เปลี่ยนสีตาม Light/Dark Mode อัตโนมัติ มี Radial Gradient Glow และ Gaussian Blur Filter ทำให้ดู Soft รับ prop size และ style เพื่อ Reuse ได้ทุกที่ จากนั้นแทน <img src="/logo-mark.svg"> ด้วย <Logo /> ใน Sidebar.jsx (size 28) และ Login.jsx (size 48) ทำให้ไม่ต้อง Maintain ไฟล์ .svg แยกอีกต่อไป
+
+        จากนั้นได้ปรับขนาด UI ขึ้นทั้งระบบเพื่อรองรับการใช้งานบนจอใหญ่และระยะห่างไกล โดยที่ Sidebar ปรับ .sb-item font 20 → 22, padding 8/10 → 12/14, icon 16 → 22, .sb-theme font 11 → 14, padding 8/10 → 12/14, icon 14 → 18, User Pill font 12 → 15, dot 7 → 10, role label 10 → 12 และ .sb-nav gap 2 → 4 ระหว่าง item ส่วน Login.jsx และ ChangePassword.jsx ปรับ Label, Input Field, Submit Button และ Error Message เป็น 24px ทั้งหมด เพื่อ Accessibility ที่ดีขึ้น พร้อมเปลี่ยน Nav Label เป็นภาษาไทย "Live Cam" → "กล้องสด" และ "Dashboard" → "แดชบอร์ด"
+
+        งานสุดท้ายของวันคือการ Refactor Layout ของ PersonPanelCard ใน LiveCam เพราะโครงเดิมเมื่อชื่อยาวจะมีปัญหา Layout โดย .pmeta แสดง Horizontal "• สถานะ" + "📷 cam1" จะ Overflow ตัด และ .ptime แยกเป็นกล่องขวากินพื้นที่ จึงเปลี่ยน .pmeta เป็น flex-direction: column แสดงเป็น Vertical Stack 3 บรรทัด ย้าย .ptime เข้ามาใน .pmeta แสดงต่อเนื่องเป็นบล็อกเดียว เพิ่ม text-overflow: ellipsis ทุกบรรทัด ปรับ .person ให้ align-items เป็น flex-start, .pname font 13 → 15, line-height 1.3 และ .ptime ตั้ง white-space: nowrap กัน Timestamp ขึ้นบรรทัดใหม่ผิดที่
+
+        วันที่ 8 พฤษภาคม 2569 เข้าร่วมการประชุมสภากาแฟในช่วงเช้า เพื่อฟังการรายงานความคืบหน้าของงานที่ปฏิบัติในช่วงที่ผ่านมา จากนั้นเดินทางไปประจำกองบริการ โดยที่ในวันนี้เน้นไปที่การศึกษาเครื่องมือใหม่สำหรับนำมาประยุกต์ใช้กับงานเครือข่าย เริ่มจากการศึกษาซอฟต์แวร์ Speedify จากบริษัท Connectify Inc. ที่ใช้เทคโนโลยี Channel Bonding รวมการเชื่อมต่ออินเทอร์เน็ตหลายช่องทาง ทั้ง Wi-Fi, 4G/5G, Ethernet และ Starlink ให้เป็นการเชื่อมต่อเดียวที่เร็วและเสถียรขึ้น จุดเด่นที่แตกต่างจาก VPN ทั่วไปคือการตัดสินใจส่งข้อมูลในระดับ per-packet ไม่ใช่ per-socket แบบ Load Balancer ทำให้แม้ใช้งานช่องทางเดียวก็ยังเร็วขึ้นได้ ฟีเจอร์หลักที่น่าสนใจมีตั้งแต่การเข้ารหัส AES-256, Kill Switch, ป้องกัน DNS Leak, Failover อัตโนมัติเมื่อ Wi-Fi หลุด, Livestream Test สำหรับทดสอบ Bonded Connection และตั้งลำดับความสำคัญของแต่ละช่องทางได้ ส่วน Speedify มี Free Tier ให้ใช้ฟรีโดยไม่ต้องสมัครสมาชิกแต่จำกัด 2 GB ต่อเดือน เหมาะสำหรับลองดูก่อนตัดสินใจซื้อแผน Unlimited
+
+        จากนั้นได้ค้นหาทางเลือกอื่นที่ทำงานคล้าย Speedify สรุปได้เป็น 3 กลุ่มหลัก กลุ่มแรกเป็นซอฟต์แวร์ Bonding บนคอมพิวเตอร์/มือถือ มี Connectify Hotspot, Bondix by SIMA สำหรับองค์กร และ iNetFusion กลุ่มที่สองเป็นโอเพนซอร์ส มี dispatch-proxy, Go dispatch proxy, OpenMPTCProuter (OMR), SmoothWAN และ Engarde ทางเลือกที่น่าสนใจที่สุดสำหรับงานคือ OpenMPTCProuter เพราะเป็นโซลูชันโอเพนซอร์สที่ทำ Network Bonding ในระดับ Router มี Web UI ให้ตั้งค่าผ่าน Browser รองรับ Glorytun UDP, Shadowsocks, MLVPN, OpenVPN, MPTCP (Multipath TCP) และ Failover อัตโนมัติ พร้อม Community และ Tutorial เยอะ
+
+        ประเด็นใหญ่ที่เจอคือ OS Compatibility สำหรับลง OMR เครื่องที่จะใช้เป็น Pi 4 หรือ Desktop ถูกลง Ubuntu 24.04 (Noble) มาแล้ว ซึ่งใช้ Kernel 6.8, glibc 2.39, systemd 255 แต่ OMR Script ถูกพัฒนาและทดสอบกับ Ubuntu 22.04 (Jammy) ที่ใช้ Kernel 5.15, glibc 2.35, systemd 249 ทำให้ติดตั้งบน 24.04 มีปัญหาเรื่อง Custom Kernel Patch, ABI ของ Binary OMR เก่า และ Syntax ของ Service File วิเคราะห์ทางเลือกได้ 2 ทาง คือ ทางเลือก A ดาวน์เกรดเป็น Ubuntu 22.04 ใช้เวลาประมาณ 1.5–2 ชั่วโมงแต่ได้ระบบ Stable ใช้ฟีเจอร์ OMR ได้เต็ม มี Doc ครบ และทางเลือก B ลุยต่อบน 24.04 โดย Build Glorytun Manual ใช้เวลา 4–8 ชั่วโมง และยังไม่แน่ใจว่าจะ Work หรือไม่ จึงเอนเอียงไปทางเลือก A เป็นแผนถัดไป
+
+ปัญหาและอุปสรรค์ที่พบ
+
+  - face_user ไม่มีสิทธิ์ CREATE TABLE ใน schema public และไม่มีสิทธิ์ ALTER TABLE ทำให้รัน Migration ไม่ได้
+  - face_user ไม่มี SELECT ตาราง users ใหม่หลัง Migration เพราะ Owner เป็น postgres
+  - คำสั่ง GRANT แบบ Paste มี Quote หาย ทำให้ Shell ติด Continuation Prompt
+  - postgres user ไม่สามารถเข้า /home/maeb/ ได้ทำให้รัน -f sql ใน home fail
+  - face_user มี UPDATE บน attendance_logs แต่ไม่มี DELETE ทำให้ DELETE attendance_logs จะ 500 ใน Production
+  - <img src="..."> ใน HTML แนบ Authorization Header ไม่ได้ ทำให้ Guard Endpoint รูปภาพแล้ว Frontend พัง
+  - FaceModal Lifecycle: Blob URL ที่ส่งจาก FaceSnap จะ Revoke ตอน cacheBust เปลี่ยน ทำให้ Modal พัง
+  - TestClient ค้างที่ /stream/cam1 เพราะ MJPEG เป็น Infinite Generator
+  - Default 429 ของ slowapi แสดงเฉพาะ HTTP Code ผู้ใช้ต้องการข้อความภาษาไทยที่อ่านเข้าใจง่าย
+  - Port 8001 Conflict จาก stream_server เก่ารันค้างใน Terminal อื่น ทำให้ npm run dev fail
+  - Smoke Test ระหว่าง Dev ทำให้ Admin Password ใน DB เปลี่ยน ทำให้ Test Fail
+  - Logo เดิมเป็นไฟล์ .svg static ไม่สามารถเปลี่ยนสีตาม Theme ได้
+  - PersonPanelCard เมื่อชื่อยาวจะ Overflow ตัด และ .ptime ที่แยกกล่องขวากินพื้นที่
+  - Ubuntu 24.04 ที่ลงบนเครื่องไม่ Compatible กับ OMR Install Script เพราะ Kernel/glibc/systemd ใหม่เกินไป
+  - ยังไม่ได้ทดลองใช้ Speedify Free Tier หรือ OMR จริง — เป็นเพียงการศึกษา
+
+แนวทางการแก้ปัญหาดังกล่าว แก้ไขได้โดย
+
+  - รัน Migration ผ่าน sudo -u postgres เพราะผมไม่มีรหัส ผู้ใช้ต้องรันเอง
+  - สร้าง grant_users.sql แล้วใช้ -f flag เลี่ยงปัญหา Quote หายตอน Paste
+  - cp grant_users.sql ไปยัง /tmp/ แล้ว chmod 644 เพื่อให้ postgres user อ่านได้
+  - Defer การตัดสินใจเรื่อง DELETE บน attendance_logs ระหว่าง GRANT DELETE หรือใช้ Soft-delete
+  - Refactor FaceSnap เป็น Blob Loader ใช้ fetch + URL.createObjectURL + Revoke ใน Cleanup
+  - ส่ง Raw URL ให้ FaceModal โหลด Blob เองอย่าง Independent Lifecycle Heuristic Check src.startsWith(STREAM_BASE) แล้ว authFetch
+  - ตัด /stream/cam1 ออกจาก Endpoint Loop Test ทดสอบเฉพาะ no-token ที่ Auth Dep Raise ก่อน Enter Generator
+  - เขียน custom _rate_limit_handler ที่ Inject Headers ก่อน อ่าน Retry-After และ RateLimitItem.amount แล้ว Format ข้อความภาษาไทย Return JSONResponse {"detail": ...} ให้ Frontend อ่านอัตโนมัติ
+  - ใช้ lsof -i :8001 -t | xargs -r kill kill stream_server เก่าก่อน Restart npm run dev
+  - Reset Password ผ่าน auth.set_password ก่อน Rerun Test
+  - สร้าง Logo.jsx เป็น Inline SVG ใช้ currentColor ผูกกับ var(--c-accent) ของ Theme เปลี่ยนสีตาม Light/Dark Mode อัตโนมัติ
+  - Refactor .pmeta เป็น flex-direction: column ย้าย .ptime เข้ามาภายใน เพิ่ม text-overflow: ellipsis ทุกบรรทัด และ white-space: nowrap ที่ .ptime
+  - แผนถัดไปคือเตรียม Bootable USB Ubuntu 22.04 ขนาด 8GB+ และเลือกเครื่องที่จะใช้ทำ Bootable USB เพื่อเริ่มงานจริงในวันถัดไป
+  - แผนถัดไปคือทดลองติดตั้งและใช้งาน OpenMPTCProuter จริงบน Ubuntu 22.04 หลังจากดาวน์เกรด OS เสร็จ
+
+
+                              ลงชื่อผู้ควบคุมการฝึกงาน.........................................................
+                                              (.......................................................)
+                                               วันที่.........................................................

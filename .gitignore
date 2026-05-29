@@ -12,6 +12,8 @@ venv/
 .env
 .env.*
 *.env
+# template ต้อง commit (ไม่มี secrets จริง)
+!.env.example
 
 # Python packaging
 build/
@@ -32,6 +34,16 @@ Thumbs.db
 
 # Database / local files
 *.sqlite3
+*.db
+
+# Runtime files (headless mode)
+live_frame_*.jpg
+live_state_*.json
+live_snap_*.jpg
+live_snapfull_*.jpg
+
+# Backup files (อาจมี sensitive data — ห้าม commit)
+backups/
 
 # Face recognition generated files
 encodings.pkl
@@ -72,3 +84,7 @@ npm-debug.log*
 known_faces/
 Report/Day/
 fortestFn/
+
+# Diagnostic / soak test (local debugging, not for git)
+logs/
+scripts/

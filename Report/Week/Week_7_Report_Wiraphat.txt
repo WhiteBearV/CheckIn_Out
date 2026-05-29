@@ -1,0 +1,78 @@
+นายวีรภัทร สาลีผล  6610301006                                        2026-05-01
+
+รายงานการฝึกงาน
+
+ประจำสัปดาห์ที่ 7  27 เมษายน 2569 ถึง 1 พฤษภาคม 2569
+
+        วันที่ 27 เมษายน 2569 เข้าร่วมการประชุมสภากาแฟในช่วงเช้า เพื่อฟังการรายงานความคืบหน้าของงานที่ปฏิบัติในช่วงที่ผ่านมา จากนั้นเดินทางไปประจำกองงานสนับสนุน โดยที่ในวันนี้ได้รับมอบหมายงานเป็นการตรวจสภาพเครื่องและดิสก์พร้อมลงระบบปฏิบัติการ Windows ให้แก่เครื่องคอมพิวเตอร์ All in One จำนวน 2 เครื่อง โดยได้ทำการ Set Up เครื่องเบื้องต้น ตั้งค่าเครื่องตามที่หัวหน้างานมอบหมาย และติดตั้งโปรแกรมพื้นฐานที่จำเป็น ได้แก่ Chrome, Line, 7-Zip และ Microsoft Office เป็นต้น
+
+        ช่วงบ่ายได้รับงานให้ทดลองแกะซ่อมโทรศัพท์มือถือ iPhone 7 Plus ที่มีอาการเปิดไม่ติดและรูชาร์จหลวม ระหว่างทดสอบพบว่าอุปกรณ์มีอาการช็อตแบบผิดปกติและแบตเตอรี่เสื่อมอย่างหนัก ทำให้เกิดอาการค้างที่หน้าโลโก้และเปิดใช้งานไม่ได้ ได้ทดสอบถอดแบตเตอรี่เก่าออกแล้วจ่ายไฟเข้าบอร์ดโดยตรง พร้อมถอดสายแฟลกซ์ที่เกี่ยวข้องเพื่อหาสาเหตุของอาการช็อต แต่โดยรวมยังไม่สามารถระบุจุดที่เป็นต้นเหตุได้ หัวหน้างานจึงตัดสินใจส่งซ่อมที่ร้านภายนอกแทน
+
+        วันที่ 28 เมษายน 2569 เข้าร่วมการประชุมสภากาแฟในช่วงเช้า เพื่อฟังการรายงานความคืบหน้าของงานที่ปฏิบัติในช่วงที่ผ่านมา จากนั้นเดินทางไปประจำกองการศึกษา วิจัย และพัฒนา และลงมือพัฒนาโปรแกรมระบบบันทึกเวลาเข้างาน–ออกงานด้วยการจดจำใบหน้าต่อ โดยที่ในวันนี้ดำเนินการเปลี่ยนรูปแบบการสื่อสารระหว่าง main.py กับ stream_server.py ในโหมด Headless จากเดิมที่เขียนไฟล์ live_frame_{cam}.jpg, live_state_{cam}.json, live_snap_*.jpg และ live_snapfull_*.jpg ลง Working Directory เพื่อสื่อสารระหว่างสองโปรเซส มาเป็นการ POST ผ่าน HTTP Localhost เข้าหา stream_server โดยตรง โดยเพิ่ม Endpoint POST /push/frame, /push/state, /push/snap และ /push/snapfull รับ Raw Bytes กับ JSON แล้วเก็บลง Dict In-memory พร้อมเพิ่ม _cam_frame_ts สำหรับ Freshness Check แทน File mtime ส่วน main.py ได้แทน _write_live_* ด้วย _post_live_* ที่ใช้ requests.Session กับ HTTPAdapter Pool ขนาด 4/8 Connections และตั้ง Timeout 1 วินาทีแบบ Silent Fail ทำให้เมื่อ Stop ระบบหรือปิด Process จะไม่มีไฟล์ค้างบน Disk อีกต่อไป
+
+        นอกจากนี้ได้เพิ่ม Camera Duplicate Validation โดยห้ามเพิ่มกล้อง USB ที่มี Name หรือ Index ซ้ำ และห้ามกล้อง IP ที่มี Name หรือ URL ซ้ำในแบบ Case-insensitive และตัด Trailing Slash ออกก่อนเปรียบเทียบ stream_server เพิ่ม Helper _check_dup() คืน Error Message ภาษาไทยพร้อม ID กล้องที่ชน Endpoint POST/PUT จะคืน HTTP 409 ส่วนหน้า LiveCam และ /admin GUI ปรับ Toast แสดงข้อความ Error ค้าง 6 วินาทีจากเดิม 3 วินาที
+
+        งานหลักของวันนี้คือการสร้างหน้า History และ Report ทั้งฝั่ง Backend และ Frontend ฝั่ง Backend ที่ api.py เพิ่ม 4 Endpoint ได้แก่ GET /history สำหรับดึงรายการลงเวลาตามช่วงวัน หน่วยงาน บุคคล และกล้อง, GET /history/filters สำหรับ Distinct ค่าที่ใช้ใน Dropdown, GET /report/summary สำหรับสรุปยอดและกราฟ และ GET /report/export สำหรับ Export ในรูปแบบ CSV, XLSX และ PDF โดย CSV ใช้ stdlib พร้อม BOM utf-8, XLSX ใช้ openpyxl และ PDF ใช้ reportlab ที่ Register ฟอนต์ภาษาไทย Sarabun, Garuda และ NotoSansThai เป็นลำดับ Fallback ฝั่ง Frontend สร้างไฟล์ src/api/history.js สำหรับ Fetch ข้อมูล หน้า History.jsx มี Date Range Picker พร้อม Preset วันนี้ 7 วัน 14 วันและเดือนนี้ พร้อม Filter 5 ช่อง และ Group ข้อมูลตามวันเป็น Panel แยกแต่ละวัน ส่วนหน้า Report.jsx มี Filter เดียวกัน Stat Box 4 ใบ Stacked Bar Chart by_day และ by_dept ที่เขียนด้วย CSS Div ไม่ใช้ recharts และมีปุ่ม Export 3 รูปแบบ พร้อมเขียน mock_attendance.sql ที่ใช้ NOT EXISTS แทน DELETE เพราะ face_user ไม่มีสิทธิ์ DELETE สร้างข้อมูลจำลอง 8 คน 3 หน่วยงาน 22 วันทำการรวม 324 แถวที่รันซ้ำได้โดยไม่ Duplicate
+
+        ระหว่างพัฒนาพบปัญหา Export PDF ภาษาไทย Render เป็นกล่องสีดำทั้งหมดส่วนตัวเลขใช้ได้ ตรวจ Glyph Map ของแต่ละฟอนต์พบว่า Helvetica ไม่มี Thai Glyph, NotoSansThai มี Thai แต่ไม่มี ASCII และ Garuda ครอบคลุมทั้ง Latin และ Thai จึงสลับ Priority List เป็น Sarabun → Garuda → NotoSansThai เพราะเครื่องผู้ใช้ไม่มี Sarabun และ Wrap ทุก Cell ของตารางใน Paragraph แทน Raw String พร้อม Register FontFamily แบบ Normal และ Bold เพื่อให้ Shape ภาษาไทยถูกต้อง
+
+        ช่วงท้ายของวันได้แก้ Bug จากผู้ใช้รายงานเพิ่มเติมหลายเรื่อง ได้แก่ ปุ่ม Start ที่ API ไม่ติดเพราะ stream_server พยายาม Spawn uvicorn บน Port 8000 ที่ถูกยึดโดย npm run dev ไว้แล้ว แก้โดยเพิ่ม _api_alive() Probe Socket ก่อน Spawn, API Badge ติดเขียวตลอดเพราะ npm run dev เปิด API ไว้ตลอด แก้โดยเพิ่ม Flag _user_intent_started และให้ /system/status คืน False ถ้ายังไม่กด Start, Avatar ในหน้า Dashboard แสดงตัวอักษร * เพราะ main.py กับ Frontend ทำ URL Encoding ไม่ตรงกัน ทำให้ Key ใน _cam_snaps_full ไม่แมตช์ ได้แก้โดยใช้ urllib.parse.quote(name, safe='') ให้ตรงกับ encodeURIComponent, รูปแบบวันที่ DD/MM/YYYY บน Linux Chrome ที่ไม่ฟัง lang="en-GB" แก้โดยสร้าง DateField Wrapper Inline ที่ Value เก็บเป็น ISO และ <span> แสดง DD/MM/YYYY ซ่อน <input type="date"> opacity 0 และเรียก showPicker() เมื่อคลิก, Calendar Icon สีดำในโหมด Dark Mode แก้โดยเพิ่ม CSS filter: invert(1) สำหรับ ::-webkit-calendar-picker-indicator, การ Reload หน้า /reports ขึ้น JSON Not Found เพราะ Vite Proxy /history /report ชนกับ React Router Path แก้โดยเปลี่ยนเป็น Prefix /api และ Rewrite ตัด /api ออก รวมถึงปรับ Reset Filter เป็นปุ่มสีน้ำเงินพร้อมไอคอน Reload และเปลี่ยน Preset 30 วันเป็น 14 วันทั้ง 2 หน้า
+
+        วันที่ 29 เมษายน 2569 เข้าร่วมการประชุมสภากาแฟในช่วงเช้า เพื่อฟังการรายงานความคืบหน้าของงานที่ปฏิบัติในช่วงที่ผ่านมา จากนั้นเดินทางไปประจำกองการศึกษา วิจัย และพัฒนา โดยที่ในวันนี้ดำเนินการจัดทำสไลด์นำเสนอความยาว 3 นาทีสำหรับการพรีเซนต์ความคืบหน้าของระบบบันทึกเวลาเข้างาน–ออกงานด้วยการจดจำใบหน้า พร้อมจัดทำและอัปเดตคู่มือการใช้งานสำหรับ maebVersion ให้ครอบคลุมเนื้อหาตั้งแต่การติดตั้ง การตั้งค่ากล้อง การใช้งานปุ่ม Start/Stop การจัดการกล้องผ่าน Web UI ไปจนถึงการเรียกดูข้อมูลในหน้า History และ Report เพื่อให้ผู้ใช้ภายในกองสามารถเข้าใจการทำงานและทดลองใช้งานระบบได้ด้วยตนเอง
+
+        วันที่ 30 เมษายน 2569 เข้าร่วมการประชุมสภากาแฟในช่วงเช้า เพื่อฟังการรายงานความคืบหน้าของงานที่ปฏิบัติในช่วงที่ผ่านมา จากนั้นเดินทางไปประจำกองงานสนับสนุน โดยที่ในวันนี้ได้รับมอบหมายให้ซ่อมเครื่องคอมพิวเตอร์ All in One จำนวน 2 เครื่อง
+
+        เครื่องแรกในช่วงเช้าเข้ามาด้วยอาการอ่าน SSD ไม่ได้ ได้แกะเครื่องและทำความสะอาด RAM, SSD และ Mainboard จากนั้นประกอบกลับและเปิดทดสอบ ใช้งานได้ 3-4 ครั้งแล้วกลับมาพังด้วยปัญหาเดิม จึงได้ทำการแกะเครื่องอีกครั้งและสังเกตว่าหน้าแผงสัมผัสมีคราบสกปรกเล็กน้อย พี่ที่กองงานสนับสนุนจึงแนะนำให้ใช้กระดาษทรายขัดหน้าแผงเพื่อทำความสะอาด หลังจากนั้นประกอบใหม่และทดสอบอย่างละเอียด ผลปรากฏว่าเครื่องสามารถทำงานได้ตามปกติ
+
+        ในช่วงบ่ายได้ช่วยซ่อมเครื่องคอมพิวเตอร์ All in One อีกหนึ่งเครื่องที่เข้ามาด้วยคำร้องขอการอัปเกรดพื้นที่จัดเก็บและทำความสะอาด แต่ระหว่างประกอบกลับพบว่าเปิดไม่ติดเมื่อปิดฝาหลัง โดยในตอนแรกปัญหามีเพียงแค่ปิดฝาหลังแล้วเปิดไม่ติด ต่อมาเมื่อตรวจอย่างละเอียดพบว่าตัวชิป CPU มีอาการช็อตและเกิดรอยไหม้ 2 จุดที่ตัวชิป จากนั้นพี่ในกองพิจารณาว่าไม่สามารถซ่อมต่อไปได้
+
+        วันที่ 1 พฤษภาคม 2569 เข้าร่วมการประชุมสภากาแฟในช่วงเช้า เพื่อฟังการรายงานความคืบหน้าของงานที่ปฏิบัติในช่วงที่ผ่านมา จากนั้นเดินทางไปประจำกองการศึกษา วิจัย และพัฒนา และลงมือพัฒนาโปรแกรมระบบบันทึกเวลาเข้างาน–ออกงานด้วยการจดจำใบหน้าต่อ โดยที่ในวันนี้เริ่มจากการทบทวนความเข้าใจเกี่ยวกับ FFT (Fast Fourier Transform) ที่ใช้ในระบบ Anti-spoofing ตำแหน่ง liveness_engine.py:300 ในคลาส ScreenDetector._fft_score ซึ่งทำหน้าที่ตรวจว่า Face Crop ที่กล้องเห็นเป็นหน้าจริงหรือเป็นหน้าจากจอหรือรูปพิมพ์ โดยแปลงรูปเข้าสู่ Frequency Domain แล้ววิเคราะห์ Pattern ของความถี่ วัด 2 ค่าหลักคือ peak_rate ซึ่งเป็นสัดส่วน HF Pixel ที่เกิน 4 ซิกมา จับ LCD Grid หยาบ และ radial_cov ซึ่งเป็น CoV ของ Radial Power Profile จับ Pixel Pitch ละเอียด แล้วรวมเป็น fft_score ในช่วง 0 ถึง 1 โดยค่าที่สูงหมายถึงหน้าจริงและค่าที่ต่ำหมายถึง Spoof ปัจจุบัน Threshold ที่ใช้คือ 0.130
+
+        จากนั้นได้ประเมินทรัพยากรหากต้องรันระบบ 24/7 บนสภาพ 2 กล้อง โดยฝั่ง Disk หากบันทึก PicSAVE ที่ขนาดประมาณ 255 KB ต่อรูป เฉลี่ย 0.5 MB ต่อคนต่อวัน ที่ 50 คนต่อวันจะใช้ราว 9 GB ต่อปี และที่ 200 คนต่อวันจะใช้ราว 36 GB ต่อปี รวมโมเดล buffalo_l, MiniFASNet และ MediaPipe Hands อีกราว 320 MB คงที่ ฝั่ง RAM main.py ใช้ราว 1.5 ถึง 2 GB, stream_server ราว 150 ถึง 250 MB และ api.py ราว 100 MB รวมขั้นต่ำราว 2.5 ถึง 3 GB จึงแนะนำเครื่องที่มี RAM ตั้งแต่ 8 GB ขึ้นไป ฝั่ง CPU บน 4-core Idle ใช้ 15 ถึง 25 เปอร์เซ็นต์ และ Peak ตอนมีคนตรวจ 40 ถึง 70 เปอร์เซ็นต์ ฝั่ง GPU ใช้ VRAM 1.0 ถึง 1.5 GB และแนะนำ VRAM ตั้งแต่ 4 GB ขึ้นไป สำหรับการรันต่อเนื่องคาดว่ากินไฟราว 80 ถึง 150 W เทียบเท่า 60 ถึง 110 kWh ต่อเดือน
+
+        ต่อมาได้สร้างไฟล์ fortestFn/run_fft_webcam.py สำหรับทดสอบฟังก์ชัน analyze_fft แบบ Live ผ่านกล้อง Webcam เนื่องจากไฟล์ FFT.py เดิมเป็น Function เปล่าไม่มี if __name__ == "__main__" จึงรันโดยตรงไม่ได้ Test Runner ที่สร้างขึ้นจะเปิด Webcam ใช้ Haar Cascade Detect ใบหน้า แล้ว Crop เป็นภาพ 160×160 เพื่อส่งเข้า analyze_fft แสดงผล score, peak_rate, radial_cov พร้อม FFT Spectrum สี INFERNO ที่มุมขวาบน และมี HotKey สำหรับ Save Snapshot กับปรับ Threshold
+
+        งานหลักของวันคือการเพิ่มระบบ Process Watchdog และ Auto-restart เพื่อให้ระบบสามารถรอดต่อ Crash ในการรันต่อเนื่อง 24 ชั่วโมง ออกแบบเป็น 2 ชั้น ชั้นแรกใช้ systemd ของ Linux Restart stream_server.py ทั้งตัวหากเกิด Crash ส่วนชั้นที่สองเป็น Internal Watchdog ภายใน stream_server.py ที่ Respawn main.py และ api.py Subprocess หากตายขณะที่ผู้ใช้สั่ง Start ค้างไว้ การออกแบบไม่กระทบฟังก์ชัน Start/Stop ของ Web UI เดิม เพราะ Watchdog จะ Respawn เฉพาะตอน _user_intent_started=True เท่านั้น หากผู้ใช้กด Stop ระบบจะ Set Flag เป็น False และ Watchdog จะหยุดทำงานทันที พร้อมวาง Rate Limit ไว้ที่ 5 ครั้งใน 60 วินาที หากเกินจะ Set _proc_disabled กันลูปไม่จบ และจะ Reset เมื่อผู้ใช้กด Start ใหม่
+
+        การ Implement ใน stream_server.py ได้แยก Spawn Logic ออกเป็น Helper _spawn_main_proc() และ _spawn_api_proc() เพื่อให้ทั้ง /system/start และ Watchdog เรียกใช้ร่วมกัน เพิ่ม _record_restart() ติดตาม Timestamp ใน Window 60 วินาที, _watchdog_loop() เป็น Daemon Thread ตรวจทุก 3 วินาทีพร้อม Grace Period 8 วินาทีหลัง Spawn ใหม่เพื่อกัน Race Condition และเพิ่ม Endpoint GET /system/watchdog สำหรับดูสถานะและ Restart History พร้อมตั้ง @app.on_event('startup') ให้ Start Watchdog ตั้งแต่ Boot นอกจากนี้ได้สร้างโฟลเดอร์ deploy/ ใหม่ที่บรรจุ facereg-stream.service เป็น systemd Unit File พร้อมตั้ง Restart=always, RestartSec=3 และ KillMode=mixed สำหรับให้ SIGTERM กระจายถึง Subprocess และ install_service.sh สคริปต์ติดตั้งที่ Copy ไปยัง /etc/systemd/system พร้อม daemon-reload และ enable Service สุดท้ายอัปเดต CLAUDE.md เพิ่มหัวข้อ Watchdog และทดสอบ Smoke ผ่านทุกเคสรวมทั้ง Rate Limit ที่ Disable ตัวเองหลังเกิน 5 ครั้ง
+
+ปัญหาและอุปสรรค์ที่พบ
+
+  - อุปกรณ์ iPhone 7 Plus มีอาการช็อตแบบผิดปกติและแบตเตอรี่เสื่อมหนัก ทำให้ค้างที่หน้าโลโก้และเปิดใช้งานไม่ได้ ตรวจหาสาเหตุไม่เจอ
+  - การสื่อสารระหว่าง main.py กับ stream_server.py ในโหมด Headless ทิ้งไฟล์ live_*.jpg และ live_*.json ค้างใน Disk ผู้ใช้ไม่ต้องการ
+  - uvicorn Access Log สแปม Terminal และ Module Cache เก่าหลังแก้ Code ทำให้ตรวจ Error ของจริงไม่เห็นและทดสอบใช้ไฟล์เก่า
+  - Port 8000 ชนกันระหว่าง npm run dev กับ /system/start Spawn uvicorn
+  - Export PDF ภาษาไทย Render เป็นกล่องสีดำเพราะฟอนต์ไม่ครอบคลุม Glyph
+  - Working Directory ของ uvicorn ตอน Spawn จาก package.json ผิด ทำให้ db_config.json หาไม่เจอ
+  - Avatar ในหน้า Dashboard แสดงตัวอักษร * เพราะ URL Encoding ระหว่าง main.py กับ Frontend ไม่ตรงกัน
+  - Vite Proxy /history และ /report ชนกับ React Router Path เมื่อ Reload หน้า /reports ขึ้น JSON Not Found
+  - DateField บน Linux Chrome ไม่ฟัง lang="en-GB" ทำให้รูปแบบวันที่ไม่เป็น DD/MM/YYYY
+  - Calendar Icon สีดำในโหมด Dark Mode มองไม่เห็น
+  - คอมพิวเตอร์ All in One เครื่องแรกอ่าน SSD ไม่ได้และพังซ้ำหลังทำความสะอาดเบื้องต้น เกิดจากคราบสกปรกที่หน้าแผงสัมผัส
+  - คอมพิวเตอร์ All in One เครื่องที่สอง CPU มีอาการช็อตและเกิดรอยไหม้ 2 จุดที่ตัวชิป ทำให้เปิดไม่ติดเมื่อปิดฝาหลัง
+  - หาก main.py หรือ stream_server.py Crash ตอนกลางคืน ระบบจะดับยาวจนเช้าโดยไม่มีคน Restart
+  - Watchdog ที่ออกแบบไม่ดีอาจ Loop Respawn ไม่จบหาก Process Crash ทันทีหลัง Boot
+  - Watchdog ที่ทำงานหลังกด Stop จะทำให้ปุ่ม Stop ไม่หยุดระบบจริง
+
+แนวทางการแก้ปัญหาดังกล่าว แก้ไขได้โดย
+
+  - ทดสอบถอดแบตเก่าและจ่ายไฟตรงเข้าบอร์ด ถอดสายแฟลกซ์ที่เกี่ยวข้องเพื่อหาสาเหตุของอาการช็อต สุดท้ายตัดสินใจส่งซ่อมที่ร้านภายนอก
+  - เปลี่ยนรูปแบบการสื่อสารเป็น HTTP POST ผ่าน Localhost เก็บข้อมูลใน Dict In-memory ของ stream_server แทน File I/O ทั้งหมด
+  - ตั้ง uvicorn.run(log_level='warning', access_log=False) ทั้ง 2 จุด และ Restart uvicorn เมื่อแก้ Code เพื่อล้าง Module Cache
+  - เพิ่ม _api_alive() Probe Socket Port 8000 ก่อน Spawn และเพิ่ม Flag _user_intent_started แยกเจตนาผู้ใช้ออกจาก Port Probe
+  - Register ฟอนต์ Garuda เป็นลำดับ Fallback ก่อน NotoSansThai และ Wrap ทุก Cell ในตารางเป็น Paragraph พร้อม Register FontFamily Normal/Bold
+  - แก้คำสั่งใน package.json เป็น cd .. && venv/bin/uvicorn เพื่อให้ทำงานจาก Project Root
+  - ใช้ urllib.parse.quote(name, safe='') ใน main.py ให้ Encoding ตรงกับ encodeURIComponent ของ Frontend
+  - เปลี่ยน Vite Proxy เป็น Prefix /api และ Rewrite ตัด /api ออก พร้อมอัปเดต src/api/history.js ให้ใช้ Path /api/history และ /api/report
+  - สร้าง DateField Wrapper Inline ที่ Value เก็บเป็น ISO YYYY-MM-DD และ <span> แสดง DD/MM/YYYY ซ่อน <input type="date"> และเรียก showPicker() เมื่อคลิก
+  - เพิ่ม CSS html.dark input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(1); }
+  - ใช้กระดาษทรายขัดทำความสะอาดหน้าแผงสัมผัสตามคำแนะนำของพี่ในกองงาน แล้วประกอบใหม่ ทดสอบใช้งานได้ตามปกติ
+  - ตรวจวินิจฉัยอย่างละเอียดและสรุปกับพี่ในกองว่าไม่สามารถซ่อมต่อไปได้ จึงยุติการซ่อม
+  - ออกแบบ Watchdog 2 ชั้น ชั้นแรกใช้ systemd Restart stream_server.py และชั้นที่สองใช้ Internal Watchdog ใน stream_server.py Respawn main.py และ api.py
+  - วาง Rate Limit ที่ 5 Restart ใน 60 วินาที พร้อม Grace Period 8 วินาทีหลัง Spawn ใหม่ และ Auto-disable เมื่อเกิน Limit Reset เมื่อกด Start ใหม่
+  - ใช้ Flag _user_intent_started ที่มีอยู่แล้ว Watchdog ทำงานเฉพาะตอน Flag = True เท่านั้น Stop จะหยุดสนิททันที
+
+
+                              ลงชื่อผู้ควบคุมการฝึกงาน.........................................................
+                                              (.......................................................)
+                                               วันที่.........................................................

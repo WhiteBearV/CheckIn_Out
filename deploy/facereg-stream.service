@@ -1,0 +1,33 @@
+[Unit]
+Description=FaceReg Stream Server (FastAPI :8001) — face attendance entrypoint
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=maeb
+Group=maeb
+WorkingDirectory=/home/maeb/internship_work/FaceReg
+ExecStart=/home/maeb/internship_work/FaceReg/venv/bin/python /home/maeb/internship_work/FaceReg/stream_server.py
+Environment=PYTHONUNBUFFERED=1
+Environment=STREAM_PORT=8001
+
+# auto-restart ทุกกรณีที่ดับ (crash, OOM, kill) — ยกเว้น exit code 0
+Restart=always
+RestartSec=3
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+# stream_server spawn child (main.py, api.py) ผ่าน subprocess
+# ตั้ง KillMode=mixed เพื่อให้ SIGTERM ส่งให้ main process แล้วกระจายไปยัง child
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=15
+
+# log → journal (ดูด้วย journalctl -u facereg-stream -f)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=facereg-stream
+
+[Install]
+WantedBy=multi-user.target

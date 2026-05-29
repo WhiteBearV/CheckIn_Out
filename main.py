@@ -36,7 +36,8 @@ def _ensure_nvidia_libs():
     os.execv(sys.executable, [sys.executable, "-u"] + sys.argv)
 
 
-_ensure_nvidia_libs()
+# _ensure_nvidia_libs() เรียกเฉพาะตอนรันตรง (__main__)
+# ถ้า import โดย stream_server ให้ข้ามเพื่อป้องกัน os.execv() crash
 
 import cv2
 import pickle
@@ -50,8 +51,94 @@ import threading as _t
 import config as cfg
 from camera import ThreadedCamera
 from session_manager import SessionManager
+from api_client import mask_pid
 import ui_renderer as ui
 import stream_server
+from pathlib import Path as _pl_mod
+
+# ─── Headless mode — POST ทุกอย่างเข้า stream_server in-memory cache ────────
+# เมื่อ FACE_HEADLESS=1 (spawn จาก stream_server) main.py กับ stream_server
+# คนละ process — สื่อสารผ่าน HTTP POST localhost (ไม่แตะ disk)
+
+# HTTP client (singleton) — pool ใช้ซ้ำเพื่อลด latency
+_STREAM_BASE  = f"http://127.0.0.1:{int(os.environ.get('STREAM_PORT', 8001))}"
+_PUSH_TOKEN   = os.environ.get("INTERNAL_PUSH_TOKEN", "")
+_PUSH_HEADERS = {"X-Push-Token": _PUSH_TOKEN} if _PUSH_TOKEN else {}
+_http_session = None
+
+def _get_http_session():
+    global _http_session
+    if _http_session is None:
+        import requests
+        from requests.adapters import HTTPAdapter
+        _http_session = requests.Session()
+        _http_session.mount('http://', HTTPAdapter(pool_connections=4, pool_maxsize=8))
+    return _http_session
+
+def _post_live_frame(cam_id: str, frame_bgr):
+    """POST JPEG-encoded frame ไปเก็บใน stream_server._cam_frames (in-memory)"""
+    import cv2 as _cv2
+    try:
+        ok, buf = _cv2.imencode('.jpg', frame_bgr, [_cv2.IMWRITE_JPEG_QUALITY, 70])
+        if not ok:
+            return
+        _get_http_session().post(
+            f"{_STREAM_BASE}/push/frame/{cam_id}",
+            data=buf.tobytes(),
+            headers={'Content-Type': 'image/jpeg', **_PUSH_HEADERS},
+            timeout=1.0,
+        )
+    except Exception:
+        pass
+
+def _post_live_state(cam_id: str, state: dict):
+    """POST JSON state ไปเก็บใน stream_server._cam_states (in-memory)"""
+    import json as _j
+    try:
+        _get_http_session().post(
+            f"{_STREAM_BASE}/push/state/{cam_id}",
+            data=_j.dumps(state, ensure_ascii=False).encode('utf-8'),
+            headers={'Content-Type': 'application/json', **_PUSH_HEADERS},
+            timeout=1.0,
+        )
+    except Exception:
+        pass
+
+def _post_live_snap(cam_id: str, name: str, crop):
+    """POST face crop ไปเก็บใน stream_server._cam_snaps (in-memory)
+    ใช้ urllib quote เพื่อให้ name (อาจมี '*' จาก masked PID) เดินผ่าน HTTP path ได้"""
+    from urllib.parse import quote
+    import cv2 as _cv2
+    try:
+        ok, buf = _cv2.imencode('.jpg', crop, [_cv2.IMWRITE_JPEG_QUALITY, 80])
+        if not ok:
+            return
+        _get_http_session().post(
+            f"{_STREAM_BASE}/push/snap/{cam_id}/{quote(name, safe='')}",
+            data=buf.tobytes(),
+            headers={'Content-Type': 'image/jpeg', **_PUSH_HEADERS},
+            timeout=1.0,
+        )
+    except Exception:
+        pass
+
+def _post_live_snapfull(cam_id: str, name: str, frame):
+    """POST full frame ไปเก็บใน stream_server._cam_snaps_full (in-memory)"""
+    from urllib.parse import quote
+    import cv2 as _cv2
+    try:
+        ok, buf = _cv2.imencode('.jpg', frame, [_cv2.IMWRITE_JPEG_QUALITY, 75])
+        if not ok:
+            return
+        _get_http_session().post(
+            f"{_STREAM_BASE}/push/snapfull/{cam_id}/{quote(name, safe='')}",
+            data=buf.tobytes(),
+            headers={'Content-Type': 'image/jpeg', **_PUSH_HEADERS},
+            timeout=1.0,
+        )
+    except Exception:
+        pass
+
 
 # ─── Multi-cam display buffer (worker thread → main thread) ──────────────────
 # Single slot — เฉพาะกล้องที่ถูกเลือก (_sel_cam) เท่านั้นที่เขียน
@@ -73,7 +160,7 @@ def _get_screen_size() -> tuple[int, int]:
             return int(m.group(1)), int(m.group(2))
     except Exception:
         pass
-    return 1920, 1080   # fallback
+    return cfg.SCREEN_FALLBACK_W, cfg.SCREEN_FALLBACK_H
 
 SCREEN_W, SCREEN_H = _get_screen_size()
 del _sp, _re
@@ -226,11 +313,66 @@ def _compute_guide_state(face_with_names, liveness_map,
     }
 
 
-def run_camera(cam_cfg: dict):
+# ─── Camera Management Helpers ────────────────────────────────────────────────
+_ENV_PATH = _pl_mod(__file__).parent / ".env"
+
+
+# ─── .env helpers ─────────────────────────────────────────────────────────────
+
+def _env_set(key: str, value: str):
+    """เพิ่ม / อัปเดต KEY=value ใน .env (สร้างไฟล์ถ้ายังไม่มี)"""
+    lines: list[str] = []
+    if _ENV_PATH.exists():
+        with open(_ENV_PATH, encoding="utf-8") as _f:
+            lines = _f.readlines()
+    new_lines, found = [], False
+    for line in lines:
+        if line.strip().startswith(f"{key}="):
+            new_lines.append(f"{key}={value}\n")
+            found = True
+        else:
+            new_lines.append(line)
+    if not found:
+        new_lines.append(f"{key}={value}\n")
+    with open(_ENV_PATH, "w", encoding="utf-8") as _f:
+        _f.writelines(new_lines)
+
+
+def _env_del(key: str):
+    """ลบ KEY=... ออกจาก .env"""
+    if not _ENV_PATH.exists():
+        return
+    with open(_ENV_PATH, encoding="utf-8") as _f:
+        lines = _f.readlines()
+    with open(_ENV_PATH, "w", encoding="utf-8") as _f:
+        _f.writelines(l for l in lines if not l.strip().startswith(f"{key}="))
+
+
+def _cam_env_key(cam_id: str) -> str:
+    """cam4 → CAM4_URL"""
+    return cam_id.upper().replace("-", "_") + "_URL"
+
+
+def _resolve_url(url) -> str:
+    """แปลง '$VAR_NAME' → os.environ.get('VAR_NAME') | ค่าตรง"""
+    if isinstance(url, str) and url.startswith("$"):
+        return os.environ.get(url[1:], "")
+    return url or ""
+
+
+
+
+def run_camera(cam_cfg: dict, cam_stop_event=None):
     """Main loop สำหรับกล้อง 1 ตัว — รัน 1 thread ต่อ cam_cfg"""
     cam_id      = cam_cfg["id"]
     camera_name = cam_cfg["name"]
     cam_flip    = cam_cfg.get("flip", cfg.CAMERA_FLIP)
+
+    # FACE_HEADLESS=1: spawn จาก stream_server → เขียน frame/state ลงไฟล์แทน push buffer
+    _HEADLESS      = os.environ.get('FACE_HEADLESS', '').lower() in ('1', 'true', 'yes')
+    _ALWAYS_ACTIVE = os.environ.get('FACE_ALWAYS_ACTIVE', '').lower() in ('1', 'true', 'yes')
+    if _HEADLESS:
+        print(f'[{cam_id}] Headless mode — POST → {_STREAM_BASE}/push/* (in-memory)', flush=True)
 
     # ─── โหลด face encodings (ArcFace 512d) ───
     if not os.path.exists(cfg.ENCODINGS_FILE):
@@ -250,8 +392,6 @@ def run_camera(cam_cfg: dict):
     from insightface.app import FaceAnalysis
     import onnxruntime as ort
 
-    # Auto-detect — ใช้เฉพาะ provider ที่พร้อมจริง (ไม่ error อีก)
-    # Auto-detect GPU — กรอง TensorRT ออก (ต้องลง TensorRT แยก)
     available = ort.get_available_providers()
     use_providers = [p for p in available if p != "TensorrtExecutionProvider"]
     print(f"[ORT] Using: {use_providers}")
@@ -292,8 +432,8 @@ def run_camera(cam_cfg: dict):
     hands = mp.solutions.hands.Hands(
         static_image_mode=False,
         max_num_hands=1,
-        min_detection_confidence=0.6,
-        min_tracking_confidence=0.5,
+        min_detection_confidence=cfg.HAND_DETECTION_CONF,
+        min_tracking_confidence=cfg.HAND_TRACKING_CONF,
     )
 
     # ─── Session Manager ───
@@ -325,7 +465,7 @@ def run_camera(cam_cfg: dict):
 
     def _apply_windowed():
         cv2.setWindowProperty(win_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(win_name, 1280, 720)
+        cv2.resizeWindow(win_name, cfg.WINDOWED_W, cfg.WINDOWED_H)
         cv2.moveWindow(win_name, 100, 100)
 
     def _toggle_fullscreen():
@@ -369,7 +509,7 @@ def run_camera(cam_cfg: dict):
 
     # ─── Screen Debug EMA (TEST_MODE) ───
     # smoothing กันกระพริบ — ค่าตัวเลขใช้ EMA, ค่า bool ใช้ latest
-    _EMA_A = 0.20   # alpha: ต่ำ = smooth กว่า (ตอบสนองช้ากว่า)
+    _EMA_A = cfg.SCREEN_DEBUG_EMA_ALPHA
     _screen_ema: dict = {}   # EMA ของ float values
     _screen_debug_display: dict = {}   # ส่งเข้า build_panel
 
@@ -416,7 +556,7 @@ def run_camera(cam_cfg: dict):
             break
 
         # ─── Active Window Check ───
-        _active = _in_active_window(now.time(), cfg.ACTIVE_WINDOWS)
+        _active = True if _ALWAYS_ACTIVE else _in_active_window(now.time(), cfg.ACTIVE_WINDOWS)
 
         if _active and _was_active is False:
             # idle → active: เริ่มช่วงใหม่ — reset session และ checkout flag
@@ -440,9 +580,7 @@ def run_camera(cam_cfg: dict):
             # ── Idle mode: แสดงหน้าจอรอ ลด CPU/GPU ──
             next_dt = _next_window_start(now, cfg.ACTIVE_WINDOWS)
 
-            # Push raw frame + idle state สำหรับ web overlay
-            stream_server.push_frame(cam_id, frame)
-            stream_server.push_state(cam_id, {
+            _idle_state = {
                 "ts": now_ts, "fps": display_fps,
                 "frame_size": list(frame.shape[:2]),
                 "idle": True,
@@ -450,11 +588,20 @@ def run_camera(cam_cfg: dict):
                 "faces": [], "guide": {"enabled": False}, "persons": {},
                 "hud": {"show_fps": cfg.SHOW_FPS, "test_mode": False,
                         "checkout_done": False, "remaining": 0},
-            })
+            }
+            if _HEADLESS:
+                _post_live_state(cam_id, _idle_state)
+            else:
+                stream_server.push_state(cam_id, _idle_state)
 
             ui.draw_idle_screen(frame, now, next_dt)
             idle_panel = np.zeros((frame.shape[0], cfg.PANEL_WIDTH, 3), dtype=np.uint8)
-            _imshow(np.hstack([frame, idle_panel]))
+            idle_display = np.hstack([frame, idle_panel])
+            if _HEADLESS:
+                _post_live_frame(cam_id, idle_display)
+            else:
+                stream_server.push_frame(cam_id, idle_display)
+            _imshow(idle_display)
             if stream_server.get_cv_window():
                 key = cv2.waitKey(500) & 0xFF
                 if key == ord("q") or key == 27:
@@ -537,7 +684,7 @@ def run_camera(cam_cfg: dict):
             name = identify_face(embedding, known_norms, known_names)
 
             # ── Face crop ──
-            pad = 15
+            pad = cfg.FACE_CROP_PAD
             crop = orig_frame[max(0, top-pad):min(fh, bottom+pad),
                               max(0, left-pad):min(fw, right+pad)]
 
@@ -547,6 +694,18 @@ def run_camera(cam_cfg: dict):
                 continue
 
             _face_with_names.append((face_box, name))
+
+            # ── Push face thumbnail + full frame สำหรับ web frontend ──
+            # ใช้ masked pid (4 ตัวท้าย) เป็นชื่อไฟล์ / key — ไม่รั่ว per_id 13 หลัก
+            mkey = mask_pid(name)
+            if _HEADLESS:
+                if crop.size > 0:
+                    _post_live_snap(cam_id, mkey, crop)
+                _post_live_snapfull(cam_id, mkey, raw_frame)
+            else:
+                if crop.size > 0:
+                    stream_server.push_snapshot(cam_id, mkey, crop)
+                stream_server.push_snapshot_full(cam_id, mkey, raw_frame)
 
             # ── Landmarks (68-point → dict) ──
             lm_dict = None
@@ -641,10 +800,10 @@ def run_camera(cam_cfg: dict):
                                screen_debug=_screen_debug_display if cfg.TEST_MODE else None,
                                _cache=_local_panel_cache)
 
-        # ─── Push raw frame + state สำหรับ web frontend ───────────────────────
+        # ─── Push rendered frame + state สำหรับ web ───
         remaining = max(0, cfg.TEST_DURATION_SECONDS - int(now_ts - start_ts)) if cfg.TEST_MODE else 0
-        stream_server.push_frame(cam_id, raw_frame)
-        stream_server.push_state(cam_id, {
+        _combined = np.hstack([frame, panel])
+        _state = {
             "ts":         now_ts,
             "fps":        display_fps,
             "frame_size": list(raw_frame.shape[:2]),
@@ -652,7 +811,7 @@ def run_camera(cam_cfg: dict):
             "next_window": None,
             "faces": [
                 {
-                    "name":  name,
+                    "name":  mask_pid(name),
                     "bbox":  [int(l), int(t), int(r2), int(b)],
                     "color": list(ui.get_face_visual(name,
                                   session.persons.get(name),
@@ -669,9 +828,12 @@ def run_camera(cam_cfg: dict):
                 oval_cx, oval_cy, oval_ew, oval_eh, now_ts,
             ),
             "persons": {
-                n: {
-                    "display_name": p.display_name or n,
-                    "per_id":       p.per_id or "",
+                mask_pid(n): {
+                    "display_name": p.display_name or mask_pid(n),
+                    # per_id เต็มยังอยู่ในสตรีม JSON (ต้องใช้ lookup รูปจาก External API
+                    # ผ่าน /person/{per_id}) — แต่ UI display + ชื่อไฟล์จะ mask ทั้งหมด
+                    "per_id":        p.per_id or "",
+                    "per_id_masked": mask_pid(p.per_id),
                     "organize_th":  p.organize_th or "",
                     "posname_th":   p.posname_th or "",
                     "checked_in":   p.checked_in,
@@ -687,9 +849,20 @@ def run_camera(cam_cfg: dict):
                 "remaining":     remaining,
                 "show_fps":      cfg.SHOW_FPS,
             },
-        })
+        }
+        stream_frame = raw_frame.copy()
+        ui.draw_face_guide(stream_frame, _face_with_names,
+                           session.liveness, session.persons, now_ts)
+        ui.draw_hands(stream_frame, hand_results)
 
-        _imshow(np.hstack([frame, panel]))
+        if _HEADLESS:
+            _post_live_frame(cam_id, stream_frame)
+            _post_live_state(cam_id, _state)
+        else:
+            stream_server.push_frame(cam_id, stream_frame)
+            stream_server.push_state(cam_id, _state)
+
+        _imshow(_combined)
 
         if stream_server.get_cv_window():
             key = cv2.waitKey(1) & 0xFF
@@ -698,7 +871,14 @@ def run_camera(cam_cfg: dict):
             elif key == ord("f"):
                 _toggle_fullscreen()
         else:
-            if _stop_event.is_set():
+            if _stop_event.is_set() or (cam_stop_event and cam_stop_event.is_set()):
+                break
+            # check file flag (subprocess mode)
+            _flag = _pl_mod(__file__).parent / f"cam_stop_{cam_id}.flag"
+            if _flag.exists():
+                try: _flag.unlink()
+                except: pass
+                print(f"[MAIN] cam_stop flag detected: {cam_id}")
                 break
             time.sleep(0.001)
 
@@ -709,16 +889,95 @@ def run_camera(cam_cfg: dict):
         cv2.destroyWindow(win_name)
 
 
-if __name__ == "__main__":
+_camera_threads: list = []   # track worker threads สำหรับ restart
+_cam_stop_events: dict = {}  # cam_id → threading.Event สำหรับหยุดเฉพาะกล้อง
+
+
+def stop_cameras():
+    """หยุด camera workers ทั้งหมด"""
+    _stop_event.set()
+    print("[MAIN] stop_cameras() called")
+
+
+def stop_camera(cam_id: str):
+    """หยุดเฉพาะ camera worker ตาม cam_id (in-process หรือ file flag)"""
+    ev = _cam_stop_events.get(cam_id)
+    if ev:
+        ev.set()
+    # เขียน flag file เพื่อ subprocess mode ด้วย
+    (_pl_mod(__file__).parent / f"cam_stop_{cam_id}.flag").touch()
+    print(f"[MAIN] stop_camera({cam_id}) called")
+
+
+def start_camera_workers():
+    """เริ่ม/hotload camera worker threads — เรียกได้จาก /system/start หรือ /cameras/reload
+    ถ้ามี workers อยู่แล้ว จะ spawn เฉพาะกล้องใหม่ที่ยังไม่มี thread (hotload เหมือนกด R)
+    ถ้ายังไม่มี workers เลย จะ start ทุกตัวใหม่"""
+    global _camera_threads
+    import threading as _threading
+
+    configs = stream_server._load_cam_configs()
+    if not configs:
+        configs = getattr(cfg, "CAMERAS", [])
+        configs = [c for c in configs if c.get("url") or c.get("index") is not None]
+    if not configs:
+        configs = [{
+            "id":    "cam1",
+            "name":  "CAM_MAIN",
+            "url":   cfg.CAMERA_URL or None,
+            "index": 1,
+            "flip":  cfg.CAMERA_FLIP,
+        }]
+    if not stream_server._CAMERAS_JSON.exists() and configs:
+        stream_server._save_cam_configs(configs)
+
+    # filter เฉพาะกล้องที่เลือก (ถ้า FACE_CAM_IDS ถูกตั้ง)
+    _face_cam_ids = os.environ.get("FACE_CAM_IDS", "")
+    if _face_cam_ids:
+        _selected = set(_face_cam_ids.split(","))
+        configs = [c for c in configs if c.get("id") in _selected]
+    configs = [
+        {**c, "url": _resolve_url(c["url"])} if "url" in c else c
+        for c in configs
+    ]
+
+    # กรอง alive threads ออกก่อน
+    _camera_threads = [t for t in _camera_threads if t.is_alive()]
+    running_ids = {t.name for t in _camera_threads}
+
+    # clear _stop_event เสมอก่อน spawn threads ใหม่
+    # (ถ้าไม่ทำ thread ใหม่จะ exit ทันทีถ้า event ยังถูก set ค้างจาก stop ก่อนหน้า)
+    _stop_event.clear()
+
+    new_cams = [c for c in configs if f"cam-{c['id']}" not in running_ids]
+    if not new_cams:
+        print("[MAIN] All cameras already running — nothing to hotload")
+        return
+
+    if _sel_cam.get("id") is None and configs:
+        _sel_cam["id"] = configs[0]["id"]
+
+    for cam_cfg in new_cams:
+        cam_id = cam_cfg['id']
+        ev = _t.Event()
+        _cam_stop_events[cam_id] = ev
+        t = _threading.Thread(
+            target=run_camera, args=(cam_cfg, ev),
+            name=f"cam-{cam_id}", daemon=True,
+        )
+        _camera_threads.append(t)
+        t.start()
+        print(f"[MAIN] Camera worker started: {cam_id}")
+    print(f"[MAIN] Hotloaded {len(new_cams)} new cam(s): {[c['id'] for c in new_cams]}")
+
+
+def start_cameras():
+    """เริ่ม camera workers + display loop — ใช้ตอนรัน __main__"""
     import threading as _threading
 
     cameras = getattr(cfg, "CAMERAS", [])
-
-    # กรอง cam ที่ไม่มี url ว่างออก (CAM1="" → ข้าม)
     cameras = [c for c in cameras if c.get("url") or c.get("index") is not None]
-
     if not cameras:
-        # Fallback: legacy single-cam
         cameras = [{
             "id":    "cam1",
             "name":  "CAM_MAIN",
@@ -726,28 +985,28 @@ if __name__ == "__main__":
             "index": 1,
             "flip":  cfg.CAMERA_FLIP,
         }]
+    if not stream_server._CAMERAS_JSON.exists() and cameras:
+        stream_server._save_cam_configs(cameras)
+        print(f"[CM] สร้าง cameras.json จาก config ({len(cameras)} กล้อง)")
+    cameras = [
+        {**c, "url": _resolve_url(c["url"])} if "url" in c else c
+        for c in cameras
+    ]
 
-    stream_server.start()
-
-    if len(cameras) == 1:
-        run_camera(cameras[0])
-    else:
+    if True:
         # ─── Multi-cam mode ───────────────────────────────────────────────────
         stream_server.set_cv_window(False)
-        print(f"[MAIN] Multi-camera mode: {[c['id'] for c in cameras]}")
+        print(f"[MAIN] Camera mode: {[c['id'] for c in cameras]}")
 
         cam_ids   = [c["id"]   for c in cameras]
         cam_names = {c["id"]: c["name"] for c in cameras}
 
-        # กำหนดกล้องเริ่มต้น — workers อ่าน _sel_cam["id"] ก่อน push
         _sel_cam["id"] = cam_ids[0]
 
         threads = [
             _threading.Thread(
-                target=run_camera,
-                args=(cam_cfg,),
-                name=f"cam-{cam_cfg['id']}",
-                daemon=True,
+                target=run_camera, args=(cam_cfg,),
+                name=f"cam-{cam_cfg['id']}", daemon=True,
             )
             for cam_cfg in cameras
         ]
@@ -755,79 +1014,423 @@ if __name__ == "__main__":
             t.start()
 
         # ─── Main thread: single-window display loop ─────────────────────────
-        BAR_H    = 44
-        WIN_NAME = "Face Attendance System"
-        _fs      = {"on": False}
+        BAR_H      = cfg.CAM_TAB_BAR_H
+        WIN_NAME   = cfg.WINDOW_TITLE
+        _ADD_BTN_W = cfg.CAM_ADD_BTN_W
+        _DEL_BTN_W = cfg.CAM_DEL_BTN_W
+        _fs        = {"on": False}
 
+        # ─── UI state สำหรับ camera management ──────────────────────────────
+        _mgmt = {
+            "mode":    None,   # None | "add" | "del"
+            "field":   0,      # field ที่ active ใน form
+            "data":    {},     # ข้อมูลใน form
+            "del_cam": None,   # cam_id ที่กำลังจะลบ
+            "msg":     "",     # toast message
+            "msg_ts":  0.0,
+        }
+        _del_btns_ref = [[]]
+        _add_btn_ref  = [(0, 0)]
+
+        # ─── Form field definitions ──────────────────────────────────────────
+        _FIELDS_USB = [("Name",       "name"),
+                       ("Type",       "type"),
+                       ("USB Index",  "index"),
+                       ("Flip",       "flip")]
+        _FIELDS_IP  = [("Name",       "name"),
+                       ("Type",       "type"),
+                       ("URL (RTSP)", "url"),
+                       ("Flip",       "flip")]
+
+        def _form_init() -> dict:
+            return {"name": "", "type": "usb", "index": "0", "url": "", "flip": False}
+
+        def _open_add_form():
+            _mgmt["mode"]  = "add"
+            _mgmt["field"] = 0
+            _mgmt["data"]  = _form_init()
+
+        def _open_del_confirm(cid: str):
+            _mgmt["mode"]    = "del"
+            _mgmt["del_cam"] = cid
+
+        # ─── Tab bar (with + and × buttons) ─────────────────────────────────
         def _draw_bar(frame_w: int, cur_active: str, pushed: set) -> tuple:
-            bar   = np.full((BAR_H, frame_w, 3), (28, 28, 28), dtype=np.uint8)
-            tab_w = frame_w // len(cam_ids)
-            tabs  = []
+            bar        = np.full((BAR_H, frame_w, 3), (28, 28, 28), dtype=np.uint8)
+            tab_area_w = frame_w - _ADD_BTN_W
+            tab_w      = tab_area_w // max(len(cam_ids), 1)
+            tabs, del_btns = [], []
+
             for i, cid in enumerate(cam_ids):
-                x1, x2 = i * tab_w, min((i + 1) * tab_w, frame_w)
-                active  = (cid == cur_active)
-                if active:
-                    cv2.rectangle(bar, (x1, 0), (x2 - 1, BAR_H - 1), (45, 45, 45), -1)
-                cv2.rectangle(bar, (x1, BAR_H - 3), (x2 - 1, BAR_H - 1),
-                              (0, 255, 255) if active else (60, 60, 60), -1)
-                label = cam_names.get(cid, cid)
-                col   = (0, 255, 255) if active else (140, 140, 140)
+                x1 = i * tab_w
+                x2 = min((i + 1) * tab_w, tab_area_w)
+                is_active = (cid == cur_active)
+                if is_active:
+                    cv2.rectangle(bar, (x1, 0), (x2-1, BAR_H-1), (45, 45, 45), -1)
+                cv2.rectangle(bar, (x1, BAR_H-3), (x2-1, BAR_H-1),
+                              (0, 255, 255) if is_active else (60, 60, 60), -1)
+
+                # ─ "×" delete button (ขวาสุดของ tab)
+                dx1, dx2 = x2 - _DEL_BTN_W, x2
+                cv2.putText(bar, "x", (dx1 + 5, BAR_H // 2 + 7),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.60,
+                            (0, 50, 230) if is_active else (0, 35, 160), 2, cv2.LINE_AA)
+                del_btns.append((dx1, dx2, cid))
+
+                # ─ ชื่อ tab (พื้นที่ซ้ายของ "×")
+                label    = cam_names.get(cid, cid)
+                col      = (0, 255, 255) if is_active else (140, 140, 140)
                 (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.44, 1)
-                cv2.putText(bar, label,
-                            (x1 + (x2 - x1 - tw) // 2, (BAR_H + th) // 2 - 2),
+                usable_w = (x2 - _DEL_BTN_W) - x1
+                lx       = x1 + max(12, (usable_w - tw) // 2)
+                cv2.putText(bar, label, (lx, (BAR_H + th) // 2 - 2),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.44, col, 1, cv2.LINE_AA)
                 dot_col = (0, 220, 80) if cid in pushed else (70, 70, 70)
                 cv2.circle(bar, (x1 + 10, BAR_H // 2), 4, dot_col, -1)
                 tabs.append((x1, x2, cid))
-            return bar, tabs
 
+            # ─ "+" add button (ขวาสุดของ bar)
+            ax = frame_w - _ADD_BTN_W
+            cv2.rectangle(bar, (ax+2, 3), (frame_w-3, BAR_H-4), (14, 36, 14), -1)
+            cv2.rectangle(bar, (ax+2, 3), (frame_w-3, BAR_H-4), (35, 80, 35), 1)
+            cv2.putText(bar, "+", (ax + 10, BAR_H // 2 + 7),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.75, (50, 200, 50), 1, cv2.LINE_AA)
+
+            return bar, tabs, del_btns, (ax, frame_w)
+
+        # ─── Overlay: Add Camera form ────────────────────────────────────────
+        def _draw_add_form(img, data: dict, active_field: int):
+            H, W = img.shape[:2]
+            ov = img.copy()
+            cv2.rectangle(ov, (0, 0), (W, H), (0, 0, 0), -1)
+            cv2.addWeighted(ov, 0.55, img, 0.45, 0, img)
+
+            FW, FH = cfg.CAM_ADD_FORM_W, cfg.CAM_ADD_FORM_H
+            fx, fy = (W - FW) // 2, (H - FH) // 2
+            cv2.rectangle(img, (fx+4, fy+4), (fx+FW+4, fy+FH+4), (0, 0, 0), -1)
+            cv2.rectangle(img, (fx, fy), (fx+FW, fy+FH), (20, 20, 20), -1)
+            cv2.rectangle(img, (fx, fy), (fx+FW, fy+FH), (55, 55, 55), 1)
+            cv2.rectangle(img, (fx, fy), (fx+FW, fy+40), (14, 14, 14), -1)
+            cv2.putText(img, "+ Add Camera",
+                        (fx+16, fy+27), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.55, (0, 200, 200), 1, cv2.LINE_AA)
+
+            fields = _FIELDS_IP if data.get("type") == "ip" else _FIELDS_USB
+            for i, (label, fkey) in enumerate(fields):
+                y      = fy + 68 + i * 52
+                is_act = (i == active_field)
+                lc     = (0, 200, 200) if is_act else (100, 100, 100)
+                cv2.putText(img, label, (fx+14, y),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.40, lc, 1, cv2.LINE_AA)
+
+                bx1, by1 = fx + 140, y - 22
+                bx2, by2 = fx + FW - 14, y + 8
+                cv2.rectangle(img, (bx1, by1), (bx2, by2),
+                              (40, 40, 40) if is_act else (18, 18, 18), -1)
+                cv2.rectangle(img, (bx1, by1), (bx2, by2),
+                              (0, 170, 170) if is_act else (42, 42, 42), 1)
+
+                # เคอเซอร์กะพริบ ~2 Hz
+                _cur = "|" if (is_act and int(time.time() * 2) % 2 == 0) else ""
+
+                if fkey == "type":
+                    val  = "USB Webcam (index)" if data.get("type") == "usb" else "IP Camera (RTSP/HTTP)"
+                    vc   = (160, 220, 160) if data.get("type") == "usb" else (160, 160, 220)
+                    hint = "  [Space=toggle]"
+                elif fkey == "url":
+                    raw  = data.get(fkey, "")
+                    val  = raw + _cur
+                    vc   = (180, 220, 180) if raw.startswith("$") else (220, 220, 220)
+                    hint = "  → auto-saved to .env"
+                elif fkey == "flip":
+                    val  = "ON (flip horizontal)" if data.get("flip") else "OFF"
+                    vc   = (200, 200, 100) if data.get("flip") else (150, 150, 150)
+                    hint = "  [Space=toggle]"
+                else:
+                    raw  = data.get(fkey, "")
+                    val  = raw + _cur
+                    vc   = (220, 220, 220)
+                    hint = ""
+
+                # trim ถ้าข้อความยาวเกิน
+                max_px = bx2 - bx1 - 10
+                fs = 0.40
+                (tw, _), _ = cv2.getTextSize(val, cv2.FONT_HERSHEY_SIMPLEX, fs, 1)
+                while tw > max_px and len(val) > 2:
+                    val = "..." + val[4:]
+                    (tw, _), _ = cv2.getTextSize(val, cv2.FONT_HERSHEY_SIMPLEX, fs, 1)
+
+                cv2.putText(img, val, (bx1+6, y-4),
+                            cv2.FONT_HERSHEY_SIMPLEX, fs, vc, 1, cv2.LINE_AA)
+                if hint and is_act:
+                    cv2.putText(img, hint, (bx2+4, y-4),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.30,
+                                (70, 70, 70), 1, cv2.LINE_AA)
+
+            cv2.putText(img,
+                        "Tab/Down=Next  Up=Back  Space=Toggle  Enter=Save  Esc=Cancel",
+                        (fx+14, fy+FH-12),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.31, (65, 65, 65), 1, cv2.LINE_AA)
+
+        # ─── Overlay: Delete confirm ─────────────────────────────────────────
+        def _draw_del_confirm(img, cam_id: str):
+            H, W = img.shape[:2]
+            ov = img.copy()
+            cv2.rectangle(ov, (0, 0), (W, H), (0, 0, 0), -1)
+            cv2.addWeighted(ov, 0.60, img, 0.40, 0, img)
+
+            BW, BH = cfg.CAM_DEL_CONFIRM_W, cfg.CAM_DEL_CONFIRM_H
+            bx, by = (W - BW) // 2, (H - BH) // 2
+            cv2.rectangle(img, (bx+3, by+3), (bx+BW+3, by+BH+3), (0, 0, 0), -1)
+            cv2.rectangle(img, (bx, by), (bx+BW, by+BH), (25, 10, 10), -1)
+            cv2.rectangle(img, (bx, by), (bx+BW, by+BH), (100, 30, 30), 1)
+            cv2.putText(img, "Delete Camera?",
+                        (bx+16, by+36), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.60, (80, 80, 220), 1, cv2.LINE_AA)
+            name = cam_names.get(cam_id, cam_id)
+            cv2.putText(img, f"{cam_id}: {name}",
+                        (bx+16, by+70), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.46, (200, 200, 200), 1, cv2.LINE_AA)
+            cv2.putText(img, "Restart required to apply changes",
+                        (bx+16, by+98), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.37, (120, 100, 50), 1, cv2.LINE_AA)
+            cv2.putText(img, "[Y] / Enter = Confirm    [N] / Esc = Cancel",
+                        (bx+16, by+132), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.41, (160, 160, 160), 1, cv2.LINE_AA)
+
+        # ─── Toast message ───────────────────────────────────────────────────
+        def _draw_toast(img, msg: str):
+            H, W = img.shape[:2]
+            col = (0, 160, 60) if msg.startswith("✓") else (0, 100, 200)
+            (tw, th), _ = cv2.getTextSize(msg, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
+            px, py = 14, 8
+            rx1 = W - tw - px * 2 - 20
+            ry1 = H - th - py * 2 - 10
+            rx2, ry2 = W - 10, H - 10
+            cv2.rectangle(img, (rx1-2, ry1-2), (rx2+2, ry2+2), (0, 0, 0), -1)
+            cv2.rectangle(img, (rx1, ry1), (rx2, ry2), col, -1)
+            cv2.putText(img, msg, (rx1 + px, ry2 - py - 2),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
+
+        # ─── Camera Management Actions ───────────────────────────────────────
+        def _do_save_camera():
+            data = _mgmt["data"]
+            name = data.get("name", "").strip()
+            if not name:
+                _mgmt["field"] = 0
+                return
+            configs = stream_server._load_cam_configs()
+            cam_id  = stream_server._next_cam_id(configs)
+            new_cam: dict = {"id": cam_id, "name": name, "flip": bool(data.get("flip"))}
+            if data.get("type") == "ip":
+                url = data.get("url", "").strip()
+                if url and not url.startswith("$"):
+                    # URL ตรง → auto-save ลง .env แล้วเก็บ reference แทน
+                    env_key = _cam_env_key(cam_id)
+                    _env_set(env_key, url)
+                    os.environ[env_key] = url   # ให้ process ปัจจุบันเห็นด้วย
+                    new_cam["url"] = f"${env_key}"
+                    print(f"[CM] URL saved to .env as {env_key}")
+                else:
+                    new_cam["url"] = url   # ว่าง หรือ $VAR_NAME → เก็บตรง
+            else:
+                try:
+                    new_cam["index"] = int(data.get("index", 0))
+                except ValueError:
+                    new_cam["index"] = 0
+            configs.append(new_cam)
+            stream_server._save_cam_configs(configs)
+            print(f"[CM] เพิ่มกล้อง {cam_id} ({name})")
+            # Live update tab bar immediately
+            cam_ids.append(cam_id)
+            cam_names[cam_id] = name
+            _mgmt["mode"]   = None
+            _mgmt["msg"]    = f"✓ Added {cam_id} ({name}) — press R to activate"
+            _mgmt["msg_ts"] = time.time()
+
+        def _do_refresh_cameras():
+            """Spawn threads for cameras added since startup (press R)"""
+            configs = stream_server._load_cam_configs()
+            configs = [
+                {**c, "url": _resolve_url(c["url"])} if "url" in c else c
+                for c in configs
+            ]
+            running = {t.name for t in threads if t.is_alive()}
+            new_cams = [c for c in configs if f"cam-{c['id']}" not in running]
+            if not new_cams:
+                _mgmt["msg"]    = "All cameras already running"
+                _mgmt["msg_ts"] = time.time()
+                return
+            for cam_cfg in new_cams:
+                t = _threading.Thread(
+                    target=run_camera,
+                    args=(cam_cfg,),
+                    name=f"cam-{cam_cfg['id']}",
+                    daemon=True,
+                )
+                threads.append(t)
+                t.start()
+                print(f"[CM] Started thread for {cam_cfg['id']}")
+            _mgmt["msg"]    = f"Reloaded: {len(new_cams)} new cam(s) started"
+            _mgmt["msg_ts"] = time.time()
+
+        def _do_delete_camera():
+            cam_id = _mgmt.get("del_cam")
+            if not cam_id:
+                return
+            if len(cam_ids) <= 1:
+                _mgmt["mode"]    = None
+                _mgmt["del_cam"] = None
+                _mgmt["msg"]     = "! Cannot delete the last camera"
+                _mgmt["msg_ts"]  = time.time()
+                return
+            configs = stream_server._load_cam_configs()
+            # ลบ env var ถ้ากล้องนี้ใช้ $VAR_NAME
+            deleted = next((c for c in configs if c.get("id") == cam_id), None)
+            if deleted:
+                url = deleted.get("url", "")
+                if isinstance(url, str) and url.startswith("$"):
+                    env_key = url[1:]
+                    _env_del(env_key)
+                    os.environ.pop(env_key, None)
+                    print(f"[CM] Removed {env_key} from .env")
+            new_configs = [c for c in configs if c.get("id") != cam_id]
+            stream_server._save_cam_configs(new_configs)
+            # Live update tab bar
+            if cam_id in cam_ids:
+                cam_ids.remove(cam_id)
+                cam_names.pop(cam_id, None)
+            with _disp_lock:
+                if _sel_cam["id"] == cam_id and cam_ids:
+                    _disp_slot["frame"] = None
+                    _sel_cam["id"]      = cam_ids[0]
+            print(f"[CM] ลบกล้อง {cam_id}")
+            _mgmt["mode"]    = None
+            _mgmt["del_cam"] = None
+            _mgmt["msg"]     = f"✓ Deleted {cam_id} — restart to apply"
+            _mgmt["msg_ts"]  = time.time()
+
+        # ─── Keyboard handlers ───────────────────────────────────────────────
+        _KEY_DOWN    = cfg.KEY_DOWN
+        _KEY_UP      = cfg.KEY_UP
+        _KEY_ENTER   = cfg.KEY_ENTER
+        _KEY_BS      = cfg.KEY_BS
+        _CAPSLOCK_KEY = cfg.KEY_CAPSLOCK
+        _IGNORE_KEYS  = cfg.KEY_IGNORE
+
+        _caps = {"lock": False}   # ─ track CapsLock state เอง
+
+        def _handle_form_key(key: int):
+            data   = _mgmt["data"]
+            fields = _FIELDS_IP if data.get("type") == "ip" else _FIELDS_USB
+            fi     = _mgmt["field"]
+            _, fkey = fields[fi]
+
+            # ── Modifier / special keys ────────────────────────────────────
+            if key == 27:   # ESC → ยกเลิก
+                _mgmt["mode"] = None
+                return
+            if key == _CAPSLOCK_KEY:
+                _caps["lock"] = not _caps["lock"]
+                return
+            if key in _IGNORE_KEYS:
+                return
+            if key in _KEY_DOWN:
+                _mgmt["field"] = (fi + 1) % len(fields)
+                return
+            if key in _KEY_UP:
+                _mgmt["field"] = (fi - 1) % len(fields)
+                return
+            if key in _KEY_ENTER:
+                if fi == len(fields) - 1:
+                    _do_save_camera()
+                else:
+                    _mgmt["field"] = (fi + 1) % len(fields)
+                return
+            if fkey in ("type", "flip"):
+                if key == ord(" "):
+                    if fkey == "type":
+                        data["type"] = "ip" if data.get("type") == "usb" else "usb"
+                    else:
+                        data["flip"] = not data.get("flip", False)
+                return
+            # ── Text fields: name / index / url ───────────────────────────
+            if key in _KEY_BS:
+                data[fkey] = data.get(fkey, "")[:-1]
+            elif 32 <= key < 127:
+                ch = chr(key)
+                # CapsLock: convert lowercase → uppercase (OS บางตัวไม่ apply เอง)
+                if _caps["lock"] and ch.isalpha() and ch.islower():
+                    ch = ch.upper()
+                data[fkey] = data.get(fkey, "") + ch
+
+        def _handle_del_key(key: int):
+            if key in _KEY_ENTER or key == ord("y") or key == ord("Y"):
+                _do_delete_camera()
+            elif key == 27 or key == ord("n") or key == ord("N"):
+                _mgmt["mode"]    = None
+                _mgmt["del_cam"] = None
+
+        # ─── Mouse callback ──────────────────────────────────────────────────
         _sc       = {"x": 1.0, "y": 1.0}
         _tabs_ref = [[]]
 
         def _switch_cam(new_cid: str):
             """สลับกล้อง: clear slot ก่อน ป้องกัน frame เก่าค้างอยู่"""
             with _disp_lock:
-                _disp_slot["frame"] = None   # flush frame เก่าออก
+                _disp_slot["frame"] = None
                 _sel_cam["id"]      = new_cid
             print(f"[DISPLAY] สลับกล้อง → {new_cid} ({cam_names.get(new_cid, new_cid)})")
 
         def _on_mouse(event, x, y, flags, param):
             if event != cv2.EVENT_LBUTTONDOWN:
                 return
+            if _mgmt["mode"] is not None:
+                return   # ignore clicks ขณะ overlay เปิดอยู่
             ox, oy = x / _sc["x"], y / _sc["y"]
-            if oy < BAR_H:
-                for (x1, x2, cid) in _tabs_ref[0]:
-                    if x1 <= ox < x2:
-                        _switch_cam(cid)
-                        break
+            if oy >= BAR_H:
+                return
+            # ตรวจปุ่ม "+"
+            ax1, ax2 = _add_btn_ref[0]
+            if ax1 <= ox <= ax2:
+                _open_add_form()
+                return
+            # ตรวจปุ่ม "×" ของแต่ละ tab
+            for (dx1, dx2, cid) in _del_btns_ref[0]:
+                if dx1 <= ox < dx2:
+                    _open_del_confirm(cid)
+                    return
+            # สลับกล้อง
+            for (tx1, tx2, cid) in _tabs_ref[0]:
+                if tx1 <= ox < tx2:
+                    _switch_cam(cid)
+                    break
 
         cv2.namedWindow(WIN_NAME, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(WIN_NAME, 1280, 760)
+        cv2.resizeWindow(WIN_NAME, cfg.MAIN_WINDOW_W, cfg.MAIN_WINDOW_H)
         cv2.setMouseCallback(WIN_NAME, _on_mouse)
 
         _placeholder = np.zeros((480, 960, 3), dtype=np.uint8)
         cv2.putText(_placeholder, "Waiting for camera...",
                     (280, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.8,
                     (80, 80, 80), 1, cv2.LINE_AA)
-        _last_frame  = None   # frame ล่าสุดจากกล้องปัจจุบัน (single)
-        _prev_active = _sel_cam["id"]   # ใช้ตรวจว่ามีการสลับกล้องหรือเปล่า
+        _last_frame  = None
+        _prev_active = _sel_cam["id"]
 
         def _toggle_fs():
             _fs["on"] = not _fs["on"]
             cv2.setWindowProperty(WIN_NAME, cv2.WND_PROP_FULLSCREEN,
                 cv2.WINDOW_FULLSCREEN if _fs["on"] else cv2.WINDOW_NORMAL)
 
-        _FS_KEYS = frozenset([ord('f'), ord('F'), ord('d'), ord('D'), 3604, 3650])
+        _FS_KEYS = cfg.KEY_FS
 
         while any(t.is_alive() for t in threads):
-            # อ่าน shared state ทั้งหมดใน lock เดียว
             with _disp_lock:
                 frame  = _disp_slot["frame"]
                 frame  = frame.copy() if frame is not None else None
                 active = _sel_cam["id"]
                 pushed = set(_cam_has_pushed)
 
-            # ตรวจว่าสลับกล้อง → clear cache ทันที ป้องกัน frame เก่าค้าง
             if active != _prev_active:
                 _last_frame  = None
                 _prev_active = active
@@ -836,9 +1439,24 @@ if __name__ == "__main__":
                 _last_frame = frame
             content = _last_frame if _last_frame is not None else _placeholder
 
-            bar, tabs = _draw_bar(content.shape[1], active, pushed)
-            _tabs_ref[0] = tabs
+            bar, tabs, del_btns, add_btn = _draw_bar(content.shape[1], active, pushed)
+            _tabs_ref[0]     = tabs
+            _del_btns_ref[0] = del_btns
+            _add_btn_ref[0]  = add_btn
             combined = np.vstack([bar, content])
+
+            # ── วาด overlay ─────────────────────────────────────────────────
+            if _mgmt["mode"] == "add":
+                _draw_add_form(combined, _mgmt["data"], _mgmt["field"])
+            elif _mgmt["mode"] == "del" and _mgmt["del_cam"]:
+                _draw_del_confirm(combined, _mgmt["del_cam"])
+
+            # ── Toast message (หายไปใน 4 วิ) ────────────────────────────────
+            if _mgmt["msg"]:
+                if time.time() - _mgmt["msg_ts"] < 4.0:
+                    _draw_toast(combined, _mgmt["msg"])
+                else:
+                    _mgmt["msg"] = ""
 
             if _fs["on"]:
                 orig_h, orig_w = combined.shape[:2]
@@ -855,11 +1473,17 @@ if __name__ == "__main__":
             key = cv2.waitKeyEx(1)
             if key == -1:
                 pass
+            elif _mgmt["mode"] == "add":
+                _handle_form_key(key)
+            elif _mgmt["mode"] == "del":
+                _handle_del_key(key)
             elif key == ord("q") or key == 27:
                 _stop_event.set()
                 break
             elif key in _FS_KEYS:
                 _toggle_fs()
+            elif key == ord("r") or key == ord("R"):
+                _do_refresh_cameras()
             else:
                 for i, cid in enumerate(cam_ids):
                     if key == ord(str(i + 1)):
@@ -869,3 +1493,72 @@ if __name__ == "__main__":
         for t in threads:
             t.join(timeout=5)
         cv2.destroyAllWindows()
+
+
+# ─── ลงทะเบียน lifecycle callbacks กับ stream_server ────────────────────────
+# ให้ /system/start และ /system/stop ใน stream_server เรียก start/stop ได้
+stream_server.register_lifecycle(start_camera_workers, stop_cameras)
+
+
+if __name__ == "__main__":
+    # ต้องเรียกก่อนทุกอย่าง — set LD_LIBRARY_PATH ให้ชี้ venv's CUDA/cuDNN libs
+    # แล้ว re-exec ตัวเองเพื่อให้ ONNX Runtime + mediapipe ใช้ cuBLAS เดียวกัน
+    _ensure_nvidia_libs()
+
+    _headless_mode = bool(os.environ.get("FACE_HEADLESS") or os.environ.get("SKIP_STREAM_SERVER"))
+    if not _headless_mode:
+        # โหมดปกติ (python main.py): stream server + display loop ครบชุด
+        stream_server.start(cfg.STREAM_PORT)
+        start_cameras()
+    else:
+        # headless mode (spawn จาก stream_server เว็บ):
+        # ไม่เปิด stream_server ซ้ำ, ไม่เปิด OpenCV window
+        # camera workers POST frame/state ไป stream_server (in-memory) แทน
+        import signal as _sig
+        _sig.signal(_sig.SIGTERM, lambda *_: _stop_event.set())
+        start_camera_workers()
+
+        _base = _pl_mod(__file__).parent
+        while not _stop_event.is_set():
+            # reload flag — spawn กล้องใหม่หรือกล้องที่ยังไม่ได้รัน
+            _rf = _base / "cam_reload.flag"
+            if _rf.exists():
+                try: _rf.unlink()
+                except: pass
+                print("[MAIN] cam_reload flag detected — hotloading cameras")
+                start_camera_workers()
+
+            # per-cam start flag — spawn กล้องตัวนั้นใหม่
+            for _sf in list(_base.glob("cam_start_*.flag")):
+                _cid = _sf.stem[len("cam_start_"):]
+                try: _sf.unlink()
+                except: pass
+                print(f"[MAIN] cam_start flag detected: {_cid}")
+                # clear per-cam stop event ก่อน spawn ใหม่
+                _ev = _t.Event()
+                _cam_stop_events[_cid] = _ev
+                import threading as _thr
+                _ct = _thr.Thread(
+                    target=run_camera,
+                    args=(next((c for c in stream_server._load_cam_configs()
+                                if c["id"] == _cid), {"id": _cid, "name": _cid}), _ev),
+                    name=f"cam-{_cid}", daemon=True,
+                )
+                # ลบ dead threads ทั้งหมดออกก่อน (รวม thread เก่าของกล้องนี้)
+                _camera_threads[:] = [t for t in _camera_threads if t.is_alive()]
+                _camera_threads.append(_ct)
+                _ct.start()
+
+            # ถ้ากล้องเคยถูก spawn แล้วและทุกตัวหยุดแล้ว → ออกเอง (graceful exit code 0)
+            if _camera_threads:
+                _camera_threads[:] = [t for t in _camera_threads if t.is_alive()]
+                if not _camera_threads:
+                    print("[MAIN] กล้องทุกตัวหยุดแล้ว — graceful exit")
+                    break
+
+            _stop_event.wait(timeout=0.5)
+
+        # รอ worker threads ให้ save_snapshots() เสร็จก่อน process ออก
+        for _t in list(_camera_threads):
+            if _t.is_alive():
+                _t.join(timeout=8)
