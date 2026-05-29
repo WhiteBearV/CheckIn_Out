@@ -795,3 +795,261 @@
 ════════════════════════════════════════════════════════════════════════
 
 ════════════════════════════════════════════════════════════════════════
+  รายงานการปฏิบัติงานฝึกประสบการณ์วิชาชีพ
+  วันที่  : พฤหัสบดีที่ 28 พฤษภาคม 2569
+  สัปดาห์ : สัปดาห์ที่ 11
+  โปรเจกต์: Glorytun/OMR Channel Bonding Router
+════════════════════════════════════════════════════════════════════════
+
+■ งานที่ดำเนินการในวันนี้
+────────────────────────────────────────────────────────────────────────
+
+1. Pair Pi 4 กับ OMR Server ผ่าน Web UI + แก้ Bug Typo IP (ช่วงเช้า)
+   ─────────────────────────────────────────────────────────────────
+   ต่อเนื่องจากวานที่ flash OMR ลง Pi แล้ว — วันนี้เริ่มด้วยการทำ
+   Pairing ระหว่าง Pi กับ OMR server เพื่อให้ Pi รับ config (key,
+   VPN backend) จาก server ได้
+
+   เข้า Web UI Pi ที่ https://192.168.120.1 (LAN range OMR เปลี่ยน
+   จาก 192.168.100.x → 192.168.120.x) → System → OpenMPTCProuter →
+   Settings → VPS tab → กรอก IP 125.25.38.138, user admin, password,
+   port 65500 → Save & Apply
+
+   หลัง save เปิด Network Overview พบ error ครบชุด:
+     - ShadowSocks Rust is not running (empty key)
+     - VPN is not running
+     - Can't get public IP from ShadowSocks Rust
+     - Can't contact Server Admin Script (No token yet available)
+
+   Diagnose ด้วย uci show:
+     openmptcprouter.vps.ip=' 125.25.38.138'   ← มี space นำหน้า!
+     openmptcprouter.vps.admin_error='1'
+     openmptcprouter.vps.token_error='1'
+
+   ดู logread เพิ่ม → shadowsocks-rust crash loop:
+     grep: 125.25.38.138": No such file or directory
+     Instance shadowsocks-rust::ss_redir.hi1 in a crash loop 6 crashes
+
+   = ตอนกรอก IP ใน form เผลอใส่ space ก่อนเลข → OMR เก็บ string
+     ทั้ง space → script parse พัง
+
+   แก้ด้วย uci ตรง ๆ:
+     uci set openmptcprouter.vps.ip='125.25.38.138'
+     uci set openmptcprouter.vps.admin_error='0'
+     uci set openmptcprouter.vps.token_error='0'
+     uci commit openmptcprouter
+     /etc/init.d/openmptcprouter-vps restart
+
+   ผล: log omr-admin บน server เห็น Pi ทั้ง 2 WAN GET /status +
+   /clienthost 200 OK ทุก 5 วินาที = pairing สำเร็จในระดับ admin API ✅
+
+2. Diagnose Proxy Mismatch (Pi=ss-rust vs Server=ss-go)
+   ─────────────────────────────────────────────────────────────────
+   หลังแก้ space แล้ว Network Overview ยังขึ้น "ShadowSocks empty key +
+   VPN not running" → ต้อง diagnose ลึกขึ้น
+
+   สำรวจ services บน server (Debian):
+     systemctl list-units → shadowsocks-go.service     (RUNNING)
+                         → shadowsocks-libev-manager   (RUNNING)
+                         → glorytun-udp@tun0           (RUNNING)
+                         → glorytun-tcp@tun0           (RUNNING)
+
+   = Server เปิด shadowsocks-go ไม่ใช่ shadowsocks-rust → Pi default
+     rust เลย key ไม่ match → ฝั่ง Pi crash loop
+
+   Root cause ระบุได้แล้ว แต่ user ขอเปลี่ยนลำดับงาน — setup reverse
+   SSH tunnel ก่อนเพื่อให้เข้า Pi Web UI จาก server ได้สะดวกระหว่าง
+   debug ต่อ → proxy mismatch เลื่อนไปแก้วันพรุ่งนี้
+
+3. Rewrite Reverse SSH Tunnel เป็น procd-based + Auto-Start on Boot
+   ─────────────────────────────────────────────────────────────────
+   Pi มี script /root/reverse-tunnel.sh อยู่แล้ว (ssh -R 9090:localhost:80
+   จาก Pi → server port 65022) แต่ init script เดิมไม่ auto-start
+   หลัง reboot
+
+   ตรวจ init script เดิม:
+     #!/bin/sh /etc/rc.common
+     START=99 / STOP=10
+     start() { sleep 20; /root/reverse-tunnel.sh & }
+     stop()  { killall ssh 2>/dev/null }   ← อันตราย! ฆ่า ssh ทุก process
+
+   ปัญหา:
+     - ไม่ใช้ procd → ไม่มี respawn เมื่อ ssh ตายกลางทาง
+     - stop() ใช้ killall ssh → กระทบทุก session รวมถึงของผู้ใช้
+     - มี duplicate processes 2 ตัวค้างจากการรัน script ซ้ำ
+
+   Rewrite เป็น procd-based:
+     USE_PROCD=1
+     start_service() → procd_open_instance
+       command: /usr/bin/ssh
+         -i /root/.ssh/id_ed25519
+         -R 9090:localhost:80 -p 65022
+         -o ServerAliveInterval=15
+         -o ServerAliveCountMax=3
+         -o ExitOnForwardFailure=yes
+         -o StrictHostKeyChecking=no
+         -o BatchMode=yes
+         -N vpnserver@125.25.38.138
+       procd_set_param respawn 10 5 0
+     procd_close_instance
+
+   chmod +x → enable → restart
+
+   ผล:
+     - procd-managed: respawn 10s threshold, 5s delay, ไม่จำกัด retry
+     - ExitOnForwardFailure=yes → ssh exit ทันทีเมื่อ bind port พัง
+       → procd เริ่มใหม่อัตโนมัติ
+     - rc.d symlinks: S99reverse-tunnel + K10reverse-tunnel → auto-start
+       on boot ✅
+     - ทดสอบ kill -9 process → procd respawn ภายใน 5 วินาที ✅
+
+4. Diagnose Zombie sshd-session บน Server หลัง Pi Reboot
+   ─────────────────────────────────────────────────────────────────
+   User ถอด-เสียบ Pi เพื่อทดสอบ resilience → รอ 10+ นาที server ยัง
+   เปิด localhost:9090 ไม่ได้
+
+   Pi side log:
+     ssh[xxxx]: Remote TCP forward request failed (port 9090 -> localhost:80)
+   = ssh ต่อ server ได้แต่ server ปฏิเสธ bind port 9090
+     → ExitOnForwardFailure=yes → exit → procd respawn → fail loop
+
+   Server side ตรวจ:
+     sudo lsof -i :9090
+     sshd-session 2960097 vpnserver  LISTEN 127.0.0.1:9090
+     sshd-session 2960097 vpnserver  CLOSE_WAIT (16 connections!)
+
+   = sshd-session เก่า (จาก tunnel รอบก่อน reboot Pi) ยึด port 9090
+     ค้าง + CLOSE_WAIT 16 ตัวจาก Firefox ที่เปิด localhost:9090
+
+   แก้: kill pid 2960097 → Pi procd respawn ภายใน 10 วินาที →
+   bind 9090 สำเร็จ ✅
+
+   แนะนำป้องกัน zombie กลับมา — เพิ่ม sshd config บน server:
+     sudo tee /etc/ssh/sshd_config.d/timeout.conf << EOF
+     ClientAliveInterval 30
+     ClientAliveCountMax 3
+     TCPKeepAlive yes
+     EOF
+     sudo systemctl reload ssh
+
+   → ภายใน ~90s sshd detect client หาย → ปิด session อัตโนมัติ
+   → port 9090 ว่าง → Pi reconnect ได้ทันที
+   (user รับทราบ แต่ยังไม่ได้ apply วันนี้)
+
+5. สร้าง Pi OMR Backup สำหรับ Disaster Recovery (ช่วงบ่าย)
+   ─────────────────────────────────────────────────────────────────
+   หลัง tunnel ใช้ได้แล้ว user ขอ backup Pi แบบครบทั้งระบบ — restore
+   แล้วต้องใช้งานได้เลยไม่ต้องตั้งเพิ่ม
+
+   เพิ่ม custom paths เข้า /etc/sysupgrade.conf:
+     /root/reverse-tunnel.sh
+     /root/.ssh/
+     /root/cake-autorate/
+     /etc/init.d/reverse-tunnel
+     /etc/rc.d/S99reverse-tunnel
+     /etc/rc.d/K10reverse-tunnel
+
+   รัน backup:
+     sysupgrade -b /tmp/pi-omr-backup-20260528-1511.tar.gz
+
+   Backup ครอบคลุม (89KB, 281 entries):
+     - /etc/config/* — UCI configs ทั้งหมด (openmptcprouter, network,
+       firewall, dhcp, glorytun, shadowsocks-*, mlvpn, sqm, wireless)
+     - /etc/dropbear/*_host_key — SSH host identity
+     - /etc/passwd, /etc/shadow — users + root password
+     - /etc/init.d/reverse-tunnel + /etc/rc.d/S99reverse-tunnel
+     - /root/.ssh/id_ed25519 + .pub + known_hosts
+     - /root/reverse-tunnel.sh, /root/cake-autorate/*
+     - /etc/sysupgrade.conf
+
+   scp -O กลับ laptop (ใช้ -O เพราะ OpenWRT dropbear ไม่มี sftp-server):
+     ~/glorytun-debug/backups/pi-omr-backup-20260528-1511.tar.gz
+     sha256: dcc6c3c3eec3469cf5369a6d7e5f81c7430a3d99f63d29b042f8560e0fa4f918
+
+   วิธี restore:
+     บน Pi (หลัง flash OMR firmware เดิม):
+       sysupgrade -r /tmp/pi-omr-backup-20260528-1511.tar.gz && reboot
+     หรือผ่าน LuCI: System → Backup/Flash → Restore backup → reboot
+   ข้อจำกัด: ใช้ได้เฉพาะ OMR firmware v0.63-6.12 เดิม — ถ้าซื้อ Pi ใหม่
+     ต้อง flash factory image ก่อน (~/glorytun-debug/omr-pi/omr-rpi4-factory.img.gz)
+
+■ สรุปไฟล์ที่สร้าง / แก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  สร้างใหม่ (บน Pi):
+    /etc/init.d/reverse-tunnel (rewrite)
+      — procd-based: ExitOnForwardFailure + respawn 10s/5s/0
+    /etc/rc.d/S99reverse-tunnel, K10reverse-tunnel
+      — symlinks auto-start on boot
+    /etc/sysupgrade.conf
+      — custom paths สำหรับ backup (reverse-tunnel, .ssh, cake-autorate)
+    /tmp/pi-omr-backup-20260528-1511.tar.gz (Pi → laptop)
+
+  สร้างใหม่ (บน laptop):
+    ~/glorytun-debug/backups/pi-omr-backup-20260528-1511.tar.gz
+      — Pi OMR full backup 89KB, 281 entries พร้อม sha256
+
+  สถานะ config สิ้นสุดวันนี้:
+    Pi OMR pairing กับ server          : ✅ admin API 200 ทั้ง 2 WAN
+    Pi WAN1 (eth1)                     : ✅ 192.168.5.2 ได้ DHCP
+    Pi WAN2 (eth2)                     : ✅ 192.168.1.7 ได้ DHCP
+    ShadowSocks key                    : ⚠️ proxy mismatch (Pi=rust,
+                                          Server=go) — เลื่อนพรุ่งนี้
+    VPN backend (glorytun-udp@tun0)    : ⚠️ server run แต่ Pi ยัง
+                                          ไม่ activate
+    Reverse SSH tunnel (Pi→Server:9090): ✅ procd-managed, auto-start
+                                          on boot
+    Pi LuCI via server                 : ✅ http://localhost:9090
+    sshd ClientAliveInterval บน server : ⏳ แนะนำแล้ว ยังไม่ apply
+    Pi OMR full backup                 : ✅ ~/glorytun-debug/backups/
+
+■ เทคโนโลยีที่ใช้
+────────────────────────────────────────────────────────────────────────
+
+  - OpenMPTCProuter (OMR) Web UI  — pairing Pi กับ OMR server
+  - uci (OpenWrt UCI)             — แก้ VPS IP typo + config network
+  - OpenSSH reverse tunnel (-R)   — forward port 9090 Pi→Server
+  - procd (OpenWrt init system)   — จัดการ service + respawn อัตโนมัติ
+  - sysupgrade                    — built-in OMR backup/restore tool
+  - scp -O                        — legacy SCP protocol สำหรับ OpenWRT
+                                    dropbear (ไม่มี sftp-server)
+  - lsof / kill                   — diagnose + ล้าง zombie sshd-session
+  - bash                          — hook script, backup automation
+
+■ ปัญหาที่พบและแนวทางแก้ไข
+────────────────────────────────────────────────────────────────────────
+
+  ปัญหา : Typo space ใน VPS IP form (' 125.25.38.138') ทำให้
+           shadowsocks-rust crash loop + admin token fetch ล้มเหลว
+           ทั้งที่ network reach ได้ปกติ
+  วิเคราะห์: OMR เก็บ string ทั้ง space → script parse path พัง
+  แก้ไข : uci set openmptcprouter.vps.ip='125.25.38.138' (ไม่มี space)
+            + uci commit + restart openmptcprouter-vps service
+
+  ปัญหา : Proxy mismatch — Pi default ใช้ shadowsocks-rust แต่ server
+           เปิด shadowsocks-go → key ไม่ match → ฝั่ง Pi crash loop
+  วิเคราะห์: OMR factory image ตั้ง ss-rust เป็น default แต่ server
+             ติดตั้งมาพร้อม ss-go → ต้องตั้งให้ตรงกัน
+  แก้ไข : ยังไม่แก้วันนี้ — แผนพรุ่งนี้เข้า Web UI ตั้ง Proxy tab
+            ให้ Pi ใช้ ss-go ให้ตรงกับ server
+
+  ปัญหา : Legacy init script ใช้ killall ssh ใน stop() กระทบ
+           ssh session อื่น ๆ ทั้งหมด รวมถึง session ที่ใช้งานอยู่
+  วิเคราะห์: ไม่มี scope จำกัด — ฆ่า process ssh ทุกตัวบนระบบ
+  แก้ไข : เปลี่ยนเป็น procd-based ให้ procd จัดการ kill เฉพาะ
+            instance ของ service ไม่กระทบ session อื่น
+
+  ปัญหา : Zombie sshd-session บน server ยึด port 9090 ค้าง 10+ นาที
+           หลัง Pi reboot เพราะ sshd ไม่ detect client disconnect
+  วิเคราะห์: ไม่มี ClientAliveInterval → sshd ไม่รู้ว่า client หาย
+             → session ค้าง → port ว่างไม่ได้
+  แก้ไข : kill PID zombie สำหรับรอบนี้ + แนะนำเพิ่ม
+            ClientAliveInterval=30 / ClientAliveCountMax=3 ใน
+            /etc/ssh/sshd_config.d/timeout.conf บน server
+
+  ปัญหา : scp ไปยัง OpenWRT Pi ใช้ SFTP protocol แต่ dropbear
+           ไม่มี sftp-server → transfer ล้มเหลว
+  วิเคราะห์: scp ใหม่ default เป็น SFTP แต่ dropbear ไม่รองรับ
+  แก้ไข : ใช้ flag scp -O บังคับ legacy SCP protocol แทน
+
+════════════════════════════════════════════════════════════════════════
