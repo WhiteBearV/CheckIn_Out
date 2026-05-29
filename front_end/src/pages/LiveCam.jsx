@@ -6,7 +6,8 @@ import { useAuth } from '../context/AuthContext'
 import { maskPid } from '../utils/pid'
 import ConfirmModal from '../components/ConfirmModal'
 
-const STREAM_BASE = import.meta.env.DEV ? 'http://localhost:8001' : ''
+// dev ใช้พอร์ตคนละชุดกับ Jetson (8011 แทน 8001) กัน VS Code port-forward จาก Jetson ชนกัน
+const STREAM_BASE = import.meta.env.DEV ? 'http://localhost:8011' : ''
 
 // ─── Fetchers ──────────────────────────────────────────────────────────────────
 
@@ -105,6 +106,18 @@ async function deleteCamera(camId) {
   if (!r.ok) throw new Error(`HTTP ${r.status}`)
   return r.json()
 }
+
+// เปลี่ยนเฉพาะโหมดกล้อง (faceatten/detect/cctv) — endpoint เฉพาะ ไม่แตะ url/flip
+async function setCameraMode(camId, mode) {
+  const r = await authFetch(`${STREAM_BASE}/cameras/config/${encodeURIComponent(camId)}/mode`, {
+    method: 'POST', body: { mode },
+  })
+  if (!r.ok) { const m = await r.text().catch(() => ''); throw new Error(m || `HTTP ${r.status}`) }
+  return r.json()
+}
+
+// ป้ายกำกับโหมด (ใช้ทั้งฟอร์ม + badge บนการ์ด)
+const CAM_MODE_LABELS = { faceatten: 'Face Atten', detect: 'ตรวจจับ', cctv: 'CCTV' }
 
 // ─── CamStream — snapshot polling แทน MJPEG stream ───────────────────────────
 // fetch /snapshot ทุก 120ms (~8fps) — ไม่มีปัญหา long-lived connection hang
@@ -683,7 +696,7 @@ function CameraManager({ cameras, onReload, enabledCamIds, onEnabledChange, syst
   const [open, setOpen]         = useState(false)
   const [msg,  setMsg]          = useState('')
   const [deleteFor, setDeleteFor] = useState(null)
-  const [form, setForm]         = useState({ name: '', cam_type: 'usb', url: '', index: '0', flip: false })
+  const [form, setForm]         = useState({ name: '', cam_type: 'usb', url: '', index: '0', flip: false, mode: 'faceatten' })
 
   const showMsg = (text, ms = 3000) => { setMsg(text); setTimeout(() => setMsg(''), ms) }
   const showErr = (text) => showMsg(`✗ ${text}`, 6000)   // error แสดงนานกว่า — ผู้ใช้ต้องอ่าน
@@ -705,11 +718,12 @@ function CameraManager({ cameras, onReload, enabledCamIds, onEnabledChange, syst
       url:      form.cam_type === 'ip' ? form.url : '',
       index:    form.cam_type === 'usb' ? Number(form.index) : 0,
       flip:     form.flip,
+      mode:     form.mode,
     }),
     onSuccess: () => {
       showMsg('✓ เพิ่มกล้องแล้ว — restart ระบบเพื่อให้มีผล')
       qc.invalidateQueries({ queryKey: ['cameras-config'] })
-      setForm({ name: '', cam_type: 'usb', url: '', index: '0', flip: false })
+      setForm({ name: '', cam_type: 'usb', url: '', index: '0', flip: false, mode: 'faceatten' })
       setOpen(false)
     },
     onError: (e) => showErr(e.message),
@@ -734,6 +748,24 @@ function CameraManager({ cameras, onReload, enabledCamIds, onEnabledChange, syst
     mutationFn: (id) => deleteCamera(id),
     onSuccess: (_, id) => {
       showMsg(`✓ ลบ ${id} แล้ว — restart ระบบเพื่อให้มีผล`)
+      qc.invalidateQueries({ queryKey: ['cameras-config'] })
+    },
+    onError: (e) => showErr(e.message),
+  })
+
+  // สลับโหมดกล้อง — เปลี่ยน mode แล้ว restart worker กล้องนั้น (ถ้าระบบรันอยู่) เพื่อให้มีผลทันที
+  const modeMut = useMutation({
+    mutationFn: async ({ cam, mode }) => {
+      await setCameraMode(cam.id, mode)
+      if (systemRunning) {
+        // restart แบบ atomic — main หยุด worker เก่า + spawn ใหม่ใน watcher เดียว
+        // (ไม่ stop แยกก่อน เพื่อเลี่ยงช่วง "ไม่มีกล้อง" ที่ทำให้ worker ชน/process ดับ)
+        await startSingleCamera(cam.id)
+      }
+    },
+    onSuccess: (_, { mode }) => {
+      showMsg(`✓ เปลี่ยนโหมดเป็น ${CAM_MODE_LABELS[mode] || mode}` +
+              (systemRunning ? ' — restart กล้องแล้ว' : ' — มีผลเมื่อ START'))
       qc.invalidateQueries({ queryKey: ['cameras-config'] })
     },
     onError: (e) => showErr(e.message),
@@ -789,66 +821,92 @@ function CameraManager({ cameras, onReload, enabledCamIds, onEnabledChange, syst
             onEnabledChange?.(next.length === all.length ? null : next)
           }
           return (
-          <div key={cam.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {/* checkbox (เฉพาะตอนไม่รัน) */}
-            {!systemRunning && (
-              <input type="checkbox" checked={isEnabled} onChange={toggleCam}
-                title={isEnabled ? 'ปิดกล้องนี้ตอน START' : 'เปิดกล้องนี้ตอน START'}
-                style={{ cursor: 'pointer', accentColor: 'var(--c-accent)', width: 15, height: 15, flexShrink: 0 }} />
-            )}
-            {/* status dot (ตอนรันอยู่) */}
-            {systemRunning && (
-              <span style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-                             background: isCamAlive ? '#22c55e' : '#4b5563',
-                             boxShadow: isCamAlive ? '0 0 4px #22c55e88' : 'none' }} />
-            )}
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 600, flex: 1,
-                           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                           color: isEnabled ? 'var(--c-text-2)' : 'var(--c-text-4)',
-                           textDecoration: (!systemRunning && !isEnabled) ? 'line-through' : 'none' }}>
-              {cam.name || cam.id}
-            </span>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--c-text-4)', flexShrink: 0 }}>
-              {(cam.cam_type === 'ip' || cam.url) ? 'IP Cam' : `USB:${cam.index ?? 0}`}
-            </span>
-            {/* ปุ่ม stop (ตอนรันและกล้อง active) */}
-            {systemRunning && isAdmin && isCamAlive && (
-              <button onClick={() => stopCamMut.mutate(cam.id)} disabled={stopCamMut.isPending}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#eab308',
-                         padding: '3px 5px', opacity: 0.8, lineHeight: 1, flexShrink: 0 }}
-                onMouseEnter={e => e.currentTarget.style.opacity = '1'}
-                onMouseLeave={e => e.currentTarget.style.opacity = '0.8'}
-                title="หยุดกล้องนี้">
-                <svg viewBox="0 0 24 24" style={{ width: 14, height: 14, fill: 'none', stroke: 'currentColor', strokeWidth: 2 }}>
-                  <rect x="5" y="5" width="14" height="14" rx="1"/>
+          <div key={cam.id} style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '6px 0', borderBottom: '1px solid var(--c-border-s)' }}>
+            {/* ── บรรทัด 1: checkbox/dot + ชื่อกล้อง ── */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {!systemRunning && (
+                <input type="checkbox" checked={isEnabled} onChange={toggleCam}
+                  title={isEnabled ? 'ปิดกล้องนี้ตอน START' : 'เปิดกล้องนี้ตอน START'}
+                  style={{ cursor: 'pointer', accentColor: 'var(--c-accent)', width: 15, height: 15, flexShrink: 0 }} />
+              )}
+              {systemRunning && (
+                <span style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+                               background: isCamAlive ? '#22c55e' : '#4b5563',
+                               boxShadow: isCamAlive ? '0 0 4px #22c55e88' : 'none' }} />
+              )}
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 600, flex: 1,
+                             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                             color: isEnabled ? 'var(--c-text-2)' : 'var(--c-text-4)',
+                             textDecoration: (!systemRunning && !isEnabled) ? 'line-through' : 'none' }}>
+                {cam.name || cam.id}
+              </span>
+            </div>
+            {/* ── บรรทัด 2: ประเภท + โหมด + ปุ่มหยุด/เปิด + ปุ่มลบ (เยื้องใต้ชื่อ) ── */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 20 }}>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--c-text-4)', flexShrink: 0 }}>
+                {(cam.cam_type === 'ip' || cam.url) ? 'IP Cam' : `USB:${cam.index ?? 0}`}
+              </span>
+              {/* โหมดกล้อง — admin สลับได้ (เปลี่ยนแล้ว restart กล้องนั้น), viewer เห็น badge */}
+              {isAdmin ? (
+                <select value={cam.mode || 'faceatten'} disabled={modeMut.isPending}
+                  onClick={e => e.stopPropagation()}
+                  onChange={e => modeMut.mutate({ cam, mode: e.target.value })}
+                  title="เปลี่ยนโหมดกล้อง"
+                  style={{ fontFamily: 'var(--font-mono)', fontSize: 10, padding: '2px 4px', borderRadius: 4,
+                           background: 'var(--c-bg-input)', border: '1px solid var(--c-border)',
+                           color: 'var(--c-text-3)', cursor: 'pointer', flexShrink: 0 }}>
+                  <option value="faceatten">Face</option>
+                  <option value="detect">Detect</option>
+                  <option value="cctv">CCTV</option>
+                </select>
+              ) : (
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, padding: '2px 6px', borderRadius: 4,
+                               background: 'var(--c-bg-input)', border: '1px solid var(--c-border)',
+                               color: 'var(--c-text-4)', flexShrink: 0 }}>
+                  {CAM_MODE_LABELS[cam.mode || 'faceatten']}
+                </span>
+              )}
+              {/* ปุ่ม stop (ตอนรันและกล้อง active) */}
+              {systemRunning && isAdmin && isCamAlive && (
+                <button onClick={() => stopCamMut.mutate(cam.id)} disabled={stopCamMut.isPending}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#eab308',
+                           padding: '3px 5px', opacity: 0.8, lineHeight: 1, flexShrink: 0 }}
+                  onMouseEnter={e => e.currentTarget.style.opacity = '1'}
+                  onMouseLeave={e => e.currentTarget.style.opacity = '0.8'}
+                  title="หยุดกล้องนี้">
+                  <svg viewBox="0 0 24 24" style={{ width: 14, height: 14, fill: 'none', stroke: 'currentColor', strokeWidth: 2 }}>
+                    <rect x="5" y="5" width="14" height="14" rx="1"/>
+                  </svg>
+                </button>
+              )}
+              {/* ปุ่ม restart (ตอนรันแต่กล้องหยุดอยู่) */}
+              {systemRunning && isAdmin && !isCamAlive && (
+                <button onClick={() => startCamMut.mutate(cam.id)} disabled={startCamMut.isPending}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#22c55e',
+                           padding: '3px 5px', opacity: 0.8, lineHeight: 1, flexShrink: 0 }}
+                  onMouseEnter={e => e.currentTarget.style.opacity = '1'}
+                  onMouseLeave={e => e.currentTarget.style.opacity = '0.8'}
+                  title="เริ่มกล้องนี้ใหม่">
+                  <svg viewBox="0 0 24 24" style={{ width: 14, height: 14, fill: 'none', stroke: 'currentColor', strokeWidth: 2 }}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 3l14 9-14 9V3z"/>
+                  </svg>
+                </button>
+              )}
+              {/* spacer — ดันปุ่มลบไปชิดขวา ไม่ให้ล้นกรอบ */}
+              <span style={{ flex: 1 }} />
+              <button
+                onClick={() => setDeleteFor(cam)}
+                disabled={delMut.isPending || !isAdmin}
+                style={{ background: 'none', border: 'none', cursor: isAdmin ? 'pointer' : 'not-allowed', color: '#ef4444', padding: '2px 4px', opacity: isAdmin ? 0.6 : 0.25, lineHeight: 1, flexShrink: 0 }}
+                onMouseEnter={e => { if (isAdmin) e.currentTarget.style.opacity = '1' }}
+                onMouseLeave={e => { if (isAdmin) e.currentTarget.style.opacity = '0.6' }}
+                title={isAdmin ? "ลบกล้อง" : "admin เท่านั้น"}
+              >
+                <svg viewBox="0 0 24 24" style={{ width: 12, height: 12, fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round' }}>
+                  <path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22M8 7V5a2 2 0 012-2h4a2 2 0 012 2v2"/>
                 </svg>
               </button>
-            )}
-            {/* ปุ่ม restart (ตอนรันแต่กล้องหยุดอยู่) */}
-            {systemRunning && isAdmin && !isCamAlive && (
-              <button onClick={() => startCamMut.mutate(cam.id)} disabled={startCamMut.isPending}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#22c55e',
-                         padding: '3px 5px', opacity: 0.8, lineHeight: 1, flexShrink: 0 }}
-                onMouseEnter={e => e.currentTarget.style.opacity = '1'}
-                onMouseLeave={e => e.currentTarget.style.opacity = '0.8'}
-                title="เริ่มกล้องนี้ใหม่">
-                <svg viewBox="0 0 24 24" style={{ width: 14, height: 14, fill: 'none', stroke: 'currentColor', strokeWidth: 2 }}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 3l14 9-14 9V3z"/>
-                </svg>
-              </button>
-            )}
-            <button
-              onClick={() => setDeleteFor(cam)}
-              disabled={delMut.isPending || !isAdmin}
-              style={{ background: 'none', border: 'none', cursor: isAdmin ? 'pointer' : 'not-allowed', color: '#ef4444', padding: '2px 4px', opacity: isAdmin ? 0.6 : 0.25, lineHeight: 1 }}
-              onMouseEnter={e => { if (isAdmin) e.currentTarget.style.opacity = '1' }}
-              onMouseLeave={e => { if (isAdmin) e.currentTarget.style.opacity = '0.6' }}
-              title={isAdmin ? "ลบกล้อง" : "admin เท่านั้น"}
-            >
-              <svg viewBox="0 0 24 24" style={{ width: 12, height: 12, fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round' }}>
-                <path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22M8 7V5a2 2 0 012-2h4a2 2 0 012 2v2"/>
-              </svg>
-            </button>
+            </div>
           </div>
           )
         })}
@@ -931,6 +989,15 @@ function CameraManager({ cameras, onReload, enabledCamIds, onEnabledChange, syst
               style={{ width: 16, height: 16, accentColor: 'var(--c-accent)', cursor: 'pointer' }} />
             Flip กล้อง
           </label>
+          <div>
+            <label style={{ ...lbl, fontSize: 16 }}>โหมดกล้อง</label>
+            <select style={{ ...inp, fontSize: 19, padding: '10px 12px', cursor: 'pointer' }}
+              value={form.mode} onChange={e => setForm(f => ({ ...f, mode: e.target.value }))}>
+              <option value="faceatten">Face Attendance — ลงเวลา (oval + liveness)</option>
+              <option value="detect">ตรวจจับเฉยๆ — แสดงข้อมูล ไม่ลงเวลา</option>
+              <option value="cctv">CCTV — ดูภาพอย่างเดียว ไม่ตรวจจับ</option>
+            </select>
+          </div>
           <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 4 }}>
             <button onClick={() => setOpen(false)} className="btn btn-ghost"
               style={{ fontSize: 19 }}>ยกเลิก</button>
@@ -1038,6 +1105,12 @@ function PersonPanelCard({ camId, camName, name, person, onFaceClick }) {
       </div>
       <div className="info">
         <div className="pname">{displayName}</div>
+        {(person.posname_th || person.organize_th) && (
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--c-text-4)',
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {[person.posname_th, person.organize_th].filter(Boolean).join(' · ')}
+          </div>
+        )}
         <div className="pmeta">
           <div style={{ color: st.color }}>• {st.label}</div>
           <div>📷 {camName || camId}</div>

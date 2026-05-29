@@ -8,7 +8,8 @@ import { maskPid } from '../utils/pid'
 
 const REFRESH_INTERVAL  = 30_000
 const SCAN_TIMEOUT_SEC  = 10
-const STREAM_BASE = import.meta.env.DEV ? 'http://localhost:8001' : ''
+// dev ใช้พอร์ตคนละชุดกับ Jetson (8011 แทน 8001) กัน VS Code port-forward จาก Jetson ชนกัน
+const STREAM_BASE = import.meta.env.DEV ? 'http://localhost:8011' : ''
 
 // ─── localStorage persistence สำหรับ "บุคคลที่พบวันนี้" ────────────────────
 // เก็บรายชื่อที่เจอวันนี้ไว้ แม้กด Stop ก็ยังแสดงต่อ — จะล้างเมื่อเปลี่ยนวันเท่านั้น

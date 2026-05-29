@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently --kill-others-on-fail -n stream,api,vite -c cyan,magenta,green \"cd .. && exec python stream_server.py\" \"cd .. && exec venv/bin/uvicorn api:app --host 0.0.0.0 --port 8000\" \"vite\"",
+    "dev": "concurrently --kill-others-on-fail -n stream,api,vite -c cyan,magenta,green \"cd .. && STREAM_PORT=8011 API_PORT=8010 exec python stream_server.py\" \"cd .. && API_PORT=8010 exec venv/bin/uvicorn api:app --host 0.0.0.0 --port 8010\" \"vite\"",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview"

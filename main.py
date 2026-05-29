@@ -368,52 +368,66 @@ def run_camera(cam_cfg: dict, cam_stop_event=None):
     camera_name = cam_cfg["name"]
     cam_flip    = cam_cfg.get("flip", cfg.CAMERA_FLIP)
 
+    # ─── โหมดกล้อง: faceatten | detect | cctv ───
+    cam_mode = cam_cfg.get("mode", cfg.DEFAULT_CAMERA_MODE)
+    if cam_mode not in cfg.CAMERA_MODES:
+        cam_mode = cfg.DEFAULT_CAMERA_MODE
+    _is_cctv     = (cam_mode == "cctv")        # ไม่ inference เลย
+    _do_identify = (cam_mode != "cctv")        # detect+faceatten ต้องระบุตัวตน
+    _do_oval     = (cam_mode == "faceatten")   # เฉพาะ faceatten มี oval guide
+    _do_liveness = (cam_mode == "faceatten")   # เฉพาะ faceatten ตรวจ liveness + บันทึก
+
     # FACE_HEADLESS=1: spawn จาก stream_server → เขียน frame/state ลงไฟล์แทน push buffer
     _HEADLESS      = os.environ.get('FACE_HEADLESS', '').lower() in ('1', 'true', 'yes')
     _ALWAYS_ACTIVE = os.environ.get('FACE_ALWAYS_ACTIVE', '').lower() in ('1', 'true', 'yes')
     if _HEADLESS:
         print(f'[{cam_id}] Headless mode — POST → {_STREAM_BASE}/push/* (in-memory)', flush=True)
 
-    # ─── โหลด face encodings (ArcFace 512d) ───
-    if not os.path.exists(cfg.ENCODINGS_FILE):
-        raise FileNotFoundError(
-            f"ไม่พบ {cfg.ENCODINGS_FILE}\n"
-            f"รัน encode_faces_arcface.py ก่อน"
-        )
-    with open(cfg.ENCODINGS_FILE, "rb") as f:
-        data = pickle.load(f)
-    known_names = data["names"]
-    # Pre-normalize embeddings เป็น matrix ครั้งเดียว → ใช้ vectorized dot product
-    _raw = np.array(data["encodings"], dtype=np.float32)
-    known_norms = _raw / (np.linalg.norm(_raw, axis=1, keepdims=True) + 1e-10)
-    print(f"[DB] โหลด {len(known_names)} คน จาก {cfg.ENCODINGS_FILE}")
+    # ─── โหลด face encodings + InsightFace (ข้ามถ้าเป็นโหมด CCTV) ───
+    if _is_cctv:
+        app = None
+        known_names, known_norms = [], None
+        print(f"[{cam_id}] CCTV mode — ข้ามการโหลด InsightFace/encodings (ประหยัด GPU)", flush=True)
+    else:
+        if not os.path.exists(cfg.ENCODINGS_FILE):
+            raise FileNotFoundError(
+                f"ไม่พบ {cfg.ENCODINGS_FILE}\n"
+                f"รัน encode_faces_arcface.py ก่อน"
+            )
+        with open(cfg.ENCODINGS_FILE, "rb") as f:
+            data = pickle.load(f)
+        known_names = data["names"]
+        # Pre-normalize embeddings เป็น matrix ครั้งเดียว → ใช้ vectorized dot product
+        _raw = np.array(data["encodings"], dtype=np.float32)
+        known_norms = _raw / (np.linalg.norm(_raw, axis=1, keepdims=True) + 1e-10)
+        print(f"[DB] โหลด {len(known_names)} คน จาก {cfg.ENCODINGS_FILE}")
 
-    # ─── InsightFace ───
-    from insightface.app import FaceAnalysis
-    import onnxruntime as ort
+        # ─── InsightFace ───
+        from insightface.app import FaceAnalysis
+        import onnxruntime as ort
 
-    available = ort.get_available_providers()
-    use_providers = [p for p in available if p != "TensorrtExecutionProvider"]
-    print(f"[ORT] Using: {use_providers}")
+        available = ort.get_available_providers()
+        use_providers = [p for p in available if p != "TensorrtExecutionProvider"]
+        print(f"[ORT] Using: {use_providers}")
 
-    # ใช้เฉพาะ models ที่จำเป็น — ข้าม genderage + 2d106det (ไม่ได้ใช้ ลด inference 2/5)
-    _needed = ["detection", "landmark_3d_68", "recognition"]
-    try:
-        app = FaceAnalysis(
-            name="buffalo_l",
-            providers=use_providers,
-            allowed_modules=_needed,
-        )
-    except Exception as e:
-        print(f"[WARN] GPU ใช้ไม่ได้: {e}")
-        print("[WARN] Fallback → CPU")
-        app = FaceAnalysis(
-            name="buffalo_l",
-            providers=["CPUExecutionProvider"],
-            allowed_modules=_needed,
-        )
-    app.prepare(ctx_id=0, det_size=cfg.DET_SIZE)
-    print(f"[ARCFACE] InsightFace ready  det_size={cfg.DET_SIZE}")
+        # ใช้เฉพาะ models ที่จำเป็น — ข้าม genderage + 2d106det (ไม่ได้ใช้ ลด inference 2/5)
+        _needed = ["detection", "landmark_3d_68", "recognition"]
+        try:
+            app = FaceAnalysis(
+                name="buffalo_l",
+                providers=use_providers,
+                allowed_modules=_needed,
+            )
+        except Exception as e:
+            print(f"[WARN] GPU ใช้ไม่ได้: {e}")
+            print("[WARN] Fallback → CPU")
+            app = FaceAnalysis(
+                name="buffalo_l",
+                providers=["CPUExecutionProvider"],
+                allowed_modules=_needed,
+            )
+        app.prepare(ctx_id=0, det_size=cfg.DET_SIZE)
+        print(f"[ARCFACE] InsightFace ready  det_size={cfg.DET_SIZE}")
 
     # ─── เปิดกล้อง ───
     cam_src = cam_cfg.get("url") or cam_cfg.get("index", 0)
@@ -544,6 +558,41 @@ def run_camera(cam_cfg: dict, cam_stop_event=None):
             display_fps = fps_counter / (now_ts - fps_timer)
             fps_counter, fps_timer = 0, now_ts
 
+        # ─── CCTV mode: push ภาพสดอย่างเดียว ไม่ inference (ดูได้ตลอด ไม่สน active window) ───
+        if _is_cctv:
+            _cctv_state = {
+                "ts": now_ts, "fps": display_fps,
+                "frame_size": list(frame.shape[:2]),
+                "idle": False, "mode": "cctv", "next_window": None,
+                "faces": [], "guide": {"enabled": False}, "persons": {},
+                "hud": {"show_fps": cfg.SHOW_FPS, "test_mode": False,
+                        "checkout_done": False, "remaining": 0},
+            }
+            if _HEADLESS:
+                _post_live_frame(cam_id, frame)
+                _post_live_state(cam_id, _cctv_state)
+            else:
+                stream_server.push_frame(cam_id, frame)
+                stream_server.push_state(cam_id, _cctv_state)
+            _imshow(frame)
+            if stream_server.get_cv_window():
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord("q") or key == 27:
+                    break
+                elif key == ord("f"):
+                    _toggle_fullscreen()
+            else:
+                if _stop_event.is_set() or (cam_stop_event and cam_stop_event.is_set()):
+                    break
+                _flag = _pl_mod(__file__).parent / f"cam_stop_{cam_id}.flag"
+                if _flag.exists():
+                    try: _flag.unlink()
+                    except: pass
+                    print(f"[MAIN] cam_stop flag detected: {cam_id}")
+                    break
+                time.sleep(0.001)
+            continue
+
         # ─── Checkout (TEST_MODE / CHECKOUT_TIME) ───
         should_checkout = (
             (now_ts - start_ts >= cfg.TEST_DURATION_SECONDS) if cfg.TEST_MODE
@@ -666,18 +715,21 @@ def run_camera(cam_cfg: dict, cam_stop_event=None):
             face_w = right - left
             face_box = (top, right, bottom, left)
 
-            # ── ตรวจว่าอยู่ในวงรี ──
-            fcx = (left + right) / 2.0
-            fcy = (top + bottom) / 2.0
-            in_oval = (
-                ((fcx - oval_cx) / oval_ew) ** 2 +
-                ((fcy - oval_cy) / oval_eh) ** 2
-            ) <= cfg.GUIDE_IN_OVAL_TOL
+            # ── ตรวจว่าอยู่ในวงรี (เฉพาะ faceatten) ──
+            if _do_oval:
+                fcx = (left + right) / 2.0
+                fcy = (top + bottom) / 2.0
+                in_oval = (
+                    ((fcx - oval_cx) / oval_ew) ** 2 +
+                    ((fcy - oval_cy) / oval_eh) ** 2
+                ) <= cfg.GUIDE_IN_OVAL_TOL
 
-            if not in_oval:
-                ui.draw_face_box(frame, left, top, right, bottom,
-                                 cfg.Color.UNKNOWN, "Move into oval")
-                continue
+                if not in_oval:
+                    ui.draw_face_box(frame, left, top, right, bottom,
+                                     cfg.Color.UNKNOWN, "Move into oval")
+                    continue
+            else:
+                in_oval = True   # detect mode: ประมวลทุกใบหน้า ไม่จำกัดด้วยวงรี
 
             # ── Identify (ArcFace 512d) ──
             embedding = face.embedding
@@ -715,31 +767,35 @@ def run_camera(cam_cfg: dict, cam_stop_event=None):
                 # fallback: ใช้ 5-point จาก kps (ไม่ครบ แต่ดีกว่าไม่มี)
                 lm_dict = None  # DepthAnalyzer จะข้ามถ้าไม่มี
 
-            # ── Liveness ──
+            # ── Liveness + บันทึกลงเวลา (เฉพาะ faceatten) ──
             person, liveness = session.get_or_create(name, now, crop)
 
-            if lm_dict:
-                session.engine.update(
-                    liveness, lm_dict, crop, face_box, face_w,
-                    frame, hand_results, now_ts, do_detect,
-                )
+            if _do_liveness:
+                if lm_dict:
+                    session.engine.update(
+                        liveness, lm_dict, crop, face_box, face_w,
+                        frame, hand_results, now_ts, do_detect,
+                    )
+                else:
+                    # ไม่มี 68-point landmarks → ข้าม depth/motion แต่ยัง check texture/screen/FAS
+                    session.engine.update(
+                        liveness, {}, crop, face_box, face_w,
+                        frame, hand_results, now_ts, do_detect,
+                    )
+
+                if liveness.confirmed and not person.checked_in:
+                    person.snapshot = orig_frame.copy()
+                elif liveness.confirmed and person.checked_in and not person.checked_out:
+                    # ผ่าน liveness ซ้ำหลัง absence → อัปเดต last_seen (ไม่สร้าง record ใหม่)
+                    is_reverify = person.absence_reset  # True เฉพาะ frame แรกที่ผ่านหลัง absence
+                    session.confirm_presence(name, now)
+                    if is_reverify:
+                        person.snapshot_out = orig_frame.copy()
+
+                session.try_checkin(name, camera_name)
             else:
-                # ไม่มี 68-point landmarks → ข้าม depth/motion แต่ยัง check texture/screen/FAS
-                session.engine.update(
-                    liveness, {}, crop, face_box, face_w,
-                    frame, hand_results, now_ts, do_detect,
-                )
-
-            if liveness.confirmed and not person.checked_in:
-                person.snapshot = orig_frame.copy()
-            elif liveness.confirmed and person.checked_in and not person.checked_out:
-                # ผ่าน liveness ซ้ำหลัง absence → อัปเดต last_seen (ไม่สร้าง record ใหม่)
-                is_reverify = person.absence_reset  # True เฉพาะ frame แรกที่ผ่านหลัง absence
+                # detect mode: ระบุตัวตน + อัปเดต last_seen เท่านั้น — ไม่ liveness ไม่บันทึกลงเวลา
                 session.confirm_presence(name, now)
-                if is_reverify:
-                    person.snapshot_out = orig_frame.copy()
-
-            session.try_checkin(name, camera_name)
 
             # ── Screen Debug (TEST_MODE) — เก็บค่าล่าสุด อัปเดต EMA ทีหลัง ──
             if cfg.TEST_MODE and do_detect:
@@ -783,12 +839,21 @@ def run_camera(cam_cfg: dict, cam_stop_event=None):
             if cfg.SHOW_LANDMARKS and lm_dict:
                 ui.draw_landmarks(frame, lm_dict, scale=1.0)
 
-            color, label = ui.get_face_visual(name, person, liveness)
-            ui.draw_face_box(frame, left, top, right, bottom, color, label)
+            if _do_liveness:
+                color, label = ui.get_face_visual(name, person, liveness)
+                ui.draw_face_box(frame, left, top, right, bottom, color, label)
+            else:
+                # detect mode: กรอบ + กล่องข้อมูล (ชื่อ/แผนก/ตำแหน่ง)
+                ui.draw_face_info(frame, left, top, right, bottom, cfg.Color.CHECKED_IN, [
+                    person.display_name or mask_pid(name),
+                    getattr(person, "organize_th", "") or "",
+                    getattr(person, "posname_th", "") or "",
+                ])
 
-        # ─── Guide overlay ───
-        ui.draw_face_guide(frame, _face_with_names,
-                           session.liveness, session.persons, now_ts)
+        # ─── Guide overlay (เฉพาะ faceatten — detect mode ไม่มีวงรี) ───
+        if _do_oval:
+            ui.draw_face_guide(frame, _face_with_names,
+                               session.liveness, session.persons, now_ts)
 
         # ─── Hands + HUD + Panel ───
         ui.draw_hands(frame, hand_results)
@@ -808,6 +873,7 @@ def run_camera(cam_cfg: dict, cam_stop_event=None):
             "fps":        display_fps,
             "frame_size": list(raw_frame.shape[:2]),
             "idle":       False,
+            "mode":       cam_mode,
             "next_window": None,
             "faces": [
                 {
@@ -823,10 +889,10 @@ def run_camera(cam_cfg: dict, cam_stop_event=None):
                 }
                 for (t, r2, b, l), name in _face_with_names
             ],
-            "guide": _compute_guide_state(
+            "guide": (_compute_guide_state(
                 _face_with_names, session.liveness,
                 oval_cx, oval_cy, oval_ew, oval_eh, now_ts,
-            ),
+            ) if _do_oval else {"enabled": False}),
             "persons": {
                 mask_pid(n): {
                     "display_name": p.display_name or mask_pid(n),
@@ -851,8 +917,18 @@ def run_camera(cam_cfg: dict, cam_stop_event=None):
             },
         }
         stream_frame = raw_frame.copy()
-        ui.draw_face_guide(stream_frame, _face_with_names,
-                           session.liveness, session.persons, now_ts)
+        if _do_oval:
+            ui.draw_face_guide(stream_frame, _face_with_names,
+                               session.liveness, session.persons, now_ts)
+        elif cam_mode == "detect":
+            # detect mode: วาดกรอบ + ข้อมูลคนลงบน stream ที่ส่งขึ้นเว็บด้วย
+            for (t, r, b, l), nm in _face_with_names:
+                p = session.persons.get(nm)
+                ui.draw_face_info(stream_frame, l, t, r, b, cfg.Color.CHECKED_IN, [
+                    (p.display_name if p else None) or mask_pid(nm),
+                    getattr(p, "organize_th", "") or "",
+                    getattr(p, "posname_th", "") or "",
+                ])
         ui.draw_hands(stream_frame, hand_results)
 
         if _HEADLESS:
@@ -1534,6 +1610,26 @@ if __name__ == "__main__":
                 try: _sf.unlink()
                 except: pass
                 print(f"[MAIN] cam_start flag detected: {_cid}")
+                # ── รอ worker เก่าของกล้องนี้ตายให้สนิทก่อน spawn ใหม่ ──
+                # กัน 2 worker แย่งกล้องตัวเดียวกัน (USB busy / RTSP ชน) → ดับ
+                # เกิดตอนสลับโหมดขณะกล้องรันอยู่ (stop → start เร็วเกินไป)
+                _old_ev = _cam_stop_events.get(_cid)
+                if _old_ev:
+                    _old_ev.set()
+                (_base / f"cam_stop_{_cid}.flag").touch()
+                for _ot in [t for t in _camera_threads
+                            if t.name == f"cam-{_cid}" and t.is_alive()]:
+                    _ot.join(timeout=6)
+                    if _ot.is_alive():
+                        print(f"[MAIN] WARN: worker เก่า {_cid} ยังไม่หยุดใน 6s — ข้าม spawn กัน 2 ตัวซ้อน")
+                # worker เก่าตายแล้ว → เคลียร์ stop flag ที่ค้างก่อน spawn ใหม่
+                try: (_base / f"cam_stop_{_cid}.flag").unlink()
+                except: pass
+                # ลบ dead threads ออก (รวม thread เก่าของกล้องนี้)
+                _camera_threads[:] = [t for t in _camera_threads if t.is_alive()]
+                # ถ้ายังมี worker cam นี้ alive (join timeout) → ไม่ spawn ซ้ำ
+                if any(t.name == f"cam-{_cid}" for t in _camera_threads):
+                    continue
                 # clear per-cam stop event ก่อน spawn ใหม่
                 _ev = _t.Event()
                 _cam_stop_events[_cid] = _ev
@@ -1544,15 +1640,14 @@ if __name__ == "__main__":
                                 if c["id"] == _cid), {"id": _cid, "name": _cid}), _ev),
                     name=f"cam-{_cid}", daemon=True,
                 )
-                # ลบ dead threads ทั้งหมดออกก่อน (รวม thread เก่าของกล้องนี้)
-                _camera_threads[:] = [t for t in _camera_threads if t.is_alive()]
                 _camera_threads.append(_ct)
                 _ct.start()
 
             # ถ้ากล้องเคยถูก spawn แล้วและทุกตัวหยุดแล้ว → ออกเอง (graceful exit code 0)
+            # ยกเว้นมี cam_start flag ค้าง (กำลัง restart/สลับโหมดกล้อง) → รอ spawn ก่อน อย่าเพิ่งออก
             if _camera_threads:
                 _camera_threads[:] = [t for t in _camera_threads if t.is_alive()]
-                if not _camera_threads:
+                if not _camera_threads and not any(_base.glob("cam_start_*.flag")):
                     print("[MAIN] กล้องทุกตัวหยุดแล้ว — graceful exit")
                     break
 

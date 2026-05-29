@@ -87,6 +87,14 @@ if _cam_json_path.exists():
         print(f"[CONFIG] cameras.json อ่านไม่ได้: {_cje} — ใช้ค่า hardcoded")
 del _cjson, _cpath, _cam_json_path
 
+# ─── Camera Modes ────────────────────────────────────────────────────────────
+# โหมดการทำงานต่อกล้อง (เก็บใน cameras.json field "mode"):
+#   faceatten — face attendance เต็ม: oval guide + liveness + บันทึกลงเวลา (default)
+#   detect    — ตรวจจับ+ระบุตัวตน แสดงข้อมูลคน แต่ไม่ liveness/ไม่บันทึก/ไม่มี oval
+#   cctv      — ดูภาพสดอย่างเดียว ไม่ inference (ประหยัด GPU)
+CAMERA_MODES        = ("faceatten", "detect", "cctv")
+DEFAULT_CAMERA_MODE = "faceatten"
+
 # ╔═══════════════════════════════════════════╗
 # ║  Server Ports                             ║
 # ╚═══════════════════════════════════════════╝

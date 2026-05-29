@@ -106,12 +106,17 @@ def _next_cam_id(configs: list) -> str:
     return f"cam{max(nums, default=0) + 1}"
 
 
+# โหมดกล้อง — ต้องตรงกับ config.CAMERA_MODES (faceatten | detect | cctv)
+_VALID_CAM_MODES = ("faceatten", "detect", "cctv")
+
+
 class CameraConfigRequest(BaseModel):
     name: str
     cam_type: str = "usb"       # "usb" หรือ "ip"
     url: Optional[str] = ""
     index: Optional[int] = 0
     flip: bool = False
+    mode: str = "faceatten"     # faceatten | detect | cctv
 
 # ─── Per-camera buffers ───────────────────────────────────────────────────────
 _lock        = threading.Lock()
@@ -135,6 +140,9 @@ _active_cam   = _DEFAULT_CAM   # กล้องที่ legacy endpoints (/str
 # main.py เรียก register_lifecycle() เพื่อให้ stream_server รู้จัก start/stop fn
 _start_fn = None   # callable() → start camera threads
 _stop_fn  = None   # callable() → stop camera threads
+# พอร์ต API — อ่านจาก env (dev override = 8010 กัน VS Code port-forward จาก Jetson ชน, prod = 8000)
+_API_PORT = int(os.environ.get('API_PORT', 8000))
+
 _api_proc = None   # subprocess สำหรับ api.py
 
 def register_lifecycle(start_fn, stop_fn):
@@ -469,7 +477,8 @@ async def get_cameras_config():
         active_ids = set(_cam_frames.keys())
     result = []
     for c in configs:
-        entry = {**c, "active": c.get("id", "") in active_ids}
+        entry = {**c, "active": c.get("id", "") in active_ids,
+                 "mode": c.get("mode", "faceatten")}
         if "url" in entry:
             entry["url"] = _mask_url(entry["url"])
         result.append(entry)
@@ -523,7 +532,8 @@ async def add_camera(req: CameraConfigRequest, request: Request,
         return Response(status_code=409, content=dup_err)
 
     cam_id  = _next_cam_id(configs)
-    new_cam: dict = {"id": cam_id, "name": req.name.strip(), "flip": req.flip}
+    _mode = req.mode if req.mode in _VALID_CAM_MODES else "faceatten"
+    new_cam: dict = {"id": cam_id, "name": req.name.strip(), "flip": req.flip, "mode": _mode}
 
     if req.cam_type == "ip":
         new_cam["url"] = (req.url or "").strip()
@@ -555,7 +565,8 @@ async def update_camera(cam_id: str, req: CameraConfigRequest, request: Request,
 
     for i, c in enumerate(configs):
         if c.get("id") == cam_id:
-            updated: dict = {"id": cam_id, "name": req.name.strip(), "flip": req.flip}
+            _mode = req.mode if req.mode in _VALID_CAM_MODES else "faceatten"
+            updated: dict = {"id": cam_id, "name": req.name.strip(), "flip": req.flip, "mode": _mode}
             if req.cam_type == "ip":
                 updated["url"]   = (req.url or "").strip()
             else:
@@ -567,6 +578,29 @@ async def update_camera(cam_id: str, req: CameraConfigRequest, request: Request,
                        name=req.name.strip(), cam_type=req.cam_type, flip=req.flip)
             return {"success": True, "camera": updated}
 
+    return Response(status_code=404, content=f"cam_id '{cam_id}' ไม่พบ")
+
+
+class _CamModeRequest(BaseModel):
+    mode: str
+
+
+@app.post('/cameras/config/{cam_id}/mode')
+async def set_camera_mode(cam_id: str, req: _CamModeRequest, request: Request,
+                          user: dict = Depends(require_admin)):
+    """เปลี่ยนเฉพาะโหมดกล้อง (faceatten/detect/cctv) — ไม่แตะ url/index/flip
+    (เลี่ยงปัญหา url ถูก mask ตอนส่ง config เต็มกลับมา) — ต้อง restart กล้องเพื่อให้มีผล"""
+    if req.mode not in _VALID_CAM_MODES:
+        return Response(status_code=400,
+                        content=f"mode ไม่ถูกต้อง: '{req.mode}' (ต้องเป็น {_VALID_CAM_MODES})")
+    configs = _load_cam_configs()
+    for c in configs:
+        if c.get("id") == cam_id:
+            c["mode"] = req.mode
+            _save_cam_configs(configs)
+            print(f"[CAM_MGR] เปลี่ยนโหมด {cam_id} → {req.mode}")
+            _audit.log("camera.mode", user=user, target=cam_id, request=request, mode=req.mode)
+            return {"success": True, "cam_id": cam_id, "mode": req.mode}
     return Response(status_code=404, content=f"cam_id '{cam_id}' ไม่พบ")
 
 
@@ -1122,7 +1156,7 @@ def _api_alive() -> bool:
     เพื่อไม่ spawn ซ้ำซ้อน"""
     import socket
     try:
-        with socket.create_connection(('127.0.0.1', 8000), timeout=0.3):
+        with socket.create_connection(('127.0.0.1', _API_PORT), timeout=0.3):
             return True
     except OSError:
         return False
@@ -1169,7 +1203,7 @@ def _spawn_main_proc(cam_ids: list = None) -> subprocess.Popen:
 def _spawn_api_proc() -> subprocess.Popen:
     p = subprocess.Popen(
         [sys.executable, '-m', 'uvicorn', 'api:app',
-         '--host', '0.0.0.0', '--port', '8000'],
+         '--host', '0.0.0.0', '--port', str(_API_PORT)],
         cwd=str(_ROOT),
     )
     _proc_last_spawn['api'] = time.monotonic()

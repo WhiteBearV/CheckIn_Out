@@ -104,6 +104,32 @@ def draw_face_box(frame, left, top, right, bottom, color, label):
         frame[y1:y2, x1:x2] = roi
 
 
+def draw_face_info(frame, left, top, right, bottom, color, lines):
+    """detect mode — กรอบหน้า + กล่องข้อมูลหลายบรรทัด (ชื่อ/แผนก/ตำแหน่ง) เหนือกรอบ"""
+    cv2.rectangle(frame, (left, top), (right, bottom), color, cfg.FACEBOX_THICK)
+    lines = [ln for ln in lines if ln]
+    if not lines:
+        return
+    fh, fw = frame.shape[:2]
+    line_h = 20
+    pad = 5
+    box_h = line_h * len(lines) + pad * 2
+    box_w = min(fw - max(0, left), max(right - left, 200))
+    y2 = max(0, top)
+    y1 = max(0, top - box_h)
+    x1 = max(0, left)
+    x2 = min(fw, x1 + box_w)
+    if y2 <= y1 or x2 <= x1:
+        return
+    roi = frame[y1:y2, x1:x2]
+    ov = roi.copy()
+    cv2.rectangle(ov, (0, 0), (x2 - x1, y2 - y1), color, cv2.FILLED)
+    cv2.addWeighted(ov, 0.7, roi, 0.3, 0, roi)
+    for i, ln in enumerate(lines):
+        draw_text(roi, ln, (pad, pad + i * line_h), scale=cfg.FACEBOX_FONT, color=C.TEXT)
+    frame[y1:y2, x1:x2] = roi
+
+
 def draw_landmarks(frame, lm_dict, scale=1.0):
     for group in ["nose_bridge", "nose_tip", "chin"]:
         for px, py in lm_dict.get(group, []):

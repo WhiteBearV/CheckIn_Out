@@ -38,7 +38,8 @@ class ThreadedCamera:
         self.cap = self._open()
         self._ret, self._frame = self.cap.read()
 
-        Thread(target=self._reader_loop, daemon=True).start()
+        self._thread = Thread(target=self._reader_loop, daemon=True)
+        self._thread.start()
 
     # ──────────────────────────────────────────
     def _open(self) -> cv2.VideoCapture:
@@ -102,8 +103,18 @@ class ThreadedCamera:
             return self._ret, self._frame.copy()
 
     def release(self):
+        # หยุด reader thread แล้ว "รอให้มันออกจาก cap.read() ให้สนิท" ก่อน release
+        # VideoCapture — ป้องกัน reader thread กับ release() เข้าถึง FFmpeg context
+        # พร้อมกัน (libavcodec assertion fctx->async_lock → abort ทั้ง process
+        # ตอน restart กล้อง IP/RTSP เช่นเวลาสลับโหมด)
         self._stopped = True
-        self.cap.release()
+        t = getattr(self, "_thread", None)
+        if t is not None and t.is_alive():
+            t.join(timeout=3)
+        try:
+            self.cap.release()
+        except Exception:
+            pass
 
     @property
     def width(self) -> int:
